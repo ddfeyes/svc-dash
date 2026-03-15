@@ -476,6 +476,82 @@ async def orderbook_heatmap(
     }
 
 
+@router.get("/trade-flow-heatmap")
+async def trade_flow_heatmap(
+    symbol: Optional[str] = None,
+    minutes: int = Query(default=30, le=120),
+    bins: int = Query(default=20, le=50),
+    time_buckets: int = Query(default=60, le=120),
+):
+    """
+    Returns trade flow (actual executed trades) binned by time×price.
+    Shows buy/sell pressure zones.
+    """
+    import math
+
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    since = time.time() - minutes * 60
+
+    trades = await get_recent_trades(limit=50000, since=since, symbol=target)
+    if not trades:
+        return {"status": "ok", "symbol": target, "timestamps": [], "price_levels": [],
+                "buy_vol": [], "sell_vol": [], "mid_price": None}
+
+    prices = [t["price"] for t in trades if t.get("price")]
+    if not prices:
+        return {"status": "ok", "symbol": target, "timestamps": [], "price_levels": [],
+                "buy_vol": [], "sell_vol": [], "mid_price": None}
+
+    p_low  = min(prices)
+    p_high = max(prices)
+    p_rng  = p_high - p_low
+    if p_rng < 1e-12:
+        p_rng = p_low * 0.01
+
+    bin_size = p_rng / bins
+    ts_start = since
+    ts_end   = time.time()
+    ts_range = ts_end - ts_start
+    bucket_size = ts_range / time_buckets
+
+    # price_levels: center of each price bin
+    price_levels = [round(p_low + (i + 0.5) * bin_size, 8) for i in range(bins)]
+
+    # Initialize grids: [time_bucket][price_bin]
+    buy_grid  = [[0.0] * bins for _ in range(time_buckets)]
+    sell_grid = [[0.0] * bins for _ in range(time_buckets)]
+
+    for t in trades:
+        ts   = t.get("ts", 0)
+        p    = t.get("price", 0)
+        qty  = t.get("qty", 0)
+        side = t.get("side", "")
+        val  = p * qty  # USD value
+
+        t_idx = min(int((ts - ts_start) / bucket_size), time_buckets - 1)
+        p_idx = min(int((p - p_low) / bin_size), bins - 1)
+
+        if side == "buy":
+            buy_grid[t_idx][p_idx]  += val
+        else:
+            sell_grid[t_idx][p_idx] += val
+
+    # Timestamps for x-axis labels
+    timestamps = [round(ts_start + (i + 0.5) * bucket_size) for i in range(time_buckets)]
+    mid_price = prices[-1] if prices else None
+
+    return {
+        "status": "ok",
+        "symbol": target,
+        "mid_price": mid_price,
+        "timestamps": timestamps,
+        "price_levels": price_levels,
+        "buy_vol": buy_grid,
+        "sell_vol": sell_grid,
+    }
+
+
 @router.get("/ohlcv")
 async def ohlcv(
     interval: int = Query(default=60, ge=10, le=3600, description="Candle interval in seconds"),

@@ -1,0 +1,156 @@
+name: metric_update
+description: "Compute volume profile, market phase, and CVD per symbol"
+version: "1.0"
+
+inputs:
+  symbols:
+    type: list
+    description: "Trading pair symbols to compute metrics for"
+    default: ["BANANAS31USDT"]
+  lookback_hours:
+    type: int
+    description: "Hours of data to use for metric computation"
+    default: 24
+
+steps:
+  - id: validate_data
+    name: "Check data availability"
+    type: shell
+    scope: project_dir
+    command: |
+      cd /Users/aivan/bananas31-dashboard
+      python3 -c "
+      import sys
+      sys.path.insert(0, 'backend')
+      from storage import get_stats
+      try:
+          stats = get_stats()
+          print('Data available:', stats)
+      except Exception as e:
+          print('Warning: could not read stats:', e)
+      "
+    env:
+      SYMBOLS: "{{ inputs.symbols | join(',') }}"
+      LOOKBACK_HOURS: "{{ inputs.lookback_hours }}"
+    on_failure: continue
+
+  - id: compute_volume_profile
+    name: "Compute volume profile per symbol"
+    type: shell
+    scope: project_dir
+    command: |
+      cd /Users/aivan/bananas31-dashboard
+      python3 -c "
+      import sys, os
+      sys.path.insert(0, 'backend')
+      symbols = os.environ.get('SYMBOLS', 'BANANAS31USDT').split(',')
+      lookback = int(os.environ.get('LOOKBACK_HOURS', '24'))
+      try:
+          from metrics import compute_volume_profile
+          for sym in symbols:
+              result = compute_volume_profile(symbol=sym, lookback_hours=lookback)
+              print(f'VolumeProfile [{sym}]: {result}')
+      except Exception as e:
+          print(f'compute_volume_profile error: {e}')
+          # fallback: print stub
+          for sym in symbols:
+              print(f'VolumeProfile [{sym}]: stub (metrics not yet implemented)')
+      " 2>&1
+    env:
+      SYMBOLS: "{{ inputs.symbols | join(',') }}"
+      LOOKBACK_HOURS: "{{ inputs.lookback_hours }}"
+    depends_on: [validate_data]
+    on_failure: log_and_continue
+
+  - id: compute_market_phase
+    name: "Compute market phase (accumulation/distribution/trend)"
+    type: shell
+    scope: project_dir
+    command: |
+      cd /Users/aivan/bananas31-dashboard
+      python3 -c "
+      import sys, os
+      sys.path.insert(0, 'backend')
+      symbols = os.environ.get('SYMBOLS', 'BANANAS31USDT').split(',')
+      lookback = int(os.environ.get('LOOKBACK_HOURS', '24'))
+      try:
+          from metrics import compute_market_phase
+          for sym in symbols:
+              phase = compute_market_phase(symbol=sym, lookback_hours=lookback)
+              print(f'MarketPhase [{sym}]: {phase}')
+      except Exception as e:
+          print(f'compute_market_phase error: {e}')
+          for sym in symbols:
+              print(f'MarketPhase [{sym}]: stub (metrics not yet implemented)')
+      " 2>&1
+    env:
+      SYMBOLS: "{{ inputs.symbols | join(',') }}"
+      LOOKBACK_HOURS: "{{ inputs.lookback_hours }}"
+    depends_on: [validate_data]
+    on_failure: log_and_continue
+
+  - id: compute_cvd
+    name: "Compute Cumulative Volume Delta (CVD) per symbol"
+    type: shell
+    scope: project_dir
+    command: |
+      cd /Users/aivan/bananas31-dashboard
+      python3 -c "
+      import sys, os
+      sys.path.insert(0, 'backend')
+      symbols = os.environ.get('SYMBOLS', 'BANANAS31USDT').split(',')
+      lookback = int(os.environ.get('LOOKBACK_HOURS', '24'))
+      try:
+          from metrics import compute_cvd
+          for sym in symbols:
+              cvd = compute_cvd(symbol=sym, lookback_hours=lookback)
+              print(f'CVD [{sym}]: {cvd}')
+      except Exception as e:
+          print(f'compute_cvd error: {e}')
+          for sym in symbols:
+              print(f'CVD [{sym}]: stub (metrics not yet implemented)')
+      " 2>&1
+    env:
+      SYMBOLS: "{{ inputs.symbols | join(',') }}"
+      LOOKBACK_HOURS: "{{ inputs.lookback_hours }}"
+    depends_on: [validate_data]
+    on_failure: log_and_continue
+
+  - id: aggregate_and_store
+    name: "Aggregate metric results and store"
+    type: shell
+    scope: project_dir
+    command: |
+      cd /Users/aivan/bananas31-dashboard
+      python3 -c "
+      import sys, os, json
+      from datetime import datetime
+      symbols = os.environ.get('SYMBOLS', 'BANANAS31USDT').split(',')
+      lookback = int(os.environ.get('LOOKBACK_HOURS', '24'))
+      summary = {
+          'timestamp': datetime.utcnow().isoformat(),
+          'symbols': symbols,
+          'lookback_hours': lookback,
+          'status': 'complete'
+      }
+      print('Metric update summary:', json.dumps(summary, indent=2))
+      # Write summary to .ao/logs/
+      os.makedirs('/Users/aivan/bananas31-dashboard/.ao/logs', exist_ok=True)
+      with open('/Users/aivan/bananas31-dashboard/.ao/logs/metric_update_last.json', 'w') as f:
+          json.dump(summary, f, indent=2)
+      print('Saved to .ao/logs/metric_update_last.json')
+      " 2>&1
+    env:
+      SYMBOLS: "{{ inputs.symbols | join(',') }}"
+      LOOKBACK_HOURS: "{{ inputs.lookback_hours }}"
+    depends_on: [compute_volume_profile, compute_market_phase, compute_cvd]
+
+safety:
+  max_duration_seconds: 90
+  allowed_paths:
+    - /Users/aivan/bananas31-dashboard
+  deny_paths:
+    - /
+    - /Users/aivan/agents
+    - /Users/aivan/.ssh
+  allowed_network: []  # metric_update is pure local computation

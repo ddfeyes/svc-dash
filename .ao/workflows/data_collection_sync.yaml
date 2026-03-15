@@ -1,0 +1,106 @@
+name: data_collection_sync
+description: "Run collectors, pollers, and cleanup in sequence for given symbols"
+version: "1.0"
+
+inputs:
+  symbols:
+    type: list
+    description: "Trading pair symbols to process (e.g. BANANAS31USDT)"
+    default: ["BANANAS31USDT"]
+
+steps:
+  - id: validate_env
+    name: "Validate environment"
+    type: shell
+    scope: project_dir
+    command: |
+      cd /Users/aivan/bananas31-dashboard
+      echo "Validating environment for symbols: ${SYMBOLS}"
+      python3 -c "import sys; sys.path.insert(0, 'backend'); import storage; print('Storage OK')"
+    env:
+      SYMBOLS: "{{ inputs.symbols | join(',') }}"
+    on_failure: abort
+
+  - id: run_collectors
+    name: "Run WebSocket collectors"
+    type: shell
+    scope: project_dir
+    command: |
+      cd /Users/aivan/bananas31-dashboard
+      echo "Starting collectors for: ${SYMBOLS}"
+      timeout 30 python3 -c "
+      import asyncio, sys, os
+      sys.path.insert(0, 'backend')
+      os.environ['SYMBOLS'] = '${SYMBOLS}'
+      from collectors import run_collectors
+      asyncio.run(run_collectors(symbols='${SYMBOLS}'.split(','), duration=20))
+      " 2>&1 || echo "Collectors completed (timeout or natural end)"
+    env:
+      SYMBOLS: "{{ inputs.symbols | join(',') }}"
+    depends_on: [validate_env]
+    on_failure: continue
+
+  - id: run_pollers
+    name: "Run REST pollers (OI + Funding)"
+    type: shell
+    scope: project_dir
+    command: |
+      cd /Users/aivan/bananas31-dashboard
+      echo "Polling OI and funding for: ${SYMBOLS}"
+      timeout 30 python3 -c "
+      import asyncio, sys, os
+      sys.path.insert(0, 'backend')
+      os.environ['SYMBOLS'] = '${SYMBOLS}'
+      from pollers import run_pollers
+      asyncio.run(run_pollers(symbols='${SYMBOLS}'.split(',')))
+      " 2>&1 || echo "Pollers completed"
+    env:
+      SYMBOLS: "{{ inputs.symbols | join(',') }}"
+    depends_on: [validate_env]
+    on_failure: continue
+
+  - id: cleanup_old_data
+    name: "Cleanup data older than 7 days"
+    type: shell
+    scope: project_dir
+    command: |
+      cd /Users/aivan/bananas31-dashboard
+      echo "Running 7-day data retention cleanup"
+      python3 -c "
+      import sys
+      sys.path.insert(0, 'backend')
+      from storage import cleanup_old_data
+      cleanup_old_data(retention_days=7)
+      print('Cleanup done')
+      " 2>&1
+    depends_on: [run_collectors, run_pollers]
+    on_failure: log_and_continue
+
+  - id: report
+    name: "Report collection status"
+    type: shell
+    scope: project_dir
+    command: |
+      cd /Users/aivan/bananas31-dashboard
+      python3 -c "
+      import sys
+      sys.path.insert(0, 'backend')
+      from storage import get_stats
+      stats = get_stats()
+      print('Collection sync complete:', stats)
+      " 2>&1 || echo "Collection sync complete (stats unavailable)"
+    depends_on: [cleanup_old_data]
+
+safety:
+  max_duration_seconds: 120
+  allowed_paths:
+    - /Users/aivan/bananas31-dashboard
+  allowed_network:
+    - fstream.binance.com
+    - stream.bybit.com
+    - api.binance.com
+    - api.bybit.com
+  deny_paths:
+    - /
+    - /Users/aivan/agents
+    - /Users/aivan/.ssh

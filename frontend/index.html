@@ -577,6 +577,26 @@
     <canvas id="chart-vp" style="height:200px !important;"></canvas>
   </div>
 
+  <!-- Trade Flow Heatmap -->
+  <div class="card wide">
+    <h2>
+      <span class="card-icon">🔥</span>Trade Flow Heatmap (30min)
+      <span style="margin-left:auto; display:flex; gap:16px; font-size:10px; font-weight:400; text-transform:none; letter-spacing:0; color:var(--muted);">
+        <span><span style="display:inline-block;width:8px;height:8px;background:var(--green);border-radius:2px;vertical-align:middle;margin-right:3px;"></span>Buy pressure</span>
+        <span><span style="display:inline-block;width:8px;height:8px;background:var(--red);border-radius:2px;vertical-align:middle;margin-right:3px;"></span>Sell pressure</span>
+        <span id="tf-mid" style="color:var(--text);">mid: —</span>
+      </span>
+    </h2>
+    <div style="position:relative; overflow:hidden; border-radius:4px;">
+      <canvas id="tf-canvas" style="width:100%; height:180px; display:block; cursor:crosshair; border-radius:4px;"></canvas>
+    </div>
+    <div style="display:flex; justify-content:space-between; margin-top:6px; font-size:10px; color:var(--muted);">
+      <span id="tf-t-start">—</span>
+      <span id="tf-tooltip" style="color:var(--text); font-variant-numeric:tabular-nums;"></span>
+      <span id="tf-t-end">—</span>
+    </div>
+  </div>
+
   <!-- Orderbook Heatmap -->
   <div class="card wide">
     <h2>
@@ -1064,7 +1084,12 @@ function renderSymbolTabs() {
   const container = document.getElementById('symbol-tabs');
   container.innerHTML = allSymbols.map(sym => {
     const base = sym.replace('USDT', '');
-    return `<div class="sym-tab ${sym === activeSymbol ? 'active' : ''}" onclick="selectSymbol('${sym}')">${base}<span class="sym-pair">/USDT</span></div>`;
+    const d = multiOverviewData[sym];
+    let priceBit = '';
+    if (d?.price != null) {
+      priceBit = `<span class="sym-pair" style="margin-left:4px;"> $${d.price.toPrecision(4)}</span>`;
+    }
+    return `<div class="sym-tab ${sym === activeSymbol ? 'active' : ''}" onclick="selectSymbol('${sym}')">${base}${priceBit}</div>`;
   }).join('');
 }
 
@@ -1096,9 +1121,12 @@ function selectSymbol(sym) {
   document.title = sym + ' · BANANAS31';
   connectWS(sym);
   heatmapData = null;
+  tfData = null;
   renderHeatmap();
+  renderTradeFlowHeatmap();
   refreshAll();
   refreshHeatmap();
+  refreshTradeFlowHeatmap();
   refreshPriceChart();
   refreshMultiOverview();
 }
@@ -1414,6 +1442,136 @@ async function refreshHeatmap() {
   }
 }
 
+// ── Trade Flow Heatmap ────────────────────────────────────────────────────────
+let tfData = null;
+
+function renderTradeFlowHeatmap() {
+  const canvas = document.getElementById('tf-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const W = rect.width * dpr;
+  const H = rect.height * dpr;
+  canvas.width  = W;
+  canvas.height = H;
+  ctx.scale(dpr, dpr);
+  const w = rect.width;
+  const h = rect.height;
+
+  ctx.fillStyle = '#0e1117';
+  ctx.fillRect(0, 0, w, h);
+
+  if (!tfData || !tfData.timestamps?.length) {
+    ctx.fillStyle = '#606680';
+    ctx.font = '12px -apple-system,sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Collecting trade flow data...', w / 2, h / 2);
+    return;
+  }
+
+  const { timestamps, price_levels, buy_vol, sell_vol, mid_price } = tfData;
+  const numTime = timestamps.length;
+  const numBins = price_levels.length;
+
+  let maxVol = 0;
+  for (let t = 0; t < numTime; t++) {
+    for (let b = 0; b < numBins; b++) {
+      const v = (buy_vol[t]?.[b] || 0) + (sell_vol[t]?.[b] || 0);
+      if (v > maxVol) maxVol = v;
+    }
+  }
+  if (maxVol === 0) maxVol = 1;
+
+  const cellW = w / numTime;
+  const cellH = h / numBins;
+
+  for (let t = 0; t < numTime; t++) {
+    for (let b = 0; b < numBins; b++) {
+      const bv = buy_vol[t]?.[b] || 0;
+      const sv = sell_vol[t]?.[b] || 0;
+      const total = bv + sv;
+      if (total < maxVol * 0.005) continue;
+
+      const intensity = Math.pow(Math.min(1, total / maxVol), 0.55);
+      const buyRatio  = total > 0 ? bv / total : 0.5;
+
+      // Color: green for buy-dominant, red for sell-dominant, blend
+      const r = Math.round(239 * (1 - buyRatio) * intensity + 20 * buyRatio * intensity);
+      const g = Math.round(187 * buyRatio * intensity + 20 * (1 - buyRatio) * intensity);
+      const bch = Math.round(30 * intensity);
+
+      ctx.fillStyle = `rgba(${r},${g},${bch},${0.3 + intensity * 0.7})`;
+
+      const yIdx = numBins - 1 - b;
+      ctx.fillRect(
+        t * cellW,
+        yIdx * cellH,
+        Math.max(1, cellW - 0.5),
+        Math.max(1, cellH - 0.5)
+      );
+    }
+  }
+
+  // Mid-price line
+  if (mid_price && price_levels.length > 1) {
+    const pLow  = price_levels[0];
+    const pHigh = price_levels[numBins - 1];
+    const midY  = h * (1 - (mid_price - pLow) / (pHigh - pLow));
+    ctx.strokeStyle = 'rgba(240,192,64,0.6)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(0, midY);
+    ctx.lineTo(w, midY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  if (timestamps.length > 1) {
+    document.getElementById('tf-t-start').textContent = fmtTs(timestamps[0]);
+    document.getElementById('tf-t-end').textContent   = fmtTs(timestamps[timestamps.length - 1]);
+  }
+  document.getElementById('tf-mid').textContent = 'mid: ' + fmt(mid_price, 4);
+}
+
+(function setupTFHover() {
+  const canvas = document.getElementById('tf-canvas');
+  if (!canvas) return;
+  canvas.addEventListener('mousemove', (e) => {
+    if (!tfData?.timestamps?.length) return;
+    const rect   = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const numTime = tfData.timestamps.length;
+    const numBins = tfData.price_levels.length;
+    const tIdx = Math.min(numTime - 1, Math.floor(mx / rect.width * numTime));
+    const bIdxInv = Math.min(numBins - 1, Math.floor(my / rect.height * numBins));
+    const bIdx = numBins - 1 - bIdxInv;
+    const price = tfData.price_levels[bIdx];
+    const bv  = tfData.buy_vol[tIdx]?.[bIdx] || 0;
+    const sv  = tfData.sell_vol[tIdx]?.[bIdx] || 0;
+    const ts  = tfData.timestamps[tIdx];
+    document.getElementById('tf-tooltip').textContent =
+      `${fmtTs(ts)} · $${fmt(price, 4)} · buy $${fmtK(bv)} · sell $${fmtK(sv)}`;
+  });
+  canvas.addEventListener('mouseleave', () => {
+    const el = document.getElementById('tf-tooltip');
+    if (el) el.textContent = '';
+  });
+})();
+
+async function refreshTradeFlowHeatmap() {
+  if (!activeSymbol) return;
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await fetchJSON(`/api/trade-flow-heatmap?symbol=${sym}&minutes=30&bins=20&time_buckets=60`);
+  if (data?.status === 'ok') {
+    tfData = data;
+    renderTradeFlowHeatmap();
+  }
+}
+
 // ── Price chart (OHLCV) ───────────────────────────────────────────────────────
 let priceInterval = 60;  // seconds per candle
 let chartPrice = null;
@@ -1575,6 +1733,7 @@ async function refreshMultiOverview() {
   const container = document.getElementById('multi-overview');
   if (!container) return;
 
+  renderSymbolTabs();  // refresh tabs with latest prices
   container.innerHTML = Object.entries(data.symbols).map(([sym, d]) => {
     const base = sym.replace('USDT', '');
     const price = d.price != null ? d.price.toPrecision(5) : '—';
@@ -1620,13 +1779,14 @@ async function syncSymbols() {
     connectWS(activeSymbol);
     updateExportLinks(activeSymbol);
   }
-  await Promise.all([refreshAll(), refreshHeatmap(), refreshPriceChart(), refreshMultiOverview()]);
+  await Promise.all([refreshAll(), refreshHeatmap(), refreshPriceChart(), refreshMultiOverview(), refreshTradeFlowHeatmap()]);
   setInterval(refreshAll, 5000);
   setInterval(refreshHeatmap, 5000);
   setInterval(refreshPriceChart, 10000);
   setInterval(refreshMultiOverview, 15000);
+  setInterval(refreshTradeFlowHeatmap, 10000);
   setInterval(syncSymbols, 30000);
-  window.addEventListener('resize', renderHeatmap);
+  window.addEventListener('resize', () => { renderHeatmap(); renderTradeFlowHeatmap(); });
 })();
 </script>
 </body>
