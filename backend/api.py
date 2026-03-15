@@ -466,6 +466,73 @@ async def delta_divergence(
     return {"status": "ok", "symbol": target, **data}
 
 
+@router.get("/funding-momentum")
+async def funding_momentum(
+    symbol: Optional[str] = None,
+    periods: int = Query(default=4, ge=2, le=20),
+):
+    """Rate of change of funding rate over last N funding periods.
+
+    Returns momentum (delta over periods), momentum_pct, and trend direction.
+    """
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+
+    rows = await get_funding_history(limit=periods + 4, symbol=target)
+    if not rows or len(rows) < 2:
+        return {
+            "status": "ok",
+            "symbol": target,
+            "current_rate": None,
+            "momentum": None,
+            "momentum_pct": None,
+            "trend": "stable",
+            "timestamps": [],
+        }
+
+    # Sort ascending, deduplicate by 8h funding slot
+    rows_sorted = sorted(rows, key=lambda r: r["ts"])
+    FUNDING_INTERVAL = 28800  # 8h
+    seen: dict = {}
+    for row in rows_sorted:
+        slot = int(row["ts"] // FUNDING_INTERVAL)
+        if slot not in seen:
+            seen[slot] = row
+    deduped = sorted(seen.values(), key=lambda r: r["ts"])
+
+    # Use up to `periods` most recent deduped samples
+    window = deduped[-(periods + 1):]
+    if len(window) < 2:
+        window = deduped
+
+    current_rate = window[-1]["rate"]
+    base_rate = window[0]["rate"]
+    momentum = current_rate - base_rate
+
+    if base_rate != 0:
+        momentum_pct = round((momentum / abs(base_rate)) * 100, 4)
+    else:
+        momentum_pct = 0.0
+
+    THRESHOLD = 1e-5  # ~0.001%
+    if momentum > THRESHOLD:
+        trend = "accelerating"
+    elif momentum < -THRESHOLD:
+        trend = "decelerating"
+    else:
+        trend = "stable"
+
+    return {
+        "status": "ok",
+        "symbol": target,
+        "current_rate": round(current_rate, 8),
+        "momentum": round(momentum, 8),
+        "momentum_pct": momentum_pct,
+        "trend": trend,
+        "timestamps": [r["ts"] for r in window],
+    }
+
+
 @router.get("/funding-extreme")
 async def funding_extreme(
     symbol: Optional[str] = None,

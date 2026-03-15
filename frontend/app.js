@@ -647,6 +647,46 @@ async function renderFunding() {
   }
 }
 
+// ── Render: Funding Momentum ──────────────────────────────────────────────────
+async function renderFundingMomentum() {
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/funding-momentum?symbol=${sym}&periods=4`);
+  if (!data || data.status !== 'ok') return;
+
+  const { current_rate, momentum, momentum_pct, trend } = data;
+
+  // Trend arrow
+  const arrows = { accelerating: '↑', decelerating: '↓', stable: '→' };
+  const arrow = arrows[trend] || '→';
+
+  const fmtRate = v => v != null ? (v * 100).toFixed(4) + '%' : '—';
+  const fmtMom  = v => v != null ? (v >= 0 ? '+' : '') + (v * 100).toFixed(4) + '%' : '—';
+  const momColor = momentum != null && momentum > 0 ? 'var(--green)' : momentum < 0 ? 'var(--red)' : 'var(--muted)';
+  const trendColor = trend === 'accelerating' ? 'var(--green)' : trend === 'decelerating' ? 'var(--red)' : 'var(--muted)';
+
+  // Badge
+  const badge = document.getElementById('funding-momentum-badge');
+  if (badge && momentum != null) {
+    if (Math.abs(momentum) > 1e-5) {
+      badge.textContent = arrow + ' ' + trend;
+      badge.className = 'card-badge ' + (momentum > 0 ? 'badge-red' : 'badge-green');
+      badge.style.display = 'inline-block';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+
+  const el = document.getElementById('funding-momentum-metrics');
+  if (el) {
+    el.innerHTML = `
+      <span class="funding-stat">Current <span style="color:${fundingColor(current_rate)}">${fmtRate(current_rate)}</span></span>
+      <span class="funding-stat">Momentum <span style="color:${momColor}">${fmtMom(momentum)}</span></span>
+      <span class="funding-stat">Chg% <span style="color:${momColor}">${momentum_pct != null ? (momentum_pct >= 0 ? '+' : '') + momentum_pct.toFixed(2) + '%' : '—'}</span></span>
+      <span class="funding-stat">Trend <span style="color:${trendColor}">${arrow} ${trend}</span></span>
+    `;
+  }
+}
+
 // ── Render: Bid-Ask Spread ────────────────────────────────────────────────────
 async function renderSpread() {
   const sym = encodeURIComponent(activeSymbol);
@@ -1586,6 +1626,7 @@ async function refresh() {
     safe(renderOiChart),
     safe(renderCvdChart),
     safe(renderFunding),
+    safe(renderFundingMomentum),
     safe(renderSpread),
   ]);
   // Batch 2: trade data
