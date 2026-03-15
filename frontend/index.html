@@ -1177,6 +1177,14 @@
     <div id="market-regime-content" style="font-size:11px;"></div>
   </div>
 
+  <!-- Volatility Regime Detector -->
+  <div class="card" id="card-volatility-regime">
+    <h2><span class="card-icon">🌡️</span>Volatility Regime
+      <span id="vol-regime-ts" style="margin-left:auto;font-size:9px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;"></span>
+    </h2>
+    <div id="vol-regime-content" style="font-size:11px;"></div>
+  </div>
+
   <!-- CVD Momentum -->
   <!-- Price Velocity Speedometer -->
   <div class="card" id="card-price-velocity">
@@ -2621,6 +2629,7 @@ function selectSymbol(sym) {
   refreshTradeDist();
   refreshCvdMomentum();
   refreshMarketRegime();
+  refreshVolatilityRegime();
   refreshAtr();
   loadPhaseTimeline();
   refreshOiMcap();
@@ -5621,6 +5630,70 @@ async function refreshMarketRegime() {
   el.innerHTML = `<div style="display:flex;gap:8px;flex-wrap:wrap;">${cols.join('')}</div>`;
 }
 
+// ── Volatility Regime Detector ───────────────────────────────────────────────
+async function refreshVolatilityRegime() {
+  const el = document.getElementById('vol-regime-content');
+  const tsEl = document.getElementById('vol-regime-ts');
+  if (!el) return;
+
+  const data = await fetchJSON('/api/volatility-regime/all');
+  if (!data?.symbols) return;
+  if (tsEl) tsEl.textContent = new Date().toLocaleTimeString();
+
+  const regimeIcon = { low: '🟢', medium: '🟡', high: '🔴', unknown: '⚪' };
+
+  const syms = Object.keys(data.symbols);
+  const cols = syms.map(sym => {
+    const r = data.symbols[sym];
+    const base = sym.replace('USDT', '');
+    const isActive = sym === activeSymbol;
+    const regime = r.regime || 'unknown';
+    const color = r.regime_color || 'var(--muted)';
+    const icon = regimeIcon[regime] || '⚪';
+    const pct = r.percentile != null ? r.percentile.toFixed(0) : '--';
+    const atrPct = r.current_atr_pct != null ? r.current_atr_pct.toFixed(3) + '%' : '--';
+
+    // Mini sparkline of ATR history
+    const hist = r.atr_history || [];
+    let sparkline = '';
+    if (hist.length > 1) {
+      const mn = Math.min(...hist);
+      const mx = Math.max(...hist);
+      const range = mx - mn || 1;
+      const W = 100, H = 28;
+      const pts = hist.map((v, i) => {
+        const x = (i / (hist.length - 1)) * W;
+        const y = H - ((v - mn) / range) * (H - 2) - 1;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      }).join(' ');
+      // p33 / p67 lines
+      const y33 = H - ((r.p33_atr_pct - mn) / range) * (H - 2) - 1;
+      const y67 = H - ((r.p67_atr_pct - mn) / range) * (H - 2) - 1;
+      sparkline = `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" style="display:block;margin-top:4px;">
+        <line x1="0" y1="${y33.toFixed(1)}" x2="${W}" y2="${y33.toFixed(1)}" stroke="#26a69a" stroke-width="0.5" stroke-dasharray="2,2" opacity="0.5"/>
+        <line x1="0" y1="${y67.toFixed(1)}" x2="${W}" y2="${y67.toFixed(1)}" stroke="#ef5350" stroke-width="0.5" stroke-dasharray="2,2" opacity="0.5"/>
+        <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round"/>
+        <circle cx="${((hist.length-1)/(hist.length-1))*W}" cy="${(H - ((hist[hist.length-1]-mn)/range)*(H-2)-1).toFixed(1)}" r="2" fill="${color}"/>
+      </svg>`;
+    }
+
+    return `<div onclick="selectSymbol('${sym}')" style="flex:1;min-width:130px;background:${isActive?'var(--bg3)':'var(--bg2)'};border:1px solid ${isActive?'var(--accent)':'var(--border)'};border-radius:6px;padding:10px;cursor:pointer;transition:border 0.2s;">
+      <div style="font-size:10px;font-weight:700;color:${isActive?'var(--accent)':'var(--muted)'};margin-bottom:4px;">${base}</div>
+      <div style="display:flex;align-items:baseline;gap:6px;">
+        <span style="font-size:16px;">${icon}</span>
+        <span style="font-size:13px;font-weight:700;color:${color};">${r.regime_label || 'Unknown'}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-top:4px;font-size:10px;color:var(--muted);">
+        <span>ATR: <b style="color:var(--fg);">${atrPct}</b></span>
+        <span>P: <b style="color:${color};">${pct}%ile</b></span>
+      </div>
+      ${sparkline}
+    </div>`;
+  });
+
+  el.innerHTML = `<div style="display:flex;gap:8px;flex-wrap:wrap;">${cols.join('')}</div>`;
+}
+
 // ── CVD Momentum ─────────────────────────────────────────────────────────────
 let _cvdMomWindow = 60;
 function setCvdMomWindow(w) {
@@ -5843,6 +5916,9 @@ async function refreshSignalsScanner() {
 
   refreshFundingHeatmap();
   setInterval(refreshFundingHeatmap, 120000);  // every 2 min
+
+  refreshVolatilityRegime();
+  setInterval(refreshVolatilityRegime, 30000);  // every 30s
 
   // ── Keyboard Shortcut Help Modal ──────────────────────────────────────────
   (function buildHotkeyModal() {

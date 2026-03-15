@@ -2718,3 +2718,141 @@ async def flow_imbalance(
         "summary": summary,
         "series": series,
     }
+
+
+# ---------------------------------------------------------------------------
+# Volatility Regime Detector
+# ---------------------------------------------------------------------------
+@router.get("/volatility-regime")
+async def volatility_regime_endpoint(
+    symbol: Optional[str] = None,
+    period: int = Query(default=14, ge=5, le=50),
+    lookback_periods: int = Query(default=100, ge=20, le=500),
+):
+    """
+    Classify price action volatility as low/medium/high using ATR percentile.
+
+    Computes ATR(period) on 1-min candles over lookback_periods windows,
+    then classifies current ATR vs its own historical distribution.
+    - percentile < 33 → LOW volatility
+    - percentile 33–66 → MEDIUM volatility
+    - percentile > 66 → HIGH volatility
+    """
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+
+    # Fetch enough candles for lookback_periods + period ATR windows
+    total_candles_needed = lookback_periods + period + 5
+    window_seconds = total_candles_needed * 60  # 1-min candles
+
+    candles = await get_ohlcv(interval_seconds=60, window_seconds=window_seconds, symbol=target)
+
+    if len(candles) < period + 10:
+        return {
+            "status": "ok",
+            "symbol": target,
+            "regime": "unknown",
+            "regime_label": "Unknown",
+            "percentile": None,
+            "current_atr_pct": None,
+            "atr_history": [],
+            "note": "insufficient data",
+        }
+
+    highs  = [c["high"]  for c in candles]
+    lows   = [c["low"]   for c in candles]
+    closes = [c["close"] for c in candles]
+
+    # Compute TR for each candle
+    trs = []
+    for i in range(1, len(candles)):
+        tr = max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1]))
+        trs.append(tr)
+
+    # Compute rolling ATR values (Wilder) for each window ending point
+    atr_values = []  # list of (atr_pct, close_price)
+
+    # Warm up: compute first ATR at index period-1 of trs
+    if len(trs) >= period:
+        atr = sum(trs[:period]) / period
+        close_price = closes[period]
+        atr_pct = atr / close_price * 100 if close_price else 0
+        atr_values.append(atr_pct)
+
+        for i in range(period, len(trs)):
+            atr = (atr * (period - 1) + trs[i]) / period
+            close_price = closes[i + 1] if i + 1 < len(closes) else closes[i]
+            atr_pct = atr / close_price * 100 if close_price else 0
+            atr_values.append(atr_pct)
+
+    if not atr_values:
+        return {
+            "status": "ok",
+            "symbol": target,
+            "regime": "unknown",
+            "regime_label": "Unknown",
+            "percentile": None,
+            "current_atr_pct": None,
+            "atr_history": [],
+        }
+
+    current_atr_pct = atr_values[-1]
+    sorted_atrs = sorted(atr_values)
+    n = len(sorted_atrs)
+
+    # Compute percentile of current ATR within its own history
+    rank = sum(1 for v in sorted_atrs if v <= current_atr_pct)
+    percentile = (rank / n) * 100
+
+    if percentile < 33:
+        regime = "low"
+        regime_label = "Low Volatility"
+        regime_color = "#26a69a"  # teal
+    elif percentile < 67:
+        regime = "medium"
+        regime_label = "Medium Volatility"
+        regime_color = "#ffb74d"  # amber
+    else:
+        regime = "high"
+        regime_label = "High Volatility"
+        regime_color = "#ef5350"  # red
+
+    # Return last 60 ATR values for sparkline
+    history_slice = atr_values[-60:]
+    p33 = sorted_atrs[int(n * 0.33)]
+    p67 = sorted_atrs[int(n * 0.67)]
+
+    return {
+        "status": "ok",
+        "symbol": target,
+        "regime": regime,
+        "regime_label": regime_label,
+        "regime_color": regime_color,
+        "percentile": round(percentile, 1),
+        "current_atr_pct": round(current_atr_pct, 4),
+        "p33_atr_pct": round(p33, 4),
+        "p67_atr_pct": round(p67, 4),
+        "atr_history": [round(v, 4) for v in history_slice],
+        "period": period,
+        "lookback_periods": lookback_periods,
+        "candles_used": len(candles),
+    }
+
+
+@router.get("/volatility-regime/all")
+async def volatility_regime_all(period: int = Query(default=14, ge=5, le=50)):
+    """Volatility regime for all tracked symbols."""
+    import asyncio
+
+    async def _fetch(sym: str):
+        return await volatility_regime_endpoint(symbol=sym, period=int(period), lookback_periods=100)
+
+    syms = get_symbols()
+    results = await asyncio.gather(*[_fetch(s) for s in syms], return_exceptions=True)
+    out = {}
+    for s, r in zip(syms, results):
+        if isinstance(r, Exception):
+            out[s] = {"regime": "unknown", "error": str(r)}
+        else:
+            out[s] = r
+    return {"status": "ok", "symbols": out}

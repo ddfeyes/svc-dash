@@ -767,6 +767,8 @@ async def cleanup_old_data(max_age_seconds: int = 86400 * 7):
             await db.execute(f"DELETE FROM {table} WHERE ts < ?", (cutoff,))
         # Keep orderbook only last 30 minutes (enough for heatmap)
         await db.execute("DELETE FROM orderbook_snapshots WHERE ts < ?", (time.time() - 1800,))
+        # Keep spread history 4 hours (1s resolution → ~14400 rows/symbol → manageable)
+        await db.execute("DELETE FROM spread_history WHERE ts < ?", (time.time() - 14400,))
         # Keep alert history 30 days
         await db.execute("DELETE FROM alert_history WHERE ts < ?", (time.time() - 86400 * 30,))
         await db.commit()
