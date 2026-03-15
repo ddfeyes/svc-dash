@@ -1038,6 +1038,106 @@ async function renderMarketRegime() {
   `;
 }
 
+// ── Render: Momentum ──────────────────────────────────────────────────────────
+async function renderMomentum() {
+  const data = await apiFetch('/momentum');
+  const el = document.getElementById('momentum-content');
+  if (!el) return;
+
+  if (!data?.symbols || !Object.keys(data.symbols).length) {
+    el.innerHTML = '<div class="text-muted" style="font-size:11px;">No data</div>';
+    return;
+  }
+
+  function fmtPct(v) {
+    if (v == null) return '<span style="color:var(--muted)">—</span>';
+    const n = parseFloat(v);
+    if (isNaN(n)) return '<span style="color:var(--muted)">—</span>';
+    const sign = n > 0 ? '+' : '';
+    const col  = n > 0 ? 'var(--green)' : n < 0 ? 'var(--red)' : 'var(--muted)';
+    return `<span style="color:${col}">${sign}${n.toFixed(2)}%</span>`;
+  }
+
+  const rows = Object.entries(data.symbols).map(([sym, d]) => {
+    return `<tr>
+      <td style="color:var(--fg);padding:3px 6px;font-size:10px;">${sym.replace('USDT','')}</td>
+      <td style="text-align:right;padding:3px 6px;font-size:10px;">${fmtPct(d['1h'])}</td>
+      <td style="text-align:right;padding:3px 6px;font-size:10px;">${fmtPct(d['4h'])}</td>
+      <td style="text-align:right;padding:3px 6px;font-size:10px;">${fmtPct(d['24h'])}</td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = `
+    <table style="width:100%;border-collapse:collapse;">
+      <thead>
+        <tr>
+          <th style="text-align:left;padding:3px 6px;font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">Symbol</th>
+          <th style="text-align:right;padding:3px 6px;font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">1h</th>
+          <th style="text-align:right;padding:3px 6px;font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">4h</th>
+          <th style="text-align:right;padding:3px 6px;font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">24h</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+// ── Render: Correlations ──────────────────────────────────────────────────────
+async function renderCorrelations() {
+  const data = await apiFetch('/correlations?window=3600');
+  const el = document.getElementById('correlations-content');
+  if (!el) return;
+
+  if (!data?.matrix || !Object.keys(data.matrix).length) {
+    el.innerHTML = '<div class="text-muted" style="font-size:11px;">No data</div>';
+    return;
+  }
+
+  function corrColor(v) {
+    if (v == null || isNaN(v)) return 'hsl(0,0%,25%)';
+    const c = Math.max(-1, Math.min(1, v));
+    if (c >= 0) {
+      const h = Math.round(120 * c);
+      const s = Math.round(70 * c);
+      return `hsl(${h},${s}%,40%)`;
+    }
+    const s = Math.round(70 * Math.abs(c));
+    return `hsl(0,${s}%,40%)`;
+  }
+
+  const symbols = Object.keys(data.matrix);
+  const headerCells = symbols.map(s =>
+    `<th style="padding:2px 4px;font-size:9px;color:var(--muted);text-transform:uppercase;">${s.replace('USDT','')}</th>`
+  ).join('');
+
+  const bodyRows = symbols.map(rowSym => {
+    const cells = symbols.map(colSym => {
+      const v  = (data.matrix[rowSym] || {})[colSym];
+      const bg = corrColor(v);
+      const txt = v != null ? parseFloat(v).toFixed(2) : '—';
+      return `<td style="background:${bg};color:#fff;text-align:center;padding:3px 4px;font-size:10px;">${txt}</td>`;
+    }).join('');
+    return `<tr>
+      <td style="padding:2px 6px;font-size:9px;color:var(--muted);white-space:nowrap;">${rowSym.replace('USDT','')}</td>
+      ${cells}
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="overflow-x:auto;">
+      <table style="border-collapse:collapse;width:100%;">
+        <thead>
+          <tr>
+            <th style="padding:2px 6px;font-size:9px;color:var(--muted);"></th>
+            ${headerCells}
+          </tr>
+        </thead>
+        <tbody>${bodyRows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
 // ── Main Refresh Loop ─────────────────────────────────────────────────────────
 async function refresh() {
   if (!activeSymbol) return;
@@ -1056,6 +1156,8 @@ async function refresh() {
     renderWhaleClustering(),
     renderVwapDeviation(),
     renderMarketRegime(),
+    renderMomentum(),
+    renderCorrelations(),
   ]);
 }
 
