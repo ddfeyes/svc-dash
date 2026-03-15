@@ -661,10 +661,25 @@
       <div id="oi-spike-text" style="color:var(--muted)">Loading...</div>
     </div>
 
-    <div id="alert-divergence" class="alert-box" style="margin-bottom:12px;">
+    <div id="alert-divergence" class="alert-box">
       <div class="alert-label">DELTA DIVERGENCE</div>
       <div id="div-text" style="color:var(--muted)">Loading...</div>
       <div id="div-severity" style="margin-top:5px;"></div>
+    </div>
+
+    <div id="alert-vol-spike" class="alert-box">
+      <div class="alert-label">VOLUME SPIKE (&gt;3x baseline / 30s)</div>
+      <div id="vol-spike-text" style="color:var(--muted)">Loading...</div>
+    </div>
+
+    <div id="alert-funding-extreme" class="alert-box">
+      <div class="alert-label">FUNDING EXTREME (&gt;±0.1%)</div>
+      <div id="funding-extreme-text" style="color:var(--muted)">Loading...</div>
+    </div>
+
+    <div id="alert-phase-change" class="alert-box" style="margin-bottom:12px;">
+      <div class="alert-label">PHASE CHANGE</div>
+      <div id="phase-change-text" style="color:var(--muted)">No recent changes</div>
     </div>
 
     <div class="divider"></div>
@@ -728,8 +743,27 @@
       <button class="ah-filter-btn" data-type="delta_divergence" onclick="setAlertHistoryFilter('delta_divergence',this)">Delta Div</button>
       <button class="ah-filter-btn" data-type="oi_spike" onclick="setAlertHistoryFilter('oi_spike',this)">OI Spike</button>
       <button class="ah-filter-btn" data-type="liq_cascade" onclick="setAlertHistoryFilter('liq_cascade',this)">Liq Cascade</button>
+      <button class="ah-filter-btn" data-type="volume_spike" onclick="setAlertHistoryFilter('volume_spike',this)">Vol Spike</button>
+      <button class="ah-filter-btn" data-type="funding_extreme" onclick="setAlertHistoryFilter('funding_extreme',this)">Funding Extreme</button>
+      <button class="ah-filter-btn" data-type="phase_change" onclick="setAlertHistoryFilter('phase_change',this)">Phase Change</button>
     </div>
     <div id="alert-history-list" style="max-height:300px;overflow-y:auto;font-size:11px;font-family:'Menlo','Monaco','Consolas',monospace;"></div>
+  </div>
+
+  <!-- Price Alert -->
+  <div class="card" id="card-price-alert">
+    <h2><span class="card-icon">🎯</span>Price Alert
+      <span id="price-alert-status" style="margin-left:auto;font-size:10px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;"></span>
+    </h2>
+    <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
+      <input id="price-alert-above" type="number" step="any" placeholder="Alert above price"
+        style="flex:1;min-width:100px;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:4px;font-size:11px;" />
+      <input id="price-alert-below" type="number" step="any" placeholder="Alert below price"
+        style="flex:1;min-width:100px;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:4px;font-size:11px;" />
+      <button onclick="savePriceAlerts()" style="background:var(--accent);color:#0e1117;border:none;padding:5px 12px;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">Set</button>
+      <button onclick="clearPriceAlerts()" style="background:var(--bg3);color:var(--muted);border:1px solid var(--border);padding:5px 10px;border-radius:4px;font-size:11px;cursor:pointer;">Clear</button>
+    </div>
+    <div id="price-alert-log" style="max-height:100px;overflow-y:auto;font-size:10px;font-family:'Menlo','Monaco','Consolas',monospace;color:var(--muted);"></div>
   </div>
 </div>
 
@@ -1271,6 +1305,39 @@ function updateSummary(summary) {
     }
   }
 
+  // ── Funding extreme alert ─────────────────────────────────────────────────
+  if (summary.funding_extreme) {
+    const fe = summary.funding_extreme;
+    const feBox = document.getElementById('alert-funding-extreme');
+    const feText = document.getElementById('funding-extreme-text');
+    if (fe.extreme) {
+      const color = fe.direction === 'long_squeeze' ? 'var(--red)' : 'var(--green)';
+      feText.style.color = color;
+      feText.textContent = fe.description;
+      feBox.className = 'alert-box ' + (fe.direction === 'long_squeeze' ? 'active-red' : 'active-green');
+    } else {
+      feText.style.color = 'var(--muted)';
+      feText.textContent = fe.description || 'Normal';
+      feBox.className = 'alert-box';
+    }
+  }
+
+  // ── Phase change from active alerts ───────────────────────────────────────
+  if (summary.active_alerts) {
+    const phAlerts = summary.active_alerts.filter(a => a.type === 'phase_change');
+    const pcBox = document.getElementById('alert-phase-change');
+    const pcText = document.getElementById('phase-change-text');
+    if (phAlerts.length) {
+      const latest = phAlerts[phAlerts.length - 1];
+      pcText.style.color = 'var(--accent)';
+      pcText.textContent = latest.description;
+      pcBox.className = 'alert-box active';
+    }
+  }
+
+  // ── Price alert check ─────────────────────────────────────────────────────
+  if (summary.price) checkPriceAlerts(summary.price);
+
   if (summary.depth_bids?.length && summary.depth_asks?.length) {
     charts.depth.data.datasets[0].data = summary.depth_bids.map(([p, c]) => ({ x: p, y: c }));
     charts.depth.data.datasets[1].data = summary.depth_asks.map(([p, c]) => ({ x: p, y: c }));
@@ -1360,6 +1427,9 @@ function selectSymbol(sym) {
   _nextFundingTs = 0;
   const tapeEl = document.getElementById('tape-list');
   if (tapeEl) tapeEl.innerHTML = '';
+  loadPriceAlertsFromStorage();
+  document.getElementById('phase-change-text').textContent = 'No recent changes';
+  document.getElementById('alert-phase-change').className = 'alert-box';
   renderHeatmap();
   renderTradeFlowHeatmap();
   refreshAll();
@@ -1388,7 +1458,7 @@ async function refreshAll() {
   if (!activeSymbol) return;
   const sym = encodeURIComponent(activeSymbol);
 
-  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas] = await Promise.all([
+  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas, volspike] = await Promise.all([
     fetchJSON(`/api/cvd/history?window=3600&symbol=${sym}`),
     fetchJSON(`/api/oi/history?limit=300&symbol=${sym}`),
     fetchJSON(`/api/funding/history?limit=200&symbol=${sym}`),
@@ -1398,6 +1468,7 @@ async function refreshAll() {
     fetchJSON(`/api/large-trades?window=300&min_usd=10000&symbol=${sym}`),
     fetchJSON(`/api/oi-spike?window=300&threshold=3&symbol=${sym}`),
     fetchJSON(`/api/liq-cascade?window=60&threshold_usd=50000&symbol=${sym}`),
+    fetchJSON(`/api/volume-spike?window=30&baseline=300&symbol=${sym}`),
   ]);
 
   // CVD + Price dual-axis chart
@@ -2435,6 +2506,107 @@ async function refreshAlertHistory() {
   }
 }
 
+// ── Price Alert (localStorage) ───────────────────────────────────────────────
+const PRICE_ALERT_KEY = 'bananas31_price_alerts';
+let _priceAlertFiredAbove = false;
+let _priceAlertFiredBelow = false;
+const priceAlertLog = [];
+
+function loadPriceAlertsFromStorage() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(PRICE_ALERT_KEY) || '{}');
+    const sym = activeSymbol || '';
+    const above = saved[sym]?.above;
+    const below = saved[sym]?.below;
+    if (above) document.getElementById('price-alert-above').value = above;
+    if (below) document.getElementById('price-alert-below').value = below;
+    _priceAlertFiredAbove = false;
+    _priceAlertFiredBelow = false;
+    updatePriceAlertStatus();
+  } catch {}
+}
+
+function savePriceAlerts() {
+  try {
+    const sym = activeSymbol || '';
+    const above = parseFloat(document.getElementById('price-alert-above').value) || null;
+    const below = parseFloat(document.getElementById('price-alert-below').value) || null;
+    const saved = JSON.parse(localStorage.getItem(PRICE_ALERT_KEY) || '{}');
+    saved[sym] = { above, below };
+    localStorage.setItem(PRICE_ALERT_KEY, JSON.stringify(saved));
+    _priceAlertFiredAbove = false;
+    _priceAlertFiredBelow = false;
+    updatePriceAlertStatus();
+  } catch {}
+}
+
+function clearPriceAlerts() {
+  try {
+    const sym = activeSymbol || '';
+    const saved = JSON.parse(localStorage.getItem(PRICE_ALERT_KEY) || '{}');
+    delete saved[sym];
+    localStorage.setItem(PRICE_ALERT_KEY, JSON.stringify(saved));
+    document.getElementById('price-alert-above').value = '';
+    document.getElementById('price-alert-below').value = '';
+    _priceAlertFiredAbove = false;
+    _priceAlertFiredBelow = false;
+    document.getElementById('price-alert-status').textContent = 'Cleared';
+    document.getElementById('price-alert-status').style.color = 'var(--muted)';
+  } catch {}
+}
+
+function updatePriceAlertStatus() {
+  try {
+    const sym = activeSymbol || '';
+    const saved = JSON.parse(localStorage.getItem(PRICE_ALERT_KEY) || '{}');
+    const alerts = saved[sym] || {};
+    const parts = [];
+    if (alerts.above) parts.push(`↑ ${alerts.above}`);
+    if (alerts.below) parts.push(`↓ ${alerts.below}`);
+    const statusEl = document.getElementById('price-alert-status');
+    if (parts.length) {
+      statusEl.textContent = 'Active: ' + parts.join(' | ');
+      statusEl.style.color = 'var(--accent)';
+    } else {
+      statusEl.textContent = 'None set';
+      statusEl.style.color = 'var(--muted)';
+    }
+  } catch {}
+}
+
+function checkPriceAlerts(price) {
+  try {
+    const sym = activeSymbol || '';
+    const saved = JSON.parse(localStorage.getItem(PRICE_ALERT_KEY) || '{}');
+    const alerts = saved[sym] || {};
+    const logEl = document.getElementById('price-alert-log');
+
+    if (alerts.above && price >= alerts.above && !_priceAlertFiredAbove) {
+      _priceAlertFiredAbove = true;
+      const msg = `${new Date().toLocaleTimeString()} 🎯 ABOVE $${alerts.above} — price: $${price.toFixed(4)}`;
+      priceAlertLog.unshift(msg);
+      if (logEl) logEl.innerHTML = priceAlertLog.slice(0, 10).map(m =>
+        `<div style="padding:2px 0;border-bottom:1px solid var(--border);color:var(--accent);">${m}</div>`).join('');
+      // Play beep if sound enabled
+      playAlertBeep(880, 0.4, 0.3);
+      // Flash header
+      document.getElementById('price-alert-status').style.color = 'var(--green)';
+    }
+    if (alerts.below && price <= alerts.below && !_priceAlertFiredBelow) {
+      _priceAlertFiredBelow = true;
+      const msg = `${new Date().toLocaleTimeString()} 🎯 BELOW $${alerts.below} — price: $${price.toFixed(4)}`;
+      priceAlertLog.unshift(msg);
+      if (logEl) logEl.innerHTML = priceAlertLog.slice(0, 10).map(m =>
+        `<div style="padding:2px 0;border-bottom:1px solid var(--border);color:var(--red);">${m}</div>`).join('');
+      playAlertBeep(440, 0.4, 0.3);
+      document.getElementById('price-alert-status').style.color = 'var(--red)';
+    }
+    // Reset fired flags if price moves away (hysteresis 0.1%)
+    if (alerts.above && price < alerts.above * 0.999) _priceAlertFiredAbove = false;
+    if (alerts.below && price > alerts.below * 1.001) _priceAlertFiredBelow = false;
+  } catch {}
+}
+
 // ── Boot ─────────────────────────────────────────────────────────────────────
 (async () => {
   initPriceCharts();
@@ -2445,6 +2617,7 @@ async function refreshAlertHistory() {
   if (activeSymbol) {
     connectWS(activeSymbol);
     updateExportLinks(activeSymbol);
+    loadPriceAlertsFromStorage();
   }
   await Promise.all([refreshAll(), refreshHeatmap(), refreshPriceChart(), refreshMultiOverview(), refreshTradeFlowHeatmap()]);
   initTape();

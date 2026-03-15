@@ -555,6 +555,88 @@ async def compute_volume_profile(symbol: str, window_seconds: int = 3600, bins: 
     }
 
 
+async def detect_funding_extreme(symbol: str = None, threshold_pct: float = 0.1) -> Dict:
+    """
+    Detect extreme funding rates (>threshold_pct% or <-threshold_pct%).
+    Extreme funding = squeeze risk: shorts squeezed if funding very positive,
+    longs squeezed if funding very negative.
+    """
+    funding = await get_funding_history(limit=4, symbol=symbol)
+    if not funding:
+        return {"extreme": False, "rates": {}, "description": "No funding data", "direction": None}
+
+    rates = {}
+    for row in funding:
+        ex = row["exchange"]
+        if ex not in rates:
+            rates[ex] = row["rate"]
+
+    avg_rate = sum(rates.values()) / len(rates) if rates else 0
+    threshold = threshold_pct / 100.0
+
+    extreme = abs(avg_rate) >= threshold
+    direction = None
+    if extreme:
+        direction = "long_squeeze" if avg_rate > 0 else "short_squeeze"
+
+    if extreme:
+        pct_str = f"{avg_rate * 100:+.4f}%"
+        if direction == "long_squeeze":
+            desc = f"⚡ Funding extreme {pct_str} — longs paying, short squeeze risk"
+        else:
+            desc = f"⚡ Funding extreme {pct_str} — shorts paying, long squeeze risk"
+    else:
+        desc = f"Funding normal ({avg_rate * 100:+.4f}%)"
+
+    return {
+        "extreme": extreme,
+        "avg_rate": round(avg_rate, 8),
+        "avg_rate_pct": round(avg_rate * 100, 6),
+        "rates": {ex: round(r, 8) for ex, r in rates.items()},
+        "direction": direction,
+        "description": desc,
+        "threshold_pct": threshold_pct,
+    }
+
+
+async def detect_volume_spike(window_seconds: int = 30, baseline_seconds: int = 300, symbol: str = None) -> Dict:
+    """
+    Volume spike: compare recent window volume vs baseline average.
+    Returns spike if recent/baseline ratio > 3x.
+    """
+    now = time.time()
+    recent_trades = await get_trades_for_cvd(now - window_seconds, symbol=symbol)
+    baseline_trades = await get_trades_for_cvd(now - baseline_seconds, symbol=symbol)
+
+    recent_vol = sum(t["qty"] * t["price"] for t in recent_trades)
+    # Baseline per-period average
+    n_periods = baseline_seconds / window_seconds
+    baseline_per_period = sum(t["qty"] * t["price"] for t in baseline_trades) / n_periods if n_periods > 0 else 0
+
+    ratio = recent_vol / baseline_per_period if baseline_per_period > 0 else 0
+    spike = ratio >= 3.0
+
+    buy_vol = sum(t["qty"] * t["price"] for t in recent_trades if t["side"] in ("buy", "Buy"))
+    sell_vol = sum(t["qty"] * t["price"] for t in recent_trades if t["side"] not in ("buy", "Buy"))
+    dominant = "buy" if buy_vol >= sell_vol else "sell"
+    dominant_pct = (max(buy_vol, sell_vol) / recent_vol * 100) if recent_vol > 0 else 0
+
+    return {
+        "spike": spike,
+        "ratio": round(ratio, 2),
+        "recent_usd": round(recent_vol, 2),
+        "baseline_usd_per_period": round(baseline_per_period, 2),
+        "dominant": dominant,
+        "dominant_pct": round(dominant_pct, 1),
+        "description": (
+            f"🌊 Vol spike {ratio:.1f}x normal (${recent_vol:,.0f} in {window_seconds}s, {dominant}-dominant)"
+            if spike else
+            f"Volume normal ({ratio:.1f}x)"
+        ),
+        "window_seconds": window_seconds,
+    }
+
+
 def _phase_description(phase: str) -> str:
     return {
         "Accumulation": "Smart money buying quietly; price consolidating with rising OI",

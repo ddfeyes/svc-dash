@@ -28,7 +28,9 @@ from metrics import (
     detect_delta_divergence,
     detect_large_trades,
     detect_oi_spike,
+    detect_volume_spike,
     detect_liquidation_cascade,
+    detect_funding_extreme,
 )
 
 router = APIRouter(prefix="/api")
@@ -220,6 +222,30 @@ async def delta_divergence(
     return {"status": "ok", "symbol": target, **data}
 
 
+@router.get("/funding-extreme")
+async def funding_extreme(
+    symbol: Optional[str] = None,
+    threshold_pct: float = Query(default=0.1, le=5.0),
+):
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await detect_funding_extreme(symbol=target, threshold_pct=threshold_pct)
+    return {"status": "ok", "symbol": target, **data}
+
+
+@router.get("/volume-spike")
+async def volume_spike(
+    window: int = Query(default=30, le=300),
+    baseline: int = Query(default=300, le=3600),
+    symbol: Optional[str] = None,
+):
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    from metrics import detect_volume_spike as _dvs
+    data = await _dvs(window_seconds=window, baseline_seconds=baseline, symbol=target)
+    return {"status": "ok", "symbol": target, **data}
+
+
 @router.get("/large-trades")
 async def large_trades(
     window: int = Query(default=300, le=3600),
@@ -299,9 +325,11 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                     detect_delta_divergence(window_seconds=300, symbol=symbol),
                     detect_oi_spike(window_seconds=300, threshold_pct=3.0, symbol=symbol),
                     detect_liquidation_cascade(window_seconds=60, threshold_usd=50000, symbol=symbol),
+                    detect_volume_spike(window_seconds=30, baseline_seconds=300, symbol=symbol),
+                    detect_funding_extreme(symbol=symbol, threshold_pct=0.1),
                     return_exceptions=True,
                 )
-                div_result, oi_result, liq_result = alert_tasks
+                div_result, oi_result, liq_result, vol_result, funding_ex_result = alert_tasks
 
                 fired_alerts = []
                 if isinstance(div_result, dict) and div_result.get("divergence") not in ("none", None):
@@ -311,13 +339,35 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                     fired_alerts.append(("oi_spike", "high", oi_result.get("description", ""), oi_result))
                 if isinstance(liq_result, dict) and liq_result.get("cascade"):
                     fired_alerts.append(("liq_cascade", "critical", liq_result.get("description", ""), liq_result))
+                if isinstance(vol_result, dict) and vol_result.get("spike"):
+                    fired_alerts.append(("volume_spike", "medium", vol_result.get("description", ""), vol_result))
+                if isinstance(funding_ex_result, dict) and funding_ex_result.get("extreme"):
+                    fired_alerts.append(("funding_extreme", "high", funding_ex_result.get("description", ""), funding_ex_result))
+
+                # Phase change detection
+                if not hasattr(ws, "_last_phase"):
+                    ws._last_phase = {}
+                prev_phase = ws._last_phase.get(symbol)
+                cur_phase = phase.get("phase") if isinstance(phase, dict) else None
+                if cur_phase and prev_phase and cur_phase != prev_phase:
+                    phase_desc = f"Phase change: {prev_phase} → {cur_phase} (conf: {phase.get('confidence', 0):.0%})"
+                    fired_alerts.append(("phase_change", "medium", phase_desc, {
+                        "from": prev_phase, "to": cur_phase,
+                        "confidence": phase.get("confidence"),
+                        "signals": phase.get("signals"),
+                    }))
+                if cur_phase:
+                    ws._last_phase[symbol] = cur_phase
 
                 # Deduplicate: only save if no same-type alert in last 60s
+                # funding_extreme uses 300s cooldown (fires constantly otherwise)
+                cooldowns = {"funding_extreme": 300, "phase_change": 120}
                 for a_type, sev, desc, data in fired_alerts:
                     if not hasattr(ws, "_last_alert_ts"):
                         ws._last_alert_ts = {}
                     last = ws._last_alert_ts.get(a_type, 0)
-                    if time.time() - last > 60:
+                    cooldown = cooldowns.get(a_type, 60)
+                    if time.time() - last > cooldown:
                         await insert_alert(symbol, a_type, sev, desc, data)
                         ws._last_alert_ts[a_type] = time.time()
 
@@ -333,6 +383,7 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                     "oi_momentum": oi_mom,
                     "funding_rates": latest_funding,
                     "next_funding_ts": next_funding_ts,
+                    "funding_extreme": funding_ex_result if isinstance(funding_ex_result, dict) else None,
                     "depth_bids": depth_bids,
                     "depth_asks": depth_asks,
                     "ob_bids": raw_bids[:10],
