@@ -876,6 +876,73 @@ function appendAlertFeed(msg) {
   }
 }
 
+// ── Whale Order Clustering ────────────────────────────────────────────────────
+async function renderWhaleClustering() {
+  const el = document.getElementById('whale-clustering-content');
+  const badge = document.getElementById('whale-clustering-badge');
+  if (!el) return;
+
+  const sym = activeSymbol;
+  let data;
+  try {
+    const res = await fetch(`/api/whale-clustering?symbol=${sym}&window=1800`);
+    data = await res.json();
+  } catch {
+    el.innerHTML = '<div class="text-muted" style="font-size:11px;">Unavailable</div>';
+    return;
+  }
+
+  if (!data || data.trade_count === 0) {
+    el.innerHTML = '<div class="text-muted" style="font-size:11px;">No whale trades in window</div>';
+    badge.style.display = 'none';
+    return;
+  }
+
+  const zones = data.zones || [];
+  const bins = data.bins || [];
+
+  if (zones.length > 0) {
+    badge.textContent = `${zones.length} zone${zones.length > 1 ? 's' : ''}`;
+    badge.style.display = 'inline-block';
+    badge.style.background = 'var(--accent, #f59e0b)';
+  } else {
+    badge.style.display = 'none';
+  }
+
+  const fmtK = v => v >= 1e6 ? `$${(v/1e6).toFixed(2)}M` : v >= 1e3 ? `$${(v/1e3).toFixed(1)}K` : `$${v.toFixed(0)}`;
+  const topZone = data.top_zone_price != null ? `$${Number(data.top_zone_price).toLocaleString()}` : '—';
+
+  let html = `<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:11px;margin-bottom:8px;padding:0 2px;">
+    <span>Trades <b>${data.trade_count}</b></span>
+    <span>Volume <b>${fmtK(data.total_usd)}</b></span>
+    <span>Bins <b>${data.non_empty_bins}</b></span>
+    <span>Zones <b>${zones.length}</b></span>
+    <span>Top Zone <b>${topZone}</b></span>
+  </div>`;
+
+  if (bins.length > 0) {
+    const maxVol = Math.max(...bins.map(b => b.total_usd));
+    html += '<div style="display:flex;flex-direction:column;gap:2px;font-size:10px;">';
+    for (const b of [...bins].reverse()) {
+      const pct = maxVol > 0 ? (b.total_usd / maxVol * 100).toFixed(1) : 0;
+      const barColor = b.is_zone
+        ? 'var(--accent, #f59e0b)'
+        : b.dominance === 'buy' ? 'var(--bull, #22c55e)' : b.dominance === 'sell' ? 'var(--bear, #ef4444)' : 'var(--muted, #6b7280)';
+      html += `<div style="display:flex;align-items:center;gap:6px;">
+        <span style="width:56px;text-align:right;color:var(--muted);">$${Number(b.price_mid).toLocaleString()}</span>
+        <div style="flex:1;background:var(--bg2,#1e1e2e);border-radius:2px;height:10px;position:relative;">
+          <div style="width:${pct}%;height:100%;background:${barColor};border-radius:2px;opacity:${b.is_zone ? 1 : 0.55};"></div>
+        </div>
+        <span style="width:44px;color:var(--muted);">${fmtK(b.total_usd)}</span>
+        ${b.is_zone ? '<span style="color:var(--accent,#f59e0b);font-weight:700;">ZONE</span>' : ''}
+      </div>`;
+    }
+    html += '</div>';
+  }
+
+  el.innerHTML = html;
+}
+
 // ── Main Refresh Loop ─────────────────────────────────────────────────────────
 async function refresh() {
   if (!activeSymbol) return;
@@ -891,6 +958,7 @@ async function refresh() {
     renderPhase(),
     renderOiDivergence(),
     renderMicrostructure(),
+    renderWhaleClustering(),
   ]);
 }
 

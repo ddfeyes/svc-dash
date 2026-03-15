@@ -3946,3 +3946,141 @@ def compute_inter_exchange_oi_divergence(
         "description":        description,
         "min_divergence_pct": min_divergence_pct,
     }
+
+
+def compute_whale_clustering(
+    trades: list,
+    *,
+    bin_size: float = None,
+    n_bins: int = 50,
+    zone_sigma: float = 1.0,
+) -> dict:
+    """Group trades into price bins and detect high-volume concentration zones.
+
+    Args:
+        trades: list of dicts with keys price, qty, side, value_usd
+        bin_size: fixed price bin width; if None, computed from range / n_bins
+        n_bins: number of bins to use when bin_size is not provided
+        zone_sigma: threshold = mean + zone_sigma * std over ALL bins (incl. empty)
+    """
+    import math as _math
+
+    EMPTY = {
+        "trade_count": 0,
+        "bins": [],
+        "zones": [],
+        "top_zone_price": None,
+        "bin_size": bin_size or 0.0,
+        "non_empty_bins": 0,
+        "total_usd": 0.0,
+        "price_min": None,
+        "price_max": None,
+        "zone_threshold_usd": 0.0,
+    }
+
+    if not trades:
+        return EMPTY
+
+    prices = [float(t["price"]) for t in trades]
+    price_min = min(prices)
+    price_max = max(prices)
+
+    # Determine bin_size
+    if bin_size is None:
+        rng = price_max - price_min
+        if rng == 0:
+            bin_size = 1.0
+        else:
+            bin_size = rng / n_bins
+    bin_size = float(bin_size)
+
+    # Accumulate into bins (keyed by bin index)
+    bins_data: dict = {}
+    for t in trades:
+        price = float(t["price"])
+        value = float(t["value_usd"])
+        side = str(t.get("side", "buy")).lower()
+        idx = int((price - price_min) / bin_size)
+        if idx not in bins_data:
+            bins_data[idx] = {"buy_usd": 0.0, "sell_usd": 0.0, "count": 0,
+                               "buy_count": 0, "sell_count": 0}
+        b = bins_data[idx]
+        b["count"] += 1
+        if side == "buy":
+            b["buy_usd"] += value
+            b["buy_count"] += 1
+        else:
+            b["sell_usd"] += value
+            b["sell_count"] += 1
+
+    # Zone detection over ALL bins including zeros (consistent with price_ladder)
+    if bins_data:
+        max_idx = max(bins_data.keys())
+        all_vols = [
+            bins_data[i]["buy_usd"] + bins_data[i]["sell_usd"] if i in bins_data else 0.0
+            for i in range(max_idx + 1)
+        ]
+    else:
+        all_vols = []
+
+    n_all = len(all_vols)
+    mean_vol = sum(all_vols) / n_all if n_all else 0.0
+    variance = sum((v - mean_vol) ** 2 for v in all_vols) / n_all if n_all else 0.0
+    std_vol = _math.sqrt(variance)
+    zone_threshold = mean_vol + zone_sigma * std_vol
+
+    # Build output bin list (non-empty only, sorted ascending)
+    result_bins = []
+    for idx in sorted(bins_data.keys()):
+        b = bins_data[idx]
+        price_low = price_min + idx * bin_size
+        price_high = price_low + bin_size
+        price_mid = price_low + bin_size / 2.0
+        buy_usd = b["buy_usd"]
+        sell_usd = b["sell_usd"]
+        total_usd = buy_usd + sell_usd
+
+        is_zone = total_usd > zone_threshold
+
+        if buy_usd > sell_usd:
+            dominance = "buy"
+        elif sell_usd > buy_usd:
+            dominance = "sell"
+        else:
+            dominance = "neutral"
+
+        result_bins.append({
+            "price_low":    price_low,
+            "price_high":   price_high,
+            "price_mid":    price_mid,
+            "total_usd":    total_usd,
+            "buy_usd":      buy_usd,
+            "sell_usd":     sell_usd,
+            "count":        b["count"],
+            "buy_count":    b["buy_count"],
+            "sell_count":   b["sell_count"],
+            "is_zone":      is_zone,
+            "dominance":    dominance,
+        })
+
+    zone_bins = [b for b in result_bins if b["is_zone"]]
+    zones = [b["price_mid"] for b in zone_bins]
+    top_zone_price = (
+        max(zone_bins, key=lambda b: b["total_usd"])["price_mid"]
+        if zone_bins else None
+    )
+
+    total_usd = sum(b["total_usd"] for b in result_bins)
+
+    return {
+        "trade_count":        len(trades),
+        "bins":               result_bins,
+        "zones":              zones,
+        "top_zone_price":     top_zone_price,
+        "bin_size":           bin_size,
+        "non_empty_bins":     len(result_bins),
+        "total_usd":          total_usd,
+        "price_min":          price_min,
+        "price_max":          price_max,
+        "zone_threshold_usd": zone_threshold,
+    }
