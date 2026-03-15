@@ -684,6 +684,70 @@ async def multi_summary():
     return {"status": "ok", "symbols": results}
 
 
+@router.get("/correlations")
+async def price_correlations(window: int = Query(default=3600, le=86400)):
+    """
+    Pearson correlation matrix between all tracked symbols based on 1-min OHLCV close prices.
+    Returns matrix[sym_a][sym_b] = correlation coefficient (-1 to 1).
+    """
+    syms = get_symbols()
+    if len(syms) < 2:
+        return {"status": "ok", "matrix": {}, "window": window}
+
+    # Fetch 1-min candles for all symbols in parallel
+    candle_tasks = [get_ohlcv(interval_seconds=60, window_seconds=window, symbol=sym) for sym in syms]
+    all_candles = await asyncio.gather(*candle_tasks, return_exceptions=True)
+
+    # Build time-indexed price series
+    price_series = {}
+    for sym, candles in zip(syms, all_candles):
+        if isinstance(candles, list) and candles:
+            price_series[sym] = {c["ts"]: c["close"] for c in candles}
+
+    if len(price_series) < 2:
+        return {"status": "ok", "matrix": {}, "window": window}
+
+    # Find common timestamps
+    all_ts = set.intersection(*[set(v.keys()) for v in price_series.values()])
+    sorted_ts = sorted(all_ts)
+
+    if len(sorted_ts) < 5:
+        return {"status": "ok", "matrix": {}, "window": window, "note": "Insufficient data"}
+
+    # Build aligned price arrays
+    aligned = {sym: [price_series[sym][ts] for ts in sorted_ts] for sym in price_series}
+
+    def pearson(xs, ys):
+        n = len(xs)
+        if n < 2:
+            return 0
+        mx = sum(xs) / n
+        my = sum(ys) / n
+        num = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+        dx = (sum((x - mx) ** 2 for x in xs)) ** 0.5
+        dy = (sum((y - my) ** 2 for y in ys)) ** 0.5
+        if dx == 0 or dy == 0:
+            return 0
+        return round(num / (dx * dy), 4)
+
+    matrix = {}
+    for sym_a in price_series:
+        matrix[sym_a] = {}
+        for sym_b in price_series:
+            if sym_a == sym_b:
+                matrix[sym_a][sym_b] = 1.0
+            else:
+                matrix[sym_a][sym_b] = pearson(aligned[sym_a], aligned[sym_b])
+
+    return {
+        "status": "ok",
+        "matrix": matrix,
+        "symbols": list(price_series.keys()),
+        "data_points": len(sorted_ts),
+        "window": window,
+    }
+
+
 @router.get("/health")
 async def health_check():
     """Backend health: DB size, record counts, uptime."""

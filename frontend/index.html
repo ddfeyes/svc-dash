@@ -705,6 +705,14 @@
     <canvas id="chart-liq" style="margin-top:10px;"></canvas>
   </div>
 
+  <!-- Correlation Matrix -->
+  <div class="card" id="card-correlations">
+    <h2><span class="card-icon">🔗</span>Price Correlations (1h)
+      <span id="corr-ts" style="margin-left:auto;font-size:9px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;"></span>
+    </h2>
+    <div id="corr-matrix" style="font-size:11px;"></div>
+  </div>
+
   <div class="card wide" id="card-alert-history">
     <h2 style="display:flex;align-items:center;gap:8px;">
       <span class="card-icon">🗂️</span>Alert History (24h)
@@ -2199,6 +2207,54 @@ function renderAlertHistory() {
   list.innerHTML = rows;
 }
 
+// ── Correlation matrix ─────────────────────────────────────────────────────────
+async function refreshCorrelations() {
+  const data = await fetchJSON('/api/correlations?window=3600');
+  if (!data?.matrix || !data.symbols?.length) return;
+  const { matrix, symbols } = data;
+  const el = document.getElementById('corr-matrix');
+  if (!el) return;
+
+  function corrColor(v) {
+    // Green for positive, red for negative, white for ~0
+    if (v === 1) return '#3a4460';
+    if (v > 0.7)  return 'rgba(102,187,106,0.8)';
+    if (v > 0.4)  return 'rgba(102,187,106,0.45)';
+    if (v > 0.1)  return 'rgba(102,187,106,0.2)';
+    if (v < -0.7) return 'rgba(239,83,80,0.8)';
+    if (v < -0.4) return 'rgba(239,83,80,0.45)';
+    if (v < -0.1) return 'rgba(239,83,80,0.2)';
+    return 'var(--bg3)';
+  }
+
+  const bases = symbols.map(s => s.replace('USDT', ''));
+  let html = `<table style="width:100%;border-collapse:collapse;">
+    <thead><tr><th style="padding:4px 6px;color:var(--muted);font-size:9px;text-align:left;"></th>`;
+  for (const base of bases) {
+    html += `<th style="padding:4px 6px;color:var(--muted);font-size:9px;text-align:center;">${base}</th>`;
+  }
+  html += '</tr></thead><tbody>';
+
+  for (let i = 0; i < symbols.length; i++) {
+    const sym_a = symbols[i];
+    html += `<tr><td style="padding:4px 6px;color:var(--muted);font-size:9px;font-weight:600;">${bases[i]}</td>`;
+    for (let j = 0; j < symbols.length; j++) {
+      const sym_b = symbols[j];
+      const v = matrix[sym_a]?.[sym_b] ?? 0;
+      const bg = corrColor(v);
+      const textColor = v === 1 ? 'var(--dim)' : Math.abs(v) > 0.4 ? '#fff' : 'var(--text)';
+      const display = v === 1 ? '—' : v.toFixed(2);
+      html += `<td style="padding:4px 6px;text-align:center;background:${bg};border-radius:3px;font-variant-numeric:tabular-nums;color:${textColor};font-weight:${Math.abs(v)>0.5?'700':'400'};">${display}</td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  el.innerHTML = html;
+
+  const tsEl = document.getElementById('corr-ts');
+  if (tsEl) tsEl.textContent = `${data.data_points} pts`;
+}
+
 async function refreshAlertHistory() {
   const sym = activeSymbol;
   if (!sym) return;
@@ -2232,6 +2288,8 @@ async function refreshAlertHistory() {
   setInterval(pollTape, 2000);
   setInterval(syncSymbols, 30000);
   setInterval(refreshAlertHistory, 30000);
+  refreshCorrelations();
+  setInterval(refreshCorrelations, 60000);
   window.addEventListener('resize', () => { renderHeatmap(); renderTradeFlowHeatmap(); });
 
   // Keyboard shortcuts: 1-9 switch symbols, S toggle sound, M mute

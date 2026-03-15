@@ -50,7 +50,13 @@ async def cleanup_loop():
 async def lifespan(app: FastAPI):
     logger.info("Initializing DB...")
     await init_db()
-    logger.info("DB ready. Starting background tasks...")
+    logger.info("DB ready. Running startup cleanup...")
+    try:
+        await cleanup_old_data()
+        logger.info("Startup cleanup done")
+    except Exception as e:
+        logger.warning(f"Startup cleanup skipped: {e}")
+    logger.info("Starting background tasks...")
 
     # Start background tasks
     tasks = [
