@@ -446,10 +446,18 @@ async def get_ohlcv(
     except Exception:
         oc_map = {}
 
+    # Compute cumulative VWAP across all candles
+    cum_pv = 0.0
+    cum_vol = 0.0
     result = []
     for b in buckets:
         bucket = b["bucket"]
         o, c = oc_map.get(bucket, (b["open_price"], b["close_price"]))
+        typical_price = (b["high"] + b["low"] + c) / 3.0
+        vol = b["volume"] or 0
+        cum_pv  += typical_price * vol
+        cum_vol += vol
+        vwap = cum_pv / cum_vol if cum_vol > 0 else None
         result.append({
             "ts": bucket,
             "open": o,
@@ -460,6 +468,7 @@ async def get_ohlcv(
             "buy_volume": b["buy_volume"],
             "sell_volume": b["sell_volume"],
             "trade_count": b["trade_count"],
+            "vwap": round(vwap, 8) if vwap else None,
         })
     return result
 

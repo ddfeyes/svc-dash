@@ -1301,6 +1301,7 @@ function selectSymbol(sym) {
   _lastTapeTs = 0;
   _lastPrice = null;
   _nextFundingTs = 0;
+  _nextFundingTs = 0;
   const tapeEl = document.getElementById('tape-list');
   if (tapeEl) tapeEl.innerHTML = '';
   renderHeatmap();
@@ -1983,6 +1984,16 @@ function initPriceCharts() {
           fill: false,
           tension: 0.2,
         },
+        {
+          label: 'VWAP',
+          data: [],
+          borderColor: 'rgba(66,165,245,0.85)',
+          borderWidth: 1.5,
+          pointRadius: 0,
+          fill: false,
+          tension: 0.2,
+          borderDash: [3, 3],
+        },
       ]
     },
     options: chartDefaults({
@@ -2072,6 +2083,7 @@ async function refreshPriceChart() {
   chartPrice.data.datasets[0].data = candles.map(c => c.close);
   chartPrice.data.datasets[1].data = candles.map(c => c.high);
   chartPrice.data.datasets[2].data = candles.map(c => c.low);
+  chartPrice.data.datasets[3].data = candles.map(c => c.vwap || null);
   chartPrice.update();
 
   chartVolume.data.labels = labels;
