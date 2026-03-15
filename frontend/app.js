@@ -943,6 +943,101 @@ async function renderWhaleClustering() {
   el.innerHTML = html;
 }
 
+// ── Render: VWAP Deviation ────────────────────────────────────────────────────
+async function renderVwapDeviation() {
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/vwap-deviation?symbol=${sym}`);
+  if (!data) return;
+
+  const el    = document.getElementById('vwap-deviation-content');
+  const badge = document.getElementById('vwap-deviation-badge');
+  if (!el) return;
+
+  const devPct  = data.deviation_pct != null ? parseFloat(data.deviation_pct) : null;
+  const devColor = devPct == null ? 'var(--muted)' : devPct > 0 ? 'var(--green)' : 'var(--red)';
+  const devStr  = devPct != null ? (devPct > 0 ? '+' : '') + devPct.toFixed(3) + '%' : '—';
+  const signal  = data.signal || '—';
+  const vwap    = data.vwap          != null ? fmtPrice(data.vwap)          : '—';
+  const price   = data.current_price != null ? fmtPrice(data.current_price) : '—';
+
+  if (badge) {
+    badge.textContent = signal;
+    badge.className   = 'card-badge ' + (devPct > 0 ? 'badge-green' : devPct < 0 ? 'badge-red' : 'badge-blue');
+    badge.style.display = 'inline-block';
+  }
+
+  el.innerHTML = `
+    <div class="phase-metrics">
+      <div class="metric-box">
+        <div class="metric-label">Deviation</div>
+        <div class="metric-value" style="color:${devColor};font-size:22px">${devStr}</div>
+        <div class="metric-label" style="color:${devColor}">${signal}</div>
+      </div>
+      <div class="metric-box">
+        <div class="metric-label">Price</div>
+        <div class="metric-value">${price}</div>
+      </div>
+      <div class="metric-box">
+        <div class="metric-label">VWAP</div>
+        <div class="metric-value" style="color:var(--muted)">${vwap}</div>
+      </div>
+    </div>
+  `;
+}
+
+// ── Render: Market Regime ─────────────────────────────────────────────────────
+async function renderMarketRegime() {
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/market-regime?symbol=${sym}`);
+  if (!data) return;
+
+  const el    = document.getElementById('market-regime-content');
+  const badge = document.getElementById('market-regime-badge');
+  if (!el) return;
+
+  const regime  = data.regime || '—';
+  const conf    = data.confidence != null ? (parseFloat(data.confidence) * 100).toFixed(0) + '%' : '—';
+  const metrics = data.metrics || {};
+  const vol     = metrics.volatility     != null ? parseFloat(metrics.volatility).toFixed(4)     : '—';
+  const trend   = metrics.trend_strength != null ? parseFloat(metrics.trend_strength).toFixed(3)  : '—';
+  const range   = metrics.range_ratio    != null ? parseFloat(metrics.range_ratio).toFixed(3)     : '—';
+
+  const regimeColors = { trending: 'var(--blue)', ranging: 'var(--yellow)', choppy: 'var(--red)' };
+  const color = regimeColors[(regime || '').toLowerCase()] || 'var(--fg)';
+
+  if (badge) {
+    badge.textContent = regime;
+    badge.className   = 'card-badge ' + (
+      regime.toLowerCase() === 'trending' ? 'badge-blue' :
+      regime.toLowerCase() === 'ranging'  ? 'badge-yellow' :
+      'badge-red'
+    );
+    badge.style.display = 'inline-block';
+  }
+
+  el.innerHTML = `
+    <div class="phase-name" style="color:${color}">${regime}</div>
+    <div class="phase-metrics">
+      <div class="metric-box">
+        <div class="metric-label">Confidence</div>
+        <div class="metric-value" style="color:${color}">${conf}</div>
+      </div>
+      <div class="metric-box">
+        <div class="metric-label">Volatility</div>
+        <div class="metric-value" style="font-size:13px">${vol}</div>
+      </div>
+      <div class="metric-box">
+        <div class="metric-label">Trend</div>
+        <div class="metric-value" style="font-size:13px">${trend}</div>
+      </div>
+      <div class="metric-box">
+        <div class="metric-label">Range Ratio</div>
+        <div class="metric-value" style="font-size:13px">${range}</div>
+      </div>
+    </div>
+  `;
+}
+
 // ── Main Refresh Loop ─────────────────────────────────────────────────────────
 async function refresh() {
   if (!activeSymbol) return;
@@ -959,6 +1054,8 @@ async function refresh() {
     renderOiDivergence(),
     renderMicrostructure(),
     renderWhaleClustering(),
+    renderVwapDeviation(),
+    renderMarketRegime(),
   ]);
 }
 
