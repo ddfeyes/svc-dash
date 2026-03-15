@@ -2981,3 +2981,175 @@ async def volatility_regime_all(period: int = Query(default=14, ge=5, le=50)):
         else:
             out[s] = r
     return {"status": "ok", "symbols": out}
+
+
+# ── CDV vs Price Action Oscillator ────────────────────────────────────────────
+
+@router.get("/cdv-oscillator")
+async def cdv_oscillator_endpoint(
+    symbol: Optional[str] = Query(default=None),
+    window: int = Query(default=1800, ge=300, le=7200, description="Lookback window in seconds"),
+    bucket: int = Query(default=60, ge=15, le=300, description="Bucket size in seconds"),
+):
+    """
+    CDV vs Price Action Oscillator.
+
+    Computes per-bucket CDV momentum and price momentum, then:
+    - Normalizes both to [-1, 1] range
+    - Oscillator = CDV_norm - Price_norm
+    - Positive oscillator → CDV leading price (bullish)
+    - Negative oscillator → price leading CDV (bearish / unsupported move)
+    - Divergence label when CDV makes new extreme but price does not confirm.
+    """
+    target = symbol or (get_symbols()[0] if get_symbols() else None)
+    if not target:
+        return {"error": "No symbol available"}
+
+    since = time.time() - window
+    trades = await get_recent_trades(limit=50000, since=since, symbol=target)
+
+    if not trades or len(trades) < 10:
+        return {
+            "status": "ok",
+            "symbol": target,
+            "series": [],
+            "oscillator": [],
+            "divergences": [],
+            "description": "Insufficient trade data",
+        }
+
+    trades.sort(key=lambda t: t["ts"])
+
+    # Build per-bucket stats
+    buckets: dict = {}
+    for t in trades:
+        b = int(t["ts"] // bucket) * bucket
+        p = float(t.get("price") or 0)
+        q = float(t.get("qty") or 0)
+        side = (t.get("side") or "").lower()
+        if p <= 0:
+            continue
+        if b not in buckets:
+            buckets[b] = {"prices": [], "cvd_usd": 0.0, "open": p, "close": p}
+        bc = buckets[b]
+        bc["prices"].append(p)
+        bc["close"] = p
+        usd = p * q
+        bc["cvd_usd"] += usd if side == "buy" else -usd
+
+    sorted_b = sorted(buckets.items())
+    if len(sorted_b) < 3:
+        return {
+            "status": "ok",
+            "symbol": target,
+            "series": [],
+            "oscillator": [],
+            "divergences": [],
+            "description": "Too few buckets",
+        }
+
+    # Compute cumulative CDV and price series
+    cum_cdv = 0.0
+    series = []
+    for ts, bc in sorted_b:
+        cum_cdv += bc["cvd_usd"]
+        mid_price = (bc["open"] + bc["close"]) / 2
+        series.append({
+            "ts": ts,
+            "price": round(mid_price, 8),
+            "cdv_bucket": round(bc["cvd_usd"], 2),
+            "cum_cdv": round(cum_cdv, 2),
+        })
+
+    # Normalize CDV and price to [-1, 1] for oscillator
+    prices = [s["price"] for s in series]
+    cdvs = [s["cum_cdv"] for s in series]
+
+    p_min, p_max = min(prices), max(prices)
+    c_min, c_max = min(cdvs), max(cdvs)
+
+    def norm(val, lo, hi):
+        rng = hi - lo
+        if rng < 1e-12:
+            return 0.0
+        return (val - lo) / rng * 2 - 1  # → [-1, 1]
+
+    for i, s in enumerate(series):
+        s["price_norm"] = round(norm(s["price"], p_min, p_max), 4)
+        s["cdv_norm"] = round(norm(s["cum_cdv"], c_min, c_max), 4)
+        s["oscillator"] = round(s["cdv_norm"] - s["price_norm"], 4)
+
+    # Divergence detection: scan for CDV new-high/low with price not confirming
+    divergences = []
+    lookback = max(5, len(series) // 10)
+    for i in range(lookback, len(series)):
+        window_slice = series[max(0, i - lookback):i]
+        cur = series[i]
+
+        cdv_window_max = max(s["cum_cdv"] for s in window_slice)
+        cdv_window_min = min(s["cum_cdv"] for s in window_slice)
+        price_window_max = max(s["price"] for s in window_slice)
+        price_window_min = min(s["price"] for s in window_slice)
+
+        # Bearish: CDV new high but price NOT new high
+        if cur["cum_cdv"] > cdv_window_max * 1.005 and cur["price"] <= price_window_max * 0.998:
+            divergences.append({
+                "ts": cur["ts"],
+                "type": "bearish",
+                "label": "CDV↑ Price→",
+                "cdv": cur["cum_cdv"],
+                "price": cur["price"],
+                "oscillator": cur["oscillator"],
+            })
+        # Bullish: CDV new low but price NOT new low
+        elif cur["cum_cdv"] < cdv_window_min * 1.005 and cur["price"] >= price_window_min * 1.002:
+            divergences.append({
+                "ts": cur["ts"],
+                "type": "bullish",
+                "label": "CDV↓ Price→",
+                "cdv": cur["cum_cdv"],
+                "price": cur["price"],
+                "oscillator": cur["oscillator"],
+            })
+
+    # Deduplicate: max one divergence per 3-bucket window
+    deduped = []
+    last_ts = 0
+    for d in divergences:
+        if d["ts"] - last_ts >= bucket * 3:
+            deduped.append(d)
+            last_ts = d["ts"]
+
+    # Current state summary
+    latest = series[-1]
+    osc_now = latest["oscillator"]
+    if osc_now > 0.3:
+        signal = "cdv_leading"
+        desc = f"CDV leading price (osc={osc_now:+.3f}) — bullish momentum confirmation"
+    elif osc_now < -0.3:
+        signal = "price_leading"
+        desc = f"Price leading CDV (osc={osc_now:+.3f}) — momentum not supported by flow"
+    else:
+        signal = "neutral"
+        desc = f"CDV ≈ Price (osc={osc_now:+.3f})"
+
+    # Recent divergence summary
+    recent_divs = [d for d in deduped if d["ts"] > time.time() - 600]
+    if recent_divs:
+        last_div = recent_divs[-1]
+        if last_div["type"] == "bearish":
+            desc = f"⚠️ Recent bearish divergence: CDV new high, price flat — {desc}"
+        else:
+            desc = f"🟢 Recent bullish divergence: CDV new low, price flat — {desc}"
+
+    return {
+        "status": "ok",
+        "symbol": target,
+        "series": series,
+        "divergences": deduped,
+        "current_oscillator": osc_now,
+        "signal": signal,
+        "description": desc,
+        "window_seconds": window,
+        "bucket_size": bucket,
+    }

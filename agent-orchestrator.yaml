@@ -9,62 +9,24 @@ defaults:
     - desktop
 
 permissions:
-  read:
-    - agent_state
-    - session_memory
-    - workspace_files
-  write:
-    - workspace_files
-    - project_config
-    - logs
-  execute:
-    shell:
-      enabled: true
-      scope: project_dir   # limited to /Users/aivan/bananas31-dashboard
-      allowlist:
-        - "python*"
-        - "pip*"
-        - "docker*"
-        - "docker-compose*"
-  dangerous:
-    internet_access:
-      enabled: true
-      reason: "Required for Binance/Bybit WebSocket & REST API access and external crypto data"
-      allowedHosts:
-        - "fstream.binance.com"
-        - "stream.bybit.com"
-        - "api.binance.com"
-        - "api.bybit.com"
+  dangerous: true
 
 projects:
-  bananas31-dashboard:
-    name: bananas31-dashboard
-    sessionPrefix: bd
-    repo: ddfeyes/bananas31-dashboard
-    path: /Users/aivan/bananas31-dashboard
+  svc-dash:
+    name: svc-dash
+    sessionPrefix: sd
+    repo: ddfeyes/svc-dash
+    path: /Users/aivan/svc-dash
     defaultBranch: main
     skillsDir: ~/.agents/skills
-    workflowsDir: /Users/aivan/bananas31-dashboard/.ao/workflows
+    workflowsDir: /Users/aivan/svc-dash/.ao/workflows
+    agentConfig:
+      permissions: skip
+      model: claude-sonnet-4-6
+      thinking: high
     agentRules: |-
-      Always run tests before pushing.
-      Use conventional commits (feat:, fix:, chore:, docs:, refactor:, test:).
-      Link issue numbers in commit messages.
-      Write clear commit messages that explain WHY, not just WHAT.
-
-      Follow Python best practices:
-
-      - Use type hints for function parameters and return values
-      - Follow PEP 8 style guide
-      - Use f-strings for string formatting
-      - Use context managers (with statements) for resource management
-      - Write docstrings for classes and functions
-      - Prefer composition over inheritance
-
-      Before pushing, run these commands:
-      - black . (format code)
-      - mypy . (type checking)
-
-      Safety bounds:
-      - Never access files outside /Users/aivan/bananas31-dashboard
-      - Never execute shell commands outside project directory
-      - Network access restricted to Binance/Bybit endpoints only
+      Follow Python best practices, type hints, PEP 8.
+      Use conventional commits (feat:, fix:, chore:, refactor:, test:).
+      Write tests before implementation (TDD).
+      Run black . and mypy . before pushing.
+      Network access: Binance/Bybit WebSocket + REST APIs.

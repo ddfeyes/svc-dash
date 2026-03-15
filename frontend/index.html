@@ -1365,6 +1365,20 @@
     <div id="cvd-mom-content" style="font-size:11px;"></div>
   </div>
 
+  <!-- CDV vs Price Oscillator -->
+  <div class="card" id="card-cdv-oscillator">
+    <h2><span class="card-icon">〰️</span>CDV Oscillator
+      <span id="cdv-osc-window-btns" style="margin-left:auto;display:flex;gap:4px;">
+        <button onclick="setCdvOscWindow(900)"  id="cdv-osc-15m" style="background:var(--bg3);border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:2px 7px;font-size:9px;cursor:pointer;">15m</button>
+        <button onclick="setCdvOscWindow(1800)" id="cdv-osc-30m" style="background:var(--bg3);border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:2px 7px;font-size:9px;cursor:pointer;">30m</button>
+        <button onclick="setCdvOscWindow(3600)" id="cdv-osc-1h"  style="background:var(--bg3);border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:2px 7px;font-size:9px;cursor:pointer;">1h</button>
+      </span>
+    </h2>
+    <div id="cdv-osc-signal" style="font-size:10px;color:var(--muted);margin-bottom:6px;">Loading...</div>
+    <canvas id="chart-cdv-osc" style="max-height:160px;"></canvas>
+    <div id="cdv-osc-divs" style="margin-top:6px;font-size:10px;display:flex;flex-wrap:wrap;gap:4px;"></div>
+  </div>
+
   <!-- Position Sizing Calculator -->
   <div class="card" id="card-position-calc">
     <h2><span class="card-icon">🧮</span>Position Sizing
@@ -1828,6 +1842,75 @@ const charts = {
   depth:   mkDepthChart('chart-depth'),
   dom:     mkDomChart('chart-dom'),
 };
+
+// CDV Oscillator chart
+let chartCdvOsc = null;
+(function initCdvOscChart() {
+  const ctx = document.getElementById('chart-cdv-osc');
+  if (!ctx) return;
+  chartCdvOsc = new Chart(ctx.getContext('2d'), {
+    type: 'bar',
+    data: {
+      labels: [],
+      datasets: [
+        {
+          type: 'bar',
+          label: 'Oscillator',
+          data: [],
+          backgroundColor: [],
+          borderWidth: 0,
+          yAxisID: 'yOsc',
+          order: 2,
+        },
+        {
+          type: 'line',
+          label: 'CDV norm',
+          data: [],
+          borderColor: '#ab7df8',
+          borderWidth: 1.5,
+          pointRadius: 0,
+          fill: false,
+          tension: 0.3,
+          yAxisID: 'yOsc',
+          order: 1,
+        },
+        {
+          type: 'line',
+          label: 'Price norm',
+          data: [],
+          borderColor: 'rgba(240,192,64,0.85)',
+          borderWidth: 1.5,
+          pointRadius: 0,
+          fill: false,
+          tension: 0.3,
+          yAxisID: 'yOsc',
+          order: 1,
+        },
+      ],
+    },
+    options: chartDefaults({
+      scales: {
+        x: { display: false, grid: { color: GRID_COLOR } },
+        yOsc: {
+          position: 'left',
+          ticks: { color: TICK_COLOR, font: { size: 9 }, maxTicksLimit: 5 },
+          grid: { color: GRID_COLOR },
+          min: -1.2,
+          max: 1.2,
+        },
+      },
+      plugins: {
+        legend: {
+          display: true,
+          position: 'top',
+          align: 'end',
+          labels: { color: TICK_COLOR, font: { size: 9 }, boxWidth: 10, padding: 8 },
+        },
+        tooltip: chartDefaults().plugins.tooltip,
+      },
+    }),
+  });
+})();
 
 // Bid-Ask Spread area chart
 let chartSpread = null;
@@ -2786,6 +2869,7 @@ function selectSymbol(sym) {
   refreshMicrostructure();
   refreshTradeDist();
   refreshCvdMomentum();
+  refreshCdvOscillator();
   refreshMarketRegime();
   refreshVolatilityRegime();
   refreshAtr();
@@ -6111,6 +6195,65 @@ async function refreshVolatilityRegime() {
   el.innerHTML = `<div style="display:flex;gap:8px;flex-wrap:wrap;">${cols.join('')}</div>`;
 }
 
+// ── CDV Oscillator ────────────────────────────────────────────────────────────
+let _cdvOscWindow = 1800;
+function setCdvOscWindow(w) {
+  _cdvOscWindow = w;
+  ['15m','30m','1h'].forEach(l => {
+    const btn = document.getElementById('cdv-osc-' + l);
+    if (btn) { btn.style.background = 'var(--bg3)'; btn.style.color = 'var(--muted)'; }
+  });
+  const labelMap = {900:'15m', 1800:'30m', 3600:'1h'};
+  const activeBtn = document.getElementById('cdv-osc-' + labelMap[w]);
+  if (activeBtn) { activeBtn.style.background = 'var(--accent)'; activeBtn.style.color = '#0e1117'; }
+  refreshCdvOscillator();
+}
+
+async function refreshCdvOscillator() {
+  if (!activeSymbol || !chartCdvOsc) return;
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await fetchJSON(`/api/cdv-oscillator?symbol=${sym}&window=${_cdvOscWindow}&bucket=60`);
+  if (!data || !data.series || data.series.length === 0) return;
+
+  const labels = data.series.map(s => fmtTime(s.ts));
+  const oscData = data.series.map(s => s.oscillator);
+  const cdvData = data.series.map(s => s.cdv_norm);
+  const priceData = data.series.map(s => s.price_norm);
+
+  // Color oscillator bars: green when positive, red when negative
+  const oscColors = oscData.map(v => v >= 0 ? 'rgba(38,166,154,0.55)' : 'rgba(239,83,80,0.55)');
+
+  chartCdvOsc.data.labels = labels;
+  chartCdvOsc.data.datasets[0].data = oscData;
+  chartCdvOsc.data.datasets[0].backgroundColor = oscColors;
+  chartCdvOsc.data.datasets[1].data = cdvData;
+  chartCdvOsc.data.datasets[2].data = priceData;
+  chartCdvOsc.update('none');
+
+  // Signal text
+  const signalEl = document.getElementById('cdv-osc-signal');
+  if (signalEl) {
+    const osc = data.current_oscillator || 0;
+    let color = '#999';
+    if (data.signal === 'cdv_leading') color = '#26a69a';
+    else if (data.signal === 'price_leading') color = '#ef5350';
+    signalEl.innerHTML = `<span style="color:${color};">${data.description || ''}</span>`;
+  }
+
+  // Divergences
+  const divEl = document.getElementById('cdv-osc-divs');
+  if (divEl && data.divergences && data.divergences.length > 0) {
+    const recentDivs = data.divergences.slice(-4);
+    divEl.innerHTML = recentDivs.map(d => {
+      const col = d.type === 'bearish' ? '#ef5350' : '#26a69a';
+      const timeStr = fmtTime(d.ts);
+      return `<span style="background:${col}22;border:1px solid ${col}55;border-radius:3px;padding:1px 5px;color:${col};">${d.label} @${timeStr}</span>`;
+    }).join('');
+  } else if (divEl) {
+    divEl.innerHTML = '<span style="color:var(--muted);font-size:10px;">No divergences detected</span>';
+  }
+}
+
 // ── CVD Momentum ─────────────────────────────────────────────────────────────
 let _cvdMomWindow = 60;
 function setCvdMomWindow(w) {
@@ -6350,6 +6493,9 @@ async function refreshSignalsScanner() {
 
   refreshVolatilityRegime();
   setInterval(refreshVolatilityRegime, 30000);  // every 30s
+
+  setCdvOscWindow(1800);  // sets active button + calls refresh
+  setInterval(refreshCdvOscillator, 15000);  // every 15s
 
   // ── Keyboard Shortcut Help Modal ──────────────────────────────────────────
   (function buildHotkeyModal() {
