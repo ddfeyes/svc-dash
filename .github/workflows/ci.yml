@@ -7,7 +7,7 @@ on:
     branches: [main, master]
 
 jobs:
-  lint-and-check:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,8 +21,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install pytest pytest-asyncio
 
-      - name: Check imports (no syntax errors)
+      - name: Check imports
         env:
           SYMBOL_BINANCE: BANANAS31USDT
           SYMBOL_BYBIT: BANANAS31USDT
@@ -31,7 +32,16 @@ jobs:
           cd backend
           python -c "import storage; import collectors; import pollers; import metrics; import api; import main; print('All imports OK')"
 
-      - name: Lint with ruff (optional)
+      - name: Run tests
+        env:
+          SYMBOL_BINANCE: BANANAS31USDT
+          SYMBOL_BYBIT: BANANAS31USDT
+          DB_PATH: /tmp/test.db
+        run: |
+          cd backend
+          python -m pytest tests/ -v --tb=short
+
+      - name: Lint with ruff
         continue-on-error: true
         run: |
           pip install ruff
