@@ -4361,3 +4361,112 @@ def compute_tape_speed(
         "window_seconds": window_seconds,
         "bucket_seconds": bucket_seconds,
     }
+
+
+def compute_aggressor_imbalance_streak(
+    trades: List[Dict],
+    bucket_size: int = 60,
+    threshold_pct: float = 70.0,
+    alert_streak: int = 3,
+) -> Dict:
+    """
+    Aggressor imbalance streak counter.
+
+    Buckets trades into 1-min candles and tracks consecutive candles where
+    buy aggressor > threshold_pct% OR sell aggressor > threshold_pct%.
+    Alert fires when streak >= alert_streak (default: 3).
+
+    Args:
+        trades: list of {ts, price, qty, side} dicts
+        bucket_size: seconds per candle (default 60)
+        threshold_pct: imbalance threshold, e.g. 70 means >70% one side
+        alert_streak: number of consecutive imbalanced candles to trigger alert
+
+    Returns:
+        candles:          [{ts, buy_pct, sell_pct, total, direction}]
+        streak:           int — current consecutive streak length
+        streak_direction: "buy" | "sell" | None
+        alert:            bool — streak >= alert_streak
+        alert_streak:     int — configured alert threshold
+        description:      str — human-readable summary
+    """
+    if not trades:
+        return {
+            "candles": [],
+            "streak": 0,
+            "streak_direction": None,
+            "alert": False,
+            "alert_streak": alert_streak,
+            "description": "No data",
+        }
+
+    # Build per-candle buy/sell counts
+    buckets: Dict[int, Dict[str, int]] = {}
+    for t in trades:
+        b = int(t["ts"] // bucket_size) * bucket_size
+        side = (t.get("side") or "").lower()
+        if b not in buckets:
+            buckets[b] = {"buy": 0, "sell": 0}
+        if side == "buy":
+            buckets[b]["buy"] += 1
+        else:
+            buckets[b]["sell"] += 1
+
+    sell_threshold = 100.0 - threshold_pct
+
+    candles = []
+    for ts in sorted(buckets):
+        c = buckets[ts]
+        total = c["buy"] + c["sell"]
+        buy_pct = c["buy"] / total * 100.0 if total > 0 else 50.0
+        sell_pct = 100.0 - buy_pct
+
+        if buy_pct >= threshold_pct:
+            direction: Optional[str] = "buy"
+        elif buy_pct <= sell_threshold:
+            direction = "sell"
+        else:
+            direction = None
+
+        candles.append(
+            {
+                "ts": float(ts),
+                "buy_pct": round(buy_pct, 2),
+                "sell_pct": round(sell_pct, 2),
+                "total": total,
+                "direction": direction,
+            }
+        )
+
+    # Count trailing streak from the last candle
+    streak = 0
+    streak_direction: Optional[str] = None
+    if candles:
+        last_dir = candles[-1]["direction"]
+        if last_dir is not None:
+            streak_direction = last_dir
+            for c in reversed(candles):
+                if c["direction"] == last_dir:
+                    streak += 1
+                else:
+                    break
+
+    alert = streak >= alert_streak
+
+    if streak == 0:
+        desc = "No aggressor imbalance streak"
+    else:
+        side_label = streak_direction.upper() if streak_direction else ""
+        if alert:
+            desc = f"ALERT: {streak}-candle {side_label} aggressor streak (>= {threshold_pct:.0f}%)"
+        else:
+            desc = f"{streak}-candle {side_label} aggressor streak (>= {threshold_pct:.0f}%)"
+
+    return {
+        "candles": candles,
+        "streak": streak,
+        "streak_direction": streak_direction,
+        "alert": alert,
+        "alert_streak": alert_streak,
+        "description": desc,
+    }
