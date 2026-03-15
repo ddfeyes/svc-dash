@@ -1741,3 +1741,135 @@ async def compute_oi_concentration(symbol: str = None, window_seconds: int = 360
         "total_oi_delta": round(total_oi, 2),
         "window_seconds": window_seconds,
     }
+
+
+async def compute_vpin(symbol: str = None, window_seconds: int = 1800, n_buckets: int = 50) -> Dict:
+    """
+    VPIN (Volume-synchronized Probability of Informed Trading) approximation.
+    
+    Classic VPIN: divide total volume into equal-sized volume buckets, 
+    in each bucket compute |buy_vol - sell_vol| / bucket_vol.
+    VPIN = average of these ratios over last N buckets.
+    
+    High VPIN (>0.5) → high toxicity / informed trading → adverse selection risk.
+    Low VPIN (<0.2) → mostly noise trading.
+    """
+    from storage import get_trades_for_cvd
+    import time
+    since = time.time() - window_seconds
+    trades = await get_trades_for_cvd(since=since, symbol=symbol)
+
+    if not trades or len(trades) < 10:
+        return {
+            "vpin": None,
+            "toxicity": "insufficient_data",
+            "description": "Not enough trades for VPIN",
+            "n_buckets_used": 0,
+            "window_seconds": window_seconds,
+        }
+
+    # Sort by time
+    trades.sort(key=lambda t: t["ts"])
+
+    # Compute total volume
+    total_vol = sum(t["qty"] for t in trades)
+    if total_vol < 1e-10:
+        return {
+            "vpin": None,
+            "toxicity": "insufficient_data",
+            "description": "Zero volume",
+            "n_buckets_used": 0,
+            "window_seconds": window_seconds,
+        }
+
+    bucket_vol = total_vol / n_buckets
+
+    # Fill buckets
+    vpin_buckets = []
+    buy_vol = 0.0
+    sell_vol = 0.0
+    current_bucket_vol = 0.0
+
+    for t in trades:
+        qty = t["qty"]
+        side = t.get("side", "").lower()
+        is_buy = side in ("buy",)
+
+        remaining = qty
+        while remaining > 0:
+            space = bucket_vol - current_bucket_vol
+            fill = min(remaining, space)
+            if is_buy:
+                buy_vol += fill
+            else:
+                sell_vol += fill
+            current_bucket_vol += fill
+            remaining -= fill
+
+            if current_bucket_vol >= bucket_vol - 1e-12:
+                # Bucket complete
+                bv = buy_vol + sell_vol
+                if bv > 0:
+                    vpin_buckets.append(abs(buy_vol - sell_vol) / bv)
+                buy_vol = 0.0
+                sell_vol = 0.0
+                current_bucket_vol = 0.0
+
+    # Add partial last bucket if meaningful
+    if current_bucket_vol > bucket_vol * 0.3:
+        bv = buy_vol + sell_vol
+        if bv > 0:
+            vpin_buckets.append(abs(buy_vol - sell_vol) / bv)
+
+    if not vpin_buckets:
+        return {
+            "vpin": None,
+            "toxicity": "insufficient_data",
+            "description": "Could not form volume buckets",
+            "n_buckets_used": 0,
+            "window_seconds": window_seconds,
+        }
+
+    vpin = sum(vpin_buckets) / len(vpin_buckets)
+
+    # Toxicity classification
+    if vpin >= 0.6:
+        toxicity = "extreme"
+        label = "🔴"
+        desc_suffix = "extreme toxicity — informed flow dominant"
+    elif vpin >= 0.45:
+        toxicity = "high"
+        label = "🟠"
+        desc_suffix = "high toxicity — elevated adverse selection"
+    elif vpin >= 0.3:
+        toxicity = "moderate"
+        label = "🟡"
+        desc_suffix = "moderate toxicity — mixed flow"
+    else:
+        toxicity = "low"
+        label = "🟢"
+        desc_suffix = "low toxicity — noise-dominated"
+
+    desc = f"{label} VPIN={vpin:.3f} — {desc_suffix}"
+
+    # Rolling VPIN series for trend (last 10 buckets vs first 10)
+    trend = "stable"
+    if len(vpin_buckets) >= 20:
+        recent = sum(vpin_buckets[-10:]) / 10
+        earlier = sum(vpin_buckets[:10]) / 10
+        if recent > earlier * 1.2:
+            trend = "rising"
+        elif recent < earlier * 0.8:
+            trend = "falling"
+
+    return {
+        "vpin": round(vpin, 4),
+        "toxicity": toxicity,
+        "trend": trend,
+        "description": desc,
+        "n_buckets_used": len(vpin_buckets),
+        "bucket_volume": round(bucket_vol, 4),
+        "total_volume": round(total_vol, 4),
+        "window_seconds": window_seconds,
+        "series": [round(v, 4) for v in vpin_buckets[-20:]],  # last 20 buckets for sparkline
+    }

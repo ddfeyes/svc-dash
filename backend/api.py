@@ -50,6 +50,7 @@ from metrics import (
     predict_liquidation_cascade,
     detect_funding_divergence,
     compute_oi_concentration,
+    compute_vpin,
 )
 
 router = APIRouter(prefix="/api")
@@ -450,6 +451,20 @@ async def funding_arb_endpoint(
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
     data = await detect_funding_arbitrage(symbol=target, threshold_bps=threshold_bps)
+    return {"status": "ok", "symbol": target, **data}
+
+
+@router.get("/vpin")
+async def vpin_endpoint(
+    symbol: Optional[str] = None,
+    window: int = Query(default=1800, ge=300, le=86400),
+    buckets: int = Query(default=50, ge=10, le=200),
+):
+    """VPIN order flow toxicity approximation."""
+    from collectors import get_symbols
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await compute_vpin(symbol=target, window_seconds=window, n_buckets=buckets)
     return {"status": "ok", "symbol": target, **data}
 
 

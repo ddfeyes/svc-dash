@@ -929,6 +929,22 @@
       <div id="liq-pressure-bars" style="margin-top:8px;display:flex;flex-direction:column;gap:3px;"></div>
     </div>
 
+    <div id="alert-vpin" class="alert-box" style="margin-bottom:12px;">
+      <div class="alert-label">☣️ VPIN ORDER FLOW TOXICITY</div>
+      <div id="vpin-text" style="color:var(--muted)">Loading...</div>
+      <div style="margin-top:6px;">
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-bottom:3px;">
+          <span>0 — noise</span>
+          <span id="vpin-score-label">—</span>
+          <span>1 — informed</span>
+        </div>
+        <div style="height:6px;background:var(--bg3);border-radius:3px;overflow:hidden;">
+          <div id="vpin-bar-fill" style="height:100%;width:0%;background:var(--muted);border-radius:3px;transition:width 0.4s,background 0.4s;"></div>
+        </div>
+        <div id="vpin-trend" style="font-size:10px;color:var(--muted);margin-top:4px;"></div>
+      </div>
+    </div>
+
     <div class="divider"></div>
     <div class="section-title">Large Trades &gt;$10k (5min)</div>
     <div class="metrics-grid" style="margin-bottom:8px;">
@@ -2679,6 +2695,7 @@ function selectSymbol(sym) {
   refreshVolatilityRegime();
   refreshAtr();
   loadPhaseTimeline();
+  refreshVpin();
   refreshOiConcentration();
   refreshOiMcap();
   refreshLiqPressure();
@@ -4631,6 +4648,40 @@ async function refreshAlertHistory() {
   }
 }
 
+// ── VPIN Order Flow Toxicity ─────────────────────────────────────────────────
+async function refreshVpin() {
+  const sym = activeSymbol || currentSymbol;
+  if (!sym) return;
+  const enc = encodeURIComponent(sym);
+  const data = await fetchJSON(`/api/vpin?symbol=${enc}&window=1800&buckets=50`);
+  const box = document.getElementById('alert-vpin');
+  const textEl = document.getElementById('vpin-text');
+  const barFill = document.getElementById('vpin-bar-fill');
+  const scoreLabel = document.getElementById('vpin-score-label');
+  const trendEl = document.getElementById('vpin-trend');
+  if (!data || !textEl) return;
+
+  if (data.vpin !== null && data.vpin !== undefined) {
+    const v = data.vpin;
+    const color = v >= 0.6 ? 'var(--red)' : v >= 0.45 ? 'var(--accent)' : v >= 0.3 ? '#f0c040' : 'var(--green)';
+    textEl.style.color = color;
+    textEl.textContent = data.description || `VPIN=${v.toFixed(3)}`;
+    box.className = v >= 0.45 ? 'alert-box active' : 'alert-box';
+    barFill.style.width = Math.min(100, v * 100) + '%';
+    barFill.style.background = color;
+    scoreLabel.textContent = v.toFixed(3);
+    const trendArrow = data.trend === 'rising' ? '↑ rising' : data.trend === 'falling' ? '↓ falling' : '→ stable';
+    trendEl.textContent = `Trend: ${trendArrow}  |  Buckets: ${data.n_buckets_used}`;
+    trendEl.style.color = data.trend === 'rising' ? 'var(--red)' : data.trend === 'falling' ? 'var(--green)' : 'var(--muted)';
+  } else {
+    textEl.style.color = 'var(--muted)';
+    textEl.textContent = data.description || 'No data';
+    box.className = 'alert-box';
+    barFill.style.width = '0%';
+    scoreLabel.textContent = '—';
+  }
+}
+
 // ── OI Concentration ─────────────────────────────────────────────────────────
 async function refreshOiConcentration() {
   const sym = activeSymbol || currentSymbol;
@@ -5976,6 +6027,8 @@ async function refreshSignalsScanner() {
   setInterval(refreshMarketRegime, 15000);
   loadPhaseTimeline();
   setInterval(loadPhaseTimeline, 60000);
+  refreshVpin();
+  setInterval(refreshVpin, 20000);  // every 20s
   refreshOiConcentration();
   setInterval(refreshOiConcentration, 30000);  // every 30s
   refreshOiMcap();
