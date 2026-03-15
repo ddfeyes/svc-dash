@@ -640,6 +640,16 @@
     <div id="imb-legend" style="margin-top:6px;font-size:10px;color:var(--muted);display:flex;gap:12px;"></div>
   </div>
 
+  <!-- OB Wall Strength Decay -->
+  <div class="card">
+    <h2><span class="card-icon">🧱</span>OB Wall Strength Decay
+      <span id="ob-wall-decay-badge" style="margin-left:auto;font-size:11px;font-weight:700;text-transform:none;letter-spacing:0;"></span>
+    </h2>
+    <div id="ob-wall-decay-info" style="display:flex;gap:16px;margin-bottom:6px;font-size:11px;"></div>
+    <canvas id="chart-ob-wall-decay" style="height:130px !important;"></canvas>
+    <div style="margin-top:4px;font-size:10px;color:var(--muted);">Bid wall (green) vs Ask wall (red) top cluster volume — 5 min window</div>
+  </div>
+
   <!-- Funding -->
   <div class="card">
     <h2><span class="card-icon">💰</span>Funding Rate</h2>
@@ -5584,6 +5594,124 @@ async function refreshSignalsScanner() {
       if (ov && ov.style.display !== 'none') ov.style.display = 'none';
     }
   });
+
+  // ── OB Wall Strength Decay Chart ─────────────────────────────────────────
+  let chartOBWallDecay = null;
+
+  function initOBWallDecayChart() {
+    const canvas = document.getElementById('chart-ob-wall-decay');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    chartOBWallDecay = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [
+          {
+            label: 'Bid Wall Vol',
+            data: [],
+            borderColor: 'rgba(102,187,106,0.9)',
+            backgroundColor: 'rgba(102,187,106,0.08)',
+            borderWidth: 1.5,
+            pointRadius: 0,
+            fill: false,
+            tension: 0.3,
+            yAxisID: 'yVol',
+          },
+          {
+            label: 'Ask Wall Vol',
+            data: [],
+            borderColor: 'rgba(239,83,80,0.9)',
+            backgroundColor: 'rgba(239,83,80,0.08)',
+            borderWidth: 1.5,
+            pointRadius: 0,
+            fill: false,
+            tension: 0.3,
+            yAxisID: 'yVol',
+          },
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        interaction: { mode: 'index', intersect: false },
+        scales: {
+          x: { display: false },
+          yVol: {
+            position: 'left',
+            ticks: { color: TICK_COLOR, font: { size: 9 }, maxTicksLimit: 4,
+              callback: v => v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v >= 1e3 ? (v/1e3).toFixed(0)+'K' : v },
+            grid: { color: GRID_COLOR },
+          },
+        },
+        plugins: {
+          legend: { display: true, labels: { color: TICK_COLOR, boxWidth: 10, font: { size: 10 } } },
+          tooltip: {
+            backgroundColor: 'rgba(0,0,0,0.8)',
+            titleColor: '#ccc',
+            bodyColor: '#eee',
+            callbacks: {
+              label: ctx => {
+                const v = ctx.parsed.y;
+                const fmt = v >= 1e6 ? (v/1e6).toFixed(2)+'M' : v >= 1e3 ? (v/1e3).toFixed(1)+'K' : v.toFixed(0);
+                return ` ${ctx.dataset.label}: ${fmt}`;
+              }
+            }
+          }
+        }
+      }
+    });
+  }
+
+  async function refreshOBWallDecay() {
+    const sym = activeSymbol || 'BANANAS31USDT';
+    try {
+      const r = await fetch(`${API}/ob-wall-decay?symbol=${sym}&window=300`);
+      const d = await r.json();
+      if (d.status !== 'ok' || !d.series?.length) return;
+
+      const series = d.series;
+      const labels = series.map(s => fmtTs(s.ts));
+      const bidVols = series.map(s => s.top_bid_vol || 0);
+      const askVols = series.map(s => s.top_ask_vol || 0);
+
+      if (!chartOBWallDecay) initOBWallDecayChart();
+      if (!chartOBWallDecay) return;
+
+      chartOBWallDecay.data.labels = labels;
+      chartOBWallDecay.data.datasets[0].data = bidVols;
+      chartOBWallDecay.data.datasets[1].data = askVols;
+      chartOBWallDecay.update('none');
+
+      // Update info row
+      const dec = d.decay || {};
+      const infoEl = document.getElementById('ob-wall-decay-info');
+      if (infoEl && dec.bid_wall_decay_pct != null) {
+        const bidColor = dec.bid_trend === 'weakening' ? 'var(--red)' : dec.bid_trend === 'strengthening' ? 'var(--green)' : 'var(--muted)';
+        const askColor = dec.ask_trend === 'weakening' ? 'var(--red)' : dec.ask_trend === 'strengthening' ? 'var(--green)' : 'var(--muted)';
+        infoEl.innerHTML =
+          `<span>Bid decay: <b style="color:${bidColor}">${dec.bid_wall_decay_pct > 0 ? '+' : ''}${dec.bid_wall_decay_pct}%</b> <span style="color:var(--muted)">(${dec.bid_trend})</span></span>` +
+          `<span>Ask decay: <b style="color:${askColor}">${dec.ask_wall_decay_pct > 0 ? '+' : ''}${dec.ask_wall_decay_pct}%</b> <span style="color:var(--muted)">(${dec.ask_trend})</span></span>` +
+          `<span style="color:var(--muted)">${dec.snapshots} snaps / ${dec.window_s}s</span>`;
+      }
+
+      // Badge
+      const badge = document.getElementById('ob-wall-decay-badge');
+      if (badge && dec.bid_trend) {
+        const bidIcon = dec.bid_trend === 'weakening' ? '📉' : dec.bid_trend === 'strengthening' ? '📈' : '➡️';
+        const askIcon = dec.ask_trend === 'weakening' ? '📉' : dec.ask_trend === 'strengthening' ? '📈' : '➡️';
+        badge.textContent = `Bid ${bidIcon}  Ask ${askIcon}`;
+      }
+    } catch (e) {
+      // silent
+    }
+  }
+
+  initOBWallDecayChart();
+  refreshOBWallDecay();
+  setInterval(refreshOBWallDecay, 15000);  // every 15s
+
 })();
 </script>
 </body>

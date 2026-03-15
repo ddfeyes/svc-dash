@@ -2365,3 +2365,114 @@ async def max_drawdown(
         }
 
     return {"status": "ok", "ts": now, "symbols": result}
+
+
+# ---------------------------------------------------------------------------
+# OB Wall Strength Decay Tracker
+# ---------------------------------------------------------------------------
+
+@router.get("/ob-wall-decay")
+async def ob_wall_decay(
+    symbol: str = Query("BANANAS31USDT"),
+    window: int = Query(300, description="Lookback window in seconds (default 5min)"),
+    wall_threshold_pct: float = Query(0.5, description="Min % of total side volume to be a wall"),
+    price_cluster_pct: float = Query(0.05, description="Price cluster range % for wall detection"),
+):
+    """
+    OB wall strength decay tracker.
+    Detects significant bid/ask walls in the orderbook over time and tracks
+    how their volume changes across snapshots in the past window seconds.
+    Returns: time series of top bid wall and ask wall strengths.
+    """
+    now = time.time()
+    since = now - window
+    target = symbol.upper()
+
+    snapshots = await get_orderbook_snapshots_for_heatmap(target, since, sample_interval=5)
+
+    if not snapshots:
+        return {"status": "ok", "symbol": target, "window_s": window, "series": [], "decay": {}}
+
+    def detect_walls(levels: list, total_volume: float, cluster_pct: float, threshold_pct: float):
+        if not levels or total_volume == 0:
+            return []
+        levels_sorted = sorted(levels, key=lambda x: float(x[0]))
+        walls = []
+        i = 0
+        while i < len(levels_sorted):
+            base_price = float(levels_sorted[i][0])
+            cluster_vol = float(levels_sorted[i][1])
+            j = i + 1
+            while j < len(levels_sorted):
+                p = float(levels_sorted[j][0])
+                if abs(p - base_price) / base_price * 100 <= cluster_pct:
+                    cluster_vol += float(levels_sorted[j][1])
+                    j += 1
+                else:
+                    break
+            pct = cluster_vol / total_volume * 100
+            if pct >= threshold_pct:
+                walls.append({
+                    "price": round(base_price, 8),
+                    "volume": round(cluster_vol, 2),
+                    "pct_of_side": round(pct, 2),
+                })
+            i = j
+        walls.sort(key=lambda x: x["volume"], reverse=True)
+        return walls[:3]
+
+    series = []
+    for snap in snapshots:
+        ts = snap["ts"]
+        try:
+            bids = json.loads(snap["bids"]) if isinstance(snap["bids"], str) else snap["bids"]
+            asks = json.loads(snap["asks"]) if isinstance(snap["asks"], str) else snap["asks"]
+        except Exception:
+            continue
+
+        total_bid_vol = sum(float(b[1]) for b in bids) if bids else 0
+        total_ask_vol = sum(float(a[1]) for a in asks) if asks else 0
+
+        bid_walls = detect_walls(bids, total_bid_vol, price_cluster_pct, wall_threshold_pct)
+        ask_walls = detect_walls(asks, total_ask_vol, price_cluster_pct, wall_threshold_pct)
+
+        top_bid = bid_walls[0] if bid_walls else None
+        top_ask = ask_walls[0] if ask_walls else None
+
+        series.append({
+            "ts": round(ts, 2),
+            "mid_price": snap.get("mid_price"),
+            "top_bid_wall": top_bid,
+            "top_ask_wall": top_ask,
+            "top_bid_vol": round(top_bid["volume"], 2) if top_bid else 0,
+            "top_ask_vol": round(top_ask["volume"], 2) if top_ask else 0,
+            "top_bid_pct": round(top_bid["pct_of_side"], 2) if top_bid else 0,
+            "top_ask_pct": round(top_ask["pct_of_side"], 2) if top_ask else 0,
+        })
+
+    decay_info = {}
+    if len(series) >= 2:
+        first = series[0]
+        last = series[-1]
+        bid_decay = None
+        ask_decay = None
+        if first["top_bid_vol"] > 0:
+            bid_decay = round((last["top_bid_vol"] - first["top_bid_vol"]) / first["top_bid_vol"] * 100, 2)
+        if first["top_ask_vol"] > 0:
+            ask_decay = round((last["top_ask_vol"] - first["top_ask_vol"]) / first["top_ask_vol"] * 100, 2)
+        decay_info = {
+            "bid_wall_decay_pct": bid_decay,
+            "ask_wall_decay_pct": ask_decay,
+            "window_s": window,
+            "snapshots": len(series),
+            "bid_trend": "weakening" if bid_decay is not None and bid_decay < -5 else "strengthening" if bid_decay is not None and bid_decay > 5 else "stable",
+            "ask_trend": "weakening" if ask_decay is not None and ask_decay < -5 else "strengthening" if ask_decay is not None and ask_decay > 5 else "stable",
+        }
+
+    return {
+        "status": "ok",
+        "symbol": target,
+        "ts": now,
+        "decay": decay_info,
+        "series": series,
+    }
