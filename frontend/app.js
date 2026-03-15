@@ -1179,6 +1179,60 @@ async function renderCorrelations() {
   `;
 }
 
+// ── Render: VPIN ──────────────────────────────────────────────────────────────
+async function renderVpin() {
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/vpin?symbol=${sym}`);
+  const el = document.getElementById('vpin-content');
+  const badge = document.getElementById('vpin-badge');
+  if (!el) return;
+
+  if (!data || data.vpin == null) {
+    el.innerHTML = '<div class="text-muted" style="font-size:11px;">No data</div>';
+    if (badge) badge.style.display = 'none';
+    return;
+  }
+
+  const vpin = data.vpin;
+  const signal = data.signal || 'normal';
+  const bucketsUsed = data.buckets_used ?? 0;
+
+  const color = signal === 'elevated' ? 'var(--red)'
+              : signal === 'low'      ? 'var(--green)'
+              :                         'var(--muted)';
+
+  const pct = (vpin * 100).toFixed(1) + '%';
+
+  if (badge) {
+    if (signal === 'elevated') {
+      badge.textContent = 'elevated';
+      badge.className = 'card-badge badge-red';
+      badge.style.display = 'inline-block';
+    } else if (signal === 'low') {
+      badge.textContent = 'low';
+      badge.className = 'card-badge badge-green';
+      badge.style.display = 'inline-block';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+
+  el.innerHTML = `
+    <div class="metric-row">
+      <span class="metric-label">VPIN</span>
+      <span class="metric-value" style="color:${color};font-size:22px;font-weight:600">${pct}</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-label">signal</span>
+      <span class="metric-value" style="color:${color}">${signal}</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-label">buckets</span>
+      <span class="metric-value">${bucketsUsed}</span>
+    </div>
+  `;
+}
+
 // ── Main Refresh Loop ─────────────────────────────────────────────────────────
 async function refresh() {
   if (!activeSymbol) return;
@@ -1199,6 +1253,7 @@ async function refresh() {
     renderMarketRegime(),
     renderMomentum(),
     renderCorrelations(),
+    renderVpin(),
   ]);
 }
 

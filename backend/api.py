@@ -603,7 +603,25 @@ async def vpin_endpoint(
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
     data = await compute_vpin(symbol=target, window_seconds=window, n_buckets=buckets)
-    return {"status": "ok", "symbol": target, **data}
+
+    vpin_val = data.get("vpin")
+    if vpin_val is None:
+        signal = "unknown"
+    elif vpin_val > 0.4:
+        signal = "elevated"
+    elif vpin_val < 0.2:
+        signal = "low"
+    else:
+        signal = "normal"
+
+    return {
+        "status": "ok",
+        "symbol": target,
+        "vpin": vpin_val,
+        "signal": signal,
+        "buckets_used": data.get("n_buckets_used", 0),
+        **{k: v for k, v in data.items() if k not in ("vpin", "n_buckets_used")},
+    }
 
 
 @router.get("/oi-concentration")
