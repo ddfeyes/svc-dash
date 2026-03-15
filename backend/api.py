@@ -70,6 +70,7 @@ from metrics import (
     compute_price_ladder,
     compute_market_microstructure_score,
     compute_session_stats,
+    compute_inter_exchange_oi_divergence,
 )
 
 router = APIRouter(prefix="/api")
@@ -4508,5 +4509,66 @@ async def market_microstructure_endpoint(
             "trade_rate": round(trade_rate, 4),
             "noise_ratio": round(noise_ratio, 6),
         },
+        **result,
+    })
+
+
+@router.get("/oi-divergence")
+async def oi_divergence_endpoint(
+    symbol: str = Query(...),
+    window: int = Query(3600),
+    exchanges: str = Query("binance,bybit,okx"),
+    min_divergence_pct: float = Query(3.0),
+):
+    """Detect OI divergence across exchanges for the same symbol.
+
+    Fetches OI history for the requested exchanges, groups by exchange,
+    then computes % change and checks if any exchange deviates significantly
+    from the group mean. Fires an alert automatically on divergence.
+    """
+    exchange_list = [e.strip().lower() for e in exchanges.split(",") if e.strip()]
+    since = time.time() - window
+
+    # Fetch all OI rows for this symbol in one query, then group by exchange
+    all_oi = await get_oi_history(limit=5000, since=since, symbol=symbol)
+
+    oi_by_exchange: dict = {}
+    for row in all_oi:
+        ex = (row.get("exchange") or "").lower()
+        if ex in exchange_list:
+            oi_by_exchange.setdefault(ex, []).append({
+                "ts":       float(row["ts"]),
+                "oi_value": float(row["oi_value"]),
+            })
+
+    # Ensure ascending time order per exchange
+    for ex in oi_by_exchange:
+        oi_by_exchange[ex].sort(key=lambda r: r["ts"])
+
+    result = compute_inter_exchange_oi_divergence(
+        oi_by_exchange,
+        min_divergence_pct=min_divergence_pct,
+    )
+
+    # Fire alert on divergence
+    if result["divergence"]:
+        await insert_alert(
+            symbol=symbol,
+            alert_type="oi_divergence",
+            severity=result["severity"],
+            description=result["description"],
+            data={
+                "divergence_pct":     result["divergence_pct"],
+                "diverging_exchange": result["diverging_exchange"],
+                "mean_pct_change":    result["mean_pct_change"],
+                "opposing":           result["opposing"],
+            },
+        )
+
+    return JSONResponse({
+        "status": "ok",
+        "symbol": symbol,
+        "window_seconds": window,
+        "exchanges_queried": exchange_list,
         **result,
     })

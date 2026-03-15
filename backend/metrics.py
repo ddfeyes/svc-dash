@@ -3812,3 +3812,137 @@ def compute_session_stats(trades, session_start=None):
         "price_high":         round(price_high, 8),
         "price_low":          round(price_low if price_low != float("inf") else 0.0, 8),
     }
+
+
+def compute_inter_exchange_oi_divergence(
+    oi_by_exchange: dict,
+    min_divergence_pct: float = 3.0,
+) -> dict:
+    """Detect OI divergence across exchanges for the same symbol.
+
+    For each exchange, computes % change in OI from the first to last snapshot,
+    then flags if any exchange's change deviates significantly from the group mean.
+
+    Args:
+        oi_by_exchange: {"binance": [{"ts": float, "oi_value": float}, ...], ...}
+            Each list sorted ascending by ts; exchanges with <2 snapshots are skipped.
+        min_divergence_pct: alert threshold — max deviation from mean must be ≥ this
+            to trigger a divergence event (default: 3.0%).
+
+    Returns dict with keys:
+        divergence, divergence_pct, mean_pct_change, diverging_exchange,
+        opposing, severity, alert, exchange_count, exchanges, description,
+        min_divergence_pct
+    Severity bands: none → low → medium → high (opposing always → high).
+    """
+    _empty = {
+        "divergence":         False,
+        "divergence_pct":     0.0,
+        "mean_pct_change":    0.0,
+        "diverging_exchange": None,
+        "opposing":           False,
+        "severity":           "none",
+        "alert":              False,
+        "exchange_count":     0,
+        "exchanges":          {},
+        "description":        "Insufficient data across exchanges",
+        "min_divergence_pct": min_divergence_pct,
+    }
+
+    if not oi_by_exchange:
+        return _empty
+
+    # ── Per-exchange % change ─────────────────────────────────────────────────
+    ex_stats: dict = {}
+    for exchange, snapshots in oi_by_exchange.items():
+        if len(snapshots) < 2:
+            continue
+        oi_start = float(snapshots[0]["oi_value"])
+        oi_end   = float(snapshots[-1]["oi_value"])
+        pct_change = (oi_end - oi_start) / oi_start * 100 if oi_start != 0 else 0.0
+        ex_stats[exchange] = {
+            "pct_change":     round(pct_change, 4),
+            "latest_oi":      round(oi_end, 6),
+            "first_oi":       round(oi_start, 6),
+            "direction":      "up" if pct_change > 0 else ("down" if pct_change < 0 else "flat"),
+            "snapshot_count": len(snapshots),
+        }
+
+    if len(ex_stats) < 2:
+        result = dict(_empty)
+        result["exchange_count"] = len(ex_stats)
+        result["exchanges"] = {ex: {**s, "deviation": 0.0} for ex, s in ex_stats.items()}
+        result["description"] = (
+            f"Insufficient exchanges with data (need ≥2, got {len(ex_stats)})"
+        )
+        return result
+
+    # ── Mean and deviations ───────────────────────────────────────────────────
+    pcts      = {ex: s["pct_change"] for ex, s in ex_stats.items()}
+    mean_pct  = sum(pcts.values()) / len(pcts)
+    deviations = {ex: pct - mean_pct for ex, pct in pcts.items()}
+
+    divergence_pct     = max(abs(d) for d in deviations.values())
+    diverging_exchange = max(deviations, key=lambda ex: abs(deviations[ex]))
+
+    # ── Opposing flag ─────────────────────────────────────────────────────────
+    pct_values = list(pcts.values())
+    opposing = any(p > 0 for p in pct_values) and any(p < 0 for p in pct_values)
+
+    # ── Divergence flag ───────────────────────────────────────────────────────
+    divergence = divergence_pct >= min_divergence_pct
+
+    # ── Severity ─────────────────────────────────────────────────────────────
+    if not divergence:
+        severity = "none"
+    elif opposing:
+        severity = "high"
+    elif divergence_pct >= 2 * min_divergence_pct:
+        severity = "medium"
+    else:
+        severity = "low"
+
+    # ── Build per-exchange output ─────────────────────────────────────────────
+    exchanges_out = {
+        ex: {**s, "deviation": round(deviations[ex], 4)}
+        for ex, s in ex_stats.items()
+    }
+
+    # ── Description ──────────────────────────────────────────────────────────
+    if divergence:
+        div_dev = deviations[diverging_exchange]
+        dev_str = f"{div_dev:+.2f}%"
+        if opposing:
+            up_exs   = [ex for ex, p in pcts.items() if p > 0]
+            down_exs = [ex for ex, p in pcts.items() if p < 0]
+            description = (
+                f"\u26a0 OI direction conflict: "
+                f"{', '.join(up_exs)} up vs {', '.join(down_exs)} down — "
+                f"{diverging_exchange} deviates {dev_str} from mean {mean_pct:+.2f}% "
+                f"(severity: {severity})"
+            )
+        else:
+            description = (
+                f"OI divergence on {diverging_exchange}: "
+                f"{dev_str} from mean {mean_pct:+.2f}% "
+                f"(severity: {severity})"
+            )
+    else:
+        description = (
+            f"No OI divergence (max dev: {divergence_pct:.2f}%, "
+            f"threshold: {min_divergence_pct:.1f}%)"
+        )
+
+    return {
+        "divergence":         divergence,
+        "divergence_pct":     round(divergence_pct, 4),
+        "mean_pct_change":    round(mean_pct, 4),
+        "diverging_exchange": diverging_exchange if divergence else None,
+        "opposing":           opposing,
+        "severity":           severity,
+        "alert":              divergence,
+        "exchange_count":     len(ex_stats),
+        "exchanges":          exchanges_out,
+        "description":        description,
+        "min_divergence_pct": min_divergence_pct,
+    }

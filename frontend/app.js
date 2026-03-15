@@ -665,6 +665,73 @@ async function renderPhase() {
   }
 }
 
+// ── Render: Inter-Exchange OI Divergence ─────────────────────────────────────
+async function renderOiDivergence() {
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/oi-divergence?symbol=${sym}&window=3600`);
+  if (!data) return;
+
+  const badge = document.getElementById('oi-divergence-badge');
+  if (badge) {
+    if (data.divergence) {
+      const sevClass = data.severity === 'high'   ? 'badge-red'
+                     : data.severity === 'medium' ? 'badge-yellow'
+                     : 'badge-blue';
+      badge.textContent = data.severity.toUpperCase()
+        + (data.opposing ? ' · OPPOSING' : '');
+      badge.className = `card-badge ${sevClass}`;
+      badge.style.display = 'inline-block';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+
+  const el = document.getElementById('oi-divergence-content');
+  if (!el) return;
+
+  const exs = data.exchanges || {};
+  const exNames = Object.keys(exs);
+
+  if (!exNames.length) {
+    el.innerHTML = '<div class="text-muted" style="font-size:11px;">No exchange data yet</div>';
+    return;
+  }
+
+  const divColor = data.divergence
+    ? (data.severity === 'high' ? 'var(--red)' : data.severity === 'medium' ? 'var(--yellow)' : '#64b4ff')
+    : 'var(--green)';
+
+  const rows = exNames.map(ex => {
+    const e = exs[ex];
+    const pctStr = e.pct_change >= 0 ? `+${e.pct_change.toFixed(2)}%` : `${e.pct_change.toFixed(2)}%`;
+    const devStr = e.deviation  >= 0 ? `+${e.deviation.toFixed(2)}%`  : `${e.deviation.toFixed(2)}%`;
+    const dirColor = e.direction === 'up' ? 'var(--green)' : e.direction === 'down' ? 'var(--red)' : 'var(--muted)';
+    const isDiverging = data.diverging_exchange === ex;
+    return `
+      <div class="metric-box" style="${isDiverging ? 'border:1px solid ' + divColor + ';border-radius:6px;' : ''}">
+        <div class="metric-label">${ex.charAt(0).toUpperCase() + ex.slice(1)}</div>
+        <div class="metric-value" style="color:${dirColor}">${pctStr}</div>
+        <div class="metric-label">dev ${devStr}</div>
+      </div>`;
+  }).join('');
+
+  const meanStr = data.mean_pct_change >= 0
+    ? `+${data.mean_pct_change.toFixed(2)}%`
+    : `${data.mean_pct_change.toFixed(2)}%`;
+
+  el.innerHTML = `
+    <div class="phase-metrics">
+      ${rows}
+      <div class="metric-box">
+        <div class="metric-label">Mean</div>
+        <div class="metric-value" style="color:var(--muted)">${meanStr}</div>
+        <div class="metric-label">max dev ${data.divergence_pct.toFixed(2)}%</div>
+      </div>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-top:6px;line-height:1.4">${data.description || ''}</div>
+  `;
+}
+
 // ── Render: Microstructure Score ──────────────────────────────────────────────
 function _compColor(score) {
   if (score == null) return 'var(--muted)';
@@ -822,6 +889,7 @@ async function refresh() {
     renderTradeTape(),
     renderVolumeImbalance(),
     renderPhase(),
+    renderOiDivergence(),
     renderMicrostructure(),
   ]);
 }
