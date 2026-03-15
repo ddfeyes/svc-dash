@@ -3274,3 +3274,122 @@ def compute_oi_velocity_heatmap(
         "global_max_pct": global_max_pct,
         "global_min_pct": global_min_pct,
     }
+
+
+# ── Smart Money Divergence ─────────────────────────────────────────────────────
+
+def compute_smart_money_divergence(
+    trades: List[dict],
+    threshold_usd: float = 10000.0,
+    bucket_seconds: int = 300,
+) -> dict:
+    """Detect divergence between large-trade (smart money) and retail flow.
+
+    Retail CVD = cumulative delta of trades where price*qty < threshold_usd
+    Smart CVD  = cumulative delta of trades where price*qty >= threshold_usd
+    delta uses is_buyer_aggressor when present, falls back to side field.
+
+    divergence_score = (smart_cvd - retail_cvd) / (|smart_cvd| + |retail_cvd| + 1e-8)
+
+    Signals:
+        accumulation  score >= 0.15   (smart buying vs retail selling)
+        distribution  score <= -0.15  (smart selling vs retail buying)
+        aligned       |score| < 0.15 and both same direction
+        neutral       |score| < 0.15 otherwise
+
+    Returns:
+        {smart_cvd, retail_cvd, smart_trade_count, retail_trade_count,
+         divergence_score, signal, smart_pct, divergence_detected,
+         buckets: [{ts, smart_cvd, retail_cvd}]}
+    """
+    smart_buy = smart_sell = 0.0
+    retail_buy = retail_sell = 0.0
+    smart_count = retail_count = 0
+    smart_vol_total = retail_vol_total = 0.0
+
+    # {ts_bucket: {smart_buy, smart_sell, retail_buy, retail_sell}}
+    bucket_map: dict = {}
+
+    for t in trades:
+        price = float(t["price"])
+        qty   = float(t["qty"])
+        val   = price * qty
+
+        # Determine taker direction
+        iba = t.get("is_buyer_aggressor")
+        if iba is not None:
+            is_buy = bool(iba)
+        else:
+            is_buy = (t.get("side") or "").lower() == "buy"
+
+        ts_b = int(float(t["ts"]) // bucket_seconds) * bucket_seconds
+        if ts_b not in bucket_map:
+            bucket_map[ts_b] = {"smart_buy": 0.0, "smart_sell": 0.0,
+                                "retail_buy": 0.0, "retail_sell": 0.0}
+
+        if val >= threshold_usd:
+            smart_count += 1
+            smart_vol_total += val
+            if is_buy:
+                smart_buy += val
+                bucket_map[ts_b]["smart_buy"] += val
+            else:
+                smart_sell += val
+                bucket_map[ts_b]["smart_sell"] += val
+        else:
+            retail_count += 1
+            retail_vol_total += val
+            if is_buy:
+                retail_buy += val
+                bucket_map[ts_b]["retail_buy"] += val
+            else:
+                retail_sell += val
+                bucket_map[ts_b]["retail_sell"] += val
+
+    smart_cvd  = smart_buy  - smart_sell
+    retail_cvd = retail_buy - retail_sell
+
+    total_vol = abs(smart_cvd) + abs(retail_cvd) + 1e-8
+    divergence_score = (smart_cvd - retail_cvd) / total_vol
+
+    # Signal classification
+    smart_dir  = 1 if smart_cvd  > 0 else (-1 if smart_cvd  < 0 else 0)
+    retail_dir = 1 if retail_cvd > 0 else (-1 if retail_cvd < 0 else 0)
+    same_dir   = (smart_dir != 0 and retail_dir != 0 and smart_dir == retail_dir)
+
+    if divergence_score >= 0.15:
+        signal = "accumulation"
+    elif divergence_score <= -0.15:
+        signal = "distribution"
+    elif same_dir:
+        signal = "aligned"
+    else:
+        signal = "neutral"
+
+    divergence_detected = signal in ("accumulation", "distribution")
+
+    # smart_pct = smart vol / (smart vol + retail vol)
+    all_vol = smart_vol_total + retail_vol_total
+    smart_pct = (smart_vol_total / all_vol) if all_vol > 0 else 0.0
+
+    # Build bucket series sorted ascending
+    buckets = []
+    for ts_b in sorted(bucket_map):
+        bm = bucket_map[ts_b]
+        buckets.append({
+            "ts":         float(ts_b),
+            "smart_cvd":  round(bm["smart_buy"] - bm["smart_sell"],  4),
+            "retail_cvd": round(bm["retail_buy"] - bm["retail_sell"], 4),
+        })
+
+    return {
+        "smart_cvd":          round(smart_cvd,  4),
+        "retail_cvd":         round(retail_cvd, 4),
+        "smart_trade_count":  smart_count,
+        "retail_trade_count": retail_count,
+        "divergence_score":   round(divergence_score, 6),
+        "signal":             signal,
+        "smart_pct":          round(smart_pct, 6),
+        "divergence_detected": divergence_detected,
+        "buckets":            buckets,
+    }

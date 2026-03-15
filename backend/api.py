@@ -69,6 +69,7 @@ from metrics import (
     detect_short_squeeze_setup,
     rank_symbols_by_net_taker_delta,
     compute_oi_velocity_heatmap,
+    compute_smart_money_divergence,
 )
 
 router = APIRouter(prefix="/api")
@@ -3618,4 +3619,82 @@ async def oi_velocity_endpoint(
         "status": "ok",
         "window_seconds": window,
         **heatmap,
+    }
+
+
+@router.get("/smart-money-divergence")
+async def smart_money_divergence_endpoint(
+    symbol: str = Query(..., description="Symbol e.g. BTCUSDT"),
+    window: int = Query(default=1800, ge=300, le=86400, description="Lookback in seconds (default 30m)"),
+    threshold_usd: float = Query(default=10000.0, ge=100.0, description="Smart money trade size threshold in USD"),
+    bucket_seconds: int = Query(default=300, ge=60, le=3600, description="Bucket width in seconds"),
+):
+    """
+    Smart money divergence for a single symbol.
+
+    Classifies trades as smart (value >= threshold_usd) or retail (< threshold_usd),
+    computes cumulative delta for each group, and returns a divergence score.
+
+    Returns:
+      smart_cvd, retail_cvd, divergence_score, signal, smart_pct,
+      divergence_detected, buckets[{ts, smart_cvd, retail_cvd}]
+    """
+    since = time.time() - window
+    trades = await get_recent_trades(symbol=symbol, since=since, limit=50000)
+
+    result = compute_smart_money_divergence(
+        trades,
+        threshold_usd=threshold_usd,
+        bucket_seconds=bucket_seconds,
+    )
+
+    return {
+        "status": "ok",
+        "symbol": symbol,
+        "window_seconds": window,
+        "threshold_usd": threshold_usd,
+        **result,
+    }
+
+
+@router.get("/smart-money-divergence/all")
+async def smart_money_divergence_all_endpoint(
+    window: int = Query(default=1800, ge=300, le=86400, description="Lookback in seconds (default 30m)"),
+    threshold_usd: float = Query(default=10000.0, ge=100.0, description="Smart money trade size threshold in USD"),
+    bucket_seconds: int = Query(default=300, ge=60, le=3600, description="Bucket width in seconds"),
+):
+    """
+    Smart money divergence for ALL tracked symbols in parallel.
+
+    Returns a list of per-symbol results sorted by divergence_score descending.
+    """
+    symbols = get_symbols()
+    if not symbols:
+        return {"error": "No symbols configured"}
+
+    since = time.time() - window
+    trade_lists = await asyncio.gather(*[
+        get_recent_trades(symbol=sym, since=since, limit=50000)
+        for sym in symbols
+    ])
+
+    results = []
+    for sym, trades in zip(symbols, trade_lists):
+        r = compute_smart_money_divergence(
+            trades,
+            threshold_usd=threshold_usd,
+            bucket_seconds=bucket_seconds,
+        )
+        results.append({
+            "symbol": sym,
+            **r,
+        })
+
+    results.sort(key=lambda x: x["divergence_score"], reverse=True)
+
+    return {
+        "status": "ok",
+        "window_seconds": window,
+        "threshold_usd": threshold_usd,
+        "symbols": results,
     }

@@ -1135,6 +1135,17 @@
     <canvas id="canvas-oi-velocity" style="width:100%;height:140px;display:block;"></canvas>
   </div>
 
+  <!-- Smart Money Divergence -->
+  <div class="card wide" id="card-smart-money">
+    <h2><span class="card-icon">🧿</span>Smart Money Divergence (30m)
+      <span id="smd-badge" style="margin-left:8px;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;display:none;"></span>
+      <span id="smd-ts" style="margin-left:auto;font-size:10px;color:var(--muted);font-weight:400;letter-spacing:0;text-transform:none;"></span>
+    </h2>
+    <div style="font-size:10px;color:var(--muted);margin-bottom:8px;">smart = trades ≥$10k · retail = trades &lt;$10k · divergence = smart buying while retail sells (or vice versa)</div>
+    <div id="smd-metrics" style="display:flex;gap:16px;flex-wrap:wrap;font-size:11px;margin-bottom:10px;"></div>
+    <canvas id="chart-smart-money" style="height:130px !important;"></canvas>
+  </div>
+
   <!-- Symbol Momentum Rank -->
   <div class="card">
     <h2><span class="card-icon">🏆</span>Momentum Rank (5m/15m/1h)
@@ -2435,6 +2446,53 @@ let chartNetTakerDelta = null;
   });
 })();
 
+// Smart Money Divergence dual-line chart
+let chartSmartMoney = null;
+(function initSmartMoneyChart() {
+  const ctx = document.getElementById('chart-smart-money');
+  if (!ctx) return;
+  chartSmartMoney = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [
+        {
+          label: 'Smart CVD',
+          data: [],
+          borderColor: 'rgba(0,220,120,0.9)',
+          backgroundColor: 'rgba(0,220,120,0.08)',
+          borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: true,
+          yAxisID: 'ySmart',
+        },
+        {
+          label: 'Retail CVD',
+          data: [],
+          borderColor: 'rgba(255,160,50,0.9)',
+          backgroundColor: 'rgba(255,160,50,0.08)',
+          borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: true,
+          yAxisID: 'yRetail',
+        },
+      ],
+    },
+    options: {
+      animation: false, responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: true, labels: { color: 'rgba(200,200,200,0.7)', font: { size: 9 }, boxWidth: 10 } },
+        tooltip: { callbacks: { label: ctx => {
+          const v = ctx.parsed.y;
+          return `${ctx.dataset.label}: ${v >= 0 ? '+' : ''}${v.toFixed(2)}`;
+        }}},
+      },
+      scales: {
+        x: { ticks: { color: 'rgba(200,200,200,0.5)', font: { size: 8 }, maxTicksLimit: 10, maxRotation: 0 }, grid: { color: 'rgba(255,255,255,0.04)' } },
+        ySmart:  { position: 'left',  ticks: { color: 'rgba(0,220,120,0.7)',   font: { size: 8 } }, grid: { color: 'rgba(255,255,255,0.04)' } },
+        yRetail: { position: 'right', ticks: { color: 'rgba(255,160,50,0.7)',  font: { size: 8 } }, grid: { drawOnChartArea: false } },
+      },
+    },
+  });
+})();
+
 // Trade Count Rate area chart
 let chartTradeRate = null;
 (function initTradeRateChart() {
@@ -3395,7 +3453,7 @@ async function refreshAll() {
   if (!activeSymbol) return;
   const sym = encodeURIComponent(activeSymbol);
 
-  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas, volspike, whales, patternLive, patternHist, oiDelta, tradeRate, spreadData, flowImb, liqHeatmap, depthRatio, tradeClusters, momentumRank, shortSqueeze, ntdAll, ntdSym, oiVel] = await Promise.all([
+  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas, volspike, whales, patternLive, patternHist, oiDelta, tradeRate, spreadData, flowImb, liqHeatmap, depthRatio, tradeClusters, momentumRank, shortSqueeze, ntdAll, ntdSym, oiVel, smd] = await Promise.all([
     fetchJSON(`/api/cvd/history?window=3600&symbol=${sym}`),
     fetchJSON(`/api/oi/history?limit=300&symbol=${sym}`),
     fetchJSON(`/api/funding/history?limit=200&symbol=${sym}`),
@@ -3421,6 +3479,7 @@ async function refreshAll() {
     fetchJSON(`/api/net-taker-delta?window=60`),
     fetchJSON(`/api/net-taker-delta?window=60&symbol=${sym}`),
     fetchJSON(`/api/oi-velocity?window=7200&bucket_seconds=300`),
+    fetchJSON(`/api/smart-money-divergence?window=1800&threshold_usd=10000&bucket_seconds=300&symbol=${sym}`),
   ]);
 
   // CVD + Price dual-axis chart
@@ -3753,6 +3812,68 @@ async function refreshAll() {
       infoEl.textContent = `${oiVel.symbols.length} symbols · ${oiVel.time_buckets.length} buckets · max +${maxPct}% / min ${minPct}%`;
     }
     renderOiVelocityHeatmap(oiVel);
+  }
+
+  // ── Smart Money Divergence ────────────────────────────────────────────────
+  if (smd) {
+    const badgeEl   = document.getElementById('smd-badge');
+    const tsEl      = document.getElementById('smd-ts');
+    const metricsEl = document.getElementById('smd-metrics');
+
+    const signalColors = {
+      accumulation: { bg: 'rgba(0,200,120,0.25)', color: 'var(--green)', label: 'ACCUMULATION' },
+      distribution:  { bg: 'rgba(220,60,60,0.25)',  color: 'var(--red)',   label: 'DISTRIBUTION'  },
+      aligned:       { bg: 'rgba(100,180,255,0.2)',  color: '#64b4ff',     label: 'ALIGNED'        },
+      neutral:       { bg: 'rgba(120,120,120,0.2)',  color: 'var(--muted)', label: 'NEUTRAL'       },
+    };
+
+    const sc = signalColors[smd.signal] || signalColors.neutral;
+    if (badgeEl) {
+      badgeEl.textContent = sc.label;
+      badgeEl.style.background = sc.bg;
+      badgeEl.style.color = sc.color;
+      badgeEl.style.display = 'inline-block';
+    }
+    if (tsEl) tsEl.textContent = 'last 30m';
+
+    if (metricsEl) {
+      const scoreCol = smd.divergence_score > 0.15 ? 'var(--green)' : smd.divergence_score < -0.15 ? 'var(--red)' : 'var(--muted)';
+      const scoreSign = smd.divergence_score >= 0 ? '+' : '';
+      const smartNetCol = smd.smart_cvd > 0 ? 'var(--green)' : smd.smart_cvd < 0 ? 'var(--red)' : 'var(--muted)';
+      const retNetCol = smd.retail_cvd > 0 ? 'var(--green)' : smd.retail_cvd < 0 ? 'var(--red)' : 'var(--muted)';
+      const smartPctPct = (smd.smart_pct * 100).toFixed(1);
+
+      metricsEl.innerHTML = [
+        `<div style="background:rgba(0,220,120,0.1);border:1px solid rgba(0,220,120,0.2);border-radius:6px;padding:6px 12px;text-align:center;">
+          <div style="color:var(--muted);font-size:9px;text-transform:uppercase;margin-bottom:3px;">Smart CVD</div>
+          <div style="color:${smartNetCol};font-size:14px;font-weight:700;">${smd.smart_cvd >= 0 ? '+' : ''}${smd.smart_cvd.toFixed(2)}</div>
+          <div style="color:var(--muted);font-size:9px;">${smd.smart_trade_count} trades</div>
+        </div>`,
+        `<div style="background:rgba(255,160,50,0.1);border:1px solid rgba(255,160,50,0.2);border-radius:6px;padding:6px 12px;text-align:center;">
+          <div style="color:var(--muted);font-size:9px;text-transform:uppercase;margin-bottom:3px;">Retail CVD</div>
+          <div style="color:${retNetCol};font-size:14px;font-weight:700;">${smd.retail_cvd >= 0 ? '+' : ''}${smd.retail_cvd.toFixed(2)}</div>
+          <div style="color:var(--muted);font-size:9px;">${smd.retail_trade_count} trades</div>
+        </div>`,
+        `<div style="background:rgba(100,100,100,0.15);border:1px solid rgba(150,150,150,0.2);border-radius:6px;padding:6px 12px;text-align:center;">
+          <div style="color:var(--muted);font-size:9px;text-transform:uppercase;margin-bottom:3px;">Divergence Score</div>
+          <div style="color:${scoreCol};font-size:14px;font-weight:700;">${scoreSign}${smd.divergence_score.toFixed(3)}</div>
+          <div style="color:var(--muted);font-size:9px;">[-1 distrib → +1 accum]</div>
+        </div>`,
+        `<div style="background:rgba(100,100,100,0.15);border:1px solid rgba(150,150,150,0.2);border-radius:6px;padding:6px 12px;text-align:center;">
+          <div style="color:var(--muted);font-size:9px;text-transform:uppercase;margin-bottom:3px;">Smart Vol %</div>
+          <div style="color:var(--yellow);font-size:14px;font-weight:700;">${smartPctPct}%</div>
+          <div style="color:var(--muted);font-size:9px;">of total volume</div>
+        </div>`,
+      ].join('');
+    }
+
+    if (chartSmartMoney && smd.buckets?.length) {
+      const buckets = smd.buckets;
+      chartSmartMoney.data.labels = buckets.map(b => fmtTs(b.ts));
+      chartSmartMoney.data.datasets[0].data = buckets.map(b => b.smart_cvd);
+      chartSmartMoney.data.datasets[1].data = buckets.map(b => b.retail_cvd);
+      chartSmartMoney.update('none');
+    }
   }
 
   // ── Net Taker Delta card ─────────────────────────────────────────────────
