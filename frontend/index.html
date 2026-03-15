@@ -746,6 +746,15 @@
       <div id="div-severity" style="margin-top:5px;"></div>
     </div>
 
+    <div id="alert-cvd-divergence" class="alert-box">
+      <div class="alert-label" style="display:flex;align-items:center;gap:6px;">
+        📈 CVD NEW-HIGH DIVERGENCE
+        <span id="cvd-div-badge" style="display:none;padding:1px 6px;border-radius:10px;font-size:9px;font-weight:700;"></span>
+      </div>
+      <div id="cvd-div-text" style="color:var(--muted);margin-top:3px;">Loading...</div>
+      <div id="cvd-div-symbols" style="margin-top:4px;font-size:10px;display:flex;flex-wrap:wrap;gap:4px;"></div>
+    </div>
+
     <div id="alert-vol-spike" class="alert-box">
       <div class="alert-label">VOLUME SPIKE (&gt;3x baseline / 30s)</div>
       <div id="vol-spike-text" style="color:var(--muted)">Loading...</div>
@@ -2296,6 +2305,7 @@ function selectSymbol(sym) {
   refreshOiMcap();
   refreshLiqPressure();
   refreshPriceVelocity();
+  refreshCvdDivergence();
   initTape();
 }
 
@@ -4185,6 +4195,57 @@ async function refreshLiqPressure() {
   }
 }
 
+// ── CVD New-High Divergence ───────────────────────────────────────────────────
+async function refreshCvdDivergence() {
+  const enc = encodeURIComponent(currentSymbol);
+  const data = await fetchJSON(`/api/cvd-divergence?symbol=${enc}&window=300`);
+  const box = document.getElementById('alert-cvd-divergence');
+  if (!data || !data.symbols || !box) return;
+
+  const sym = data.symbols[currentSymbol] || data.symbols[Object.keys(data.symbols)[0]];
+  if (!sym) return;
+
+  const signal = sym.signal || 'none';
+  const textEl = document.getElementById('cvd-div-text');
+  const badgeEl = document.getElementById('cvd-div-badge');
+
+  const sigConfig = {
+    bearish: { color: 'var(--red)',   bg: 'rgba(239,83,80,0.15)', badge: 'BEARISH ▼', badgeBg: 'var(--red)' },
+    bullish: { color: 'var(--green)', bg: 'rgba(129,199,132,0.15)', badge: 'BULLISH ▲', badgeBg: 'var(--green)' },
+    none:    { color: 'var(--muted)', bg: '', badge: '', badgeBg: '' },
+  };
+  const cfg = sigConfig[signal] || sigConfig.none;
+
+  if (textEl) {
+    textEl.textContent = sym.description || 'No divergence';
+    textEl.style.color = cfg.color;
+  }
+
+  if (badgeEl) {
+    if (signal !== 'none') {
+      badgeEl.textContent = cfg.badge;
+      badgeEl.style.background = cfg.badgeBg;
+      badgeEl.style.color = '#000';
+      badgeEl.style.display = 'inline-block';
+    } else {
+      badgeEl.style.display = 'none';
+    }
+  }
+
+  // Price% and CVD norm info
+  const symBarsEl = document.getElementById('cvd-div-symbols');
+  if (symBarsEl) {
+    const pricePct = sym.price_pct != null ? `${sym.price_pct > 0 ? '+' : ''}${sym.price_pct.toFixed(3)}%` : '';
+    const cvdNorm = sym.cvd_norm != null ? `CVD norm: ${sym.cvd_norm > 0 ? '+' : ''}${sym.cvd_norm.toFixed(3)}` : '';
+    symBarsEl.innerHTML = [pricePct, cvdNorm].filter(Boolean).map(t =>
+      `<span style="background:var(--bg3);border-radius:3px;padding:1px 5px;color:var(--muted)">${t}</span>`
+    ).join('');
+  }
+
+  box.className = signal !== 'none' ? 'alert-box active' : 'alert-box';
+  if (cfg.bg) box.style.borderColor = cfg.color; else box.style.borderColor = '';
+}
+
 // ── Price Velocity Speedometer ────────────────────────────────────────────────
 async function refreshPriceVelocity() {
   const enc = encodeURIComponent(currentSymbol);
@@ -5116,6 +5177,8 @@ async function refreshSignalsScanner() {
   setInterval(refreshLiqPressure, 15000);  // every 15s
   refreshPriceVelocity();
   setInterval(refreshPriceVelocity, 5000);  // every 5s — fast indicator
+  refreshCvdDivergence();
+  setInterval(refreshCvdDivergence, 20000);  // every 20s
   refreshFreshness();
   setInterval(refreshFreshness, 15000);
   refreshStatsSummary();

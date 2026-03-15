@@ -1964,3 +1964,105 @@ async def price_velocity(
         }
 
     return {"status": "ok", "ts": now, "symbols": result}
+
+
+# ── CVD New-High Divergence ───────────────────────────────────────────────────
+
+@router.get("/cvd-divergence")
+async def cvd_divergence_endpoint(
+    symbol: Optional[str] = Query(default=None),
+    window: int = Query(default=300, ge=60, le=3600, description="Lookback window in seconds"),
+):
+    """
+    CVD New-High/Low Divergence detector.
+    Bearish: price makes new high in window but CVD does not confirm → sell pressure hidden.
+    Bullish: price makes new low but CVD does not confirm → buy pressure hidden.
+    Returns badge-level signal per symbol.
+    """
+    symbols = [symbol] if symbol else get_symbols()
+    now = time.time()
+    result = {}
+
+    for sym in symbols:
+        trades = await get_recent_trades(limit=5000, since=now - window, symbol=sym)
+        if len(trades) < 20:
+            result[sym] = {"signal": "none", "description": "Insufficient data", "severity": 0}
+            continue
+
+        trades.sort(key=lambda t: t.get("ts", 0))
+
+        # Split into two halves: first half vs second half
+        mid = len(trades) // 2
+        first_half = trades[:mid]
+        second_half = trades[mid:]
+
+        def price_high(ts): return max((t.get("price", 0) or 0) for t in ts)
+        def price_low(ts):  return min((t.get("price", 0) or 0) for t in ts)
+        def cvd_sum(ts):
+            s = 0
+            for t in ts:
+                v = (t.get("price", 0) or 0) * (t.get("qty", 0) or 0)
+                s += v if t.get("side") == "buy" else -v
+            return s
+
+        p_high_1 = price_high(first_half)
+        p_high_2 = price_high(second_half)
+        p_low_1  = price_low(first_half)
+        p_low_2  = price_low(second_half)
+        cvd_1    = cvd_sum(first_half)
+        cvd_2    = cvd_sum(second_half)
+
+        # Price change %
+        price_latest = second_half[-1].get("price", 0) or 0
+        price_oldest = first_half[0].get("price", 0) or 0
+        price_pct = (price_latest - price_oldest) / price_oldest * 100 if price_oldest else 0
+
+        # CVD change (normalized by median trade value)
+        median_val = sorted([abs((t.get("price",0) or 0)*(t.get("qty",0) or 0)) for t in trades])[len(trades)//2]
+        cvd_delta = cvd_2 - cvd_1
+        cvd_norm = cvd_delta / (median_val * len(trades) / 2) if median_val else 0  # -1 to 1
+
+        # Bearish divergence: price makes higher high, CVD makes lower high
+        bearish_div = p_high_2 > p_high_1 * 1.001 and cvd_2 < cvd_1 * 0.9
+        # Bullish divergence: price makes lower low, CVD makes higher low
+        bullish_div = p_low_2 < p_low_1 * 0.999 and cvd_2 > cvd_1 * 1.1
+
+        # Also classic: price trend vs CVD trend
+        if not bearish_div and not bullish_div:
+            if price_pct > 0.1 and cvd_norm < -0.05:
+                bearish_div = True
+            elif price_pct < -0.1 and cvd_norm > 0.05:
+                bullish_div = True
+
+        if bearish_div:
+            severity = min(3, max(1, int(abs(price_pct) / 0.2 + 1)))
+            result[sym] = {
+                "signal": "bearish",
+                "description": f"🔻 Bearish div: price +{price_pct:.2f}% but CVD not confirming",
+                "severity": severity,
+                "price_pct": round(price_pct, 3),
+                "cvd_norm": round(cvd_norm, 4),
+                "price_high_1": round(p_high_1, 8),
+                "price_high_2": round(p_high_2, 8),
+            }
+        elif bullish_div:
+            severity = min(3, max(1, int(abs(price_pct) / 0.2 + 1)))
+            result[sym] = {
+                "signal": "bullish",
+                "description": f"🟢 Bullish div: price {price_pct:.2f}% but CVD not confirming",
+                "severity": severity,
+                "price_pct": round(price_pct, 3),
+                "cvd_norm": round(cvd_norm, 4),
+                "price_low_1": round(p_low_1, 8),
+                "price_low_2": round(p_low_2, 8),
+            }
+        else:
+            result[sym] = {
+                "signal": "none",
+                "description": "No CVD divergence detected",
+                "severity": 0,
+                "price_pct": round(price_pct, 3),
+                "cvd_norm": round(cvd_norm, 4),
+            }
+
+    return {"status": "ok", "ts": now, "window_s": window, "symbols": result}
