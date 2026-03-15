@@ -96,7 +96,8 @@ if frontend_dir.exists():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "symbol_binance": os.getenv("SYMBOL_BINANCE"), "symbol_bybit": os.getenv("SYMBOL_BYBIT")}
+    from collectors import get_symbols
+    return {"status": "ok", "symbols": get_symbols()}
 
 
 if __name__ == "__main__":

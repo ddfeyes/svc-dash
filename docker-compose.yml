@@ -12,9 +12,9 @@ services:
       - ${HOME}/.lain-secrets/.env:/secrets/.env:ro
     environment:
       - DOTENV_PATH=/secrets/.env
-      - SYMBOLS=BANANAS31USDT,COSUSDT,DEXEUSDT,LYNUSDT
+      # SYMBOLS can be overridden here or via .env: SYMBOLS=BANANAS31USDT,BTCUSDT
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/metrics/summary"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/symbols"]
       interval: 30s
       timeout: 10s
       retries: 3

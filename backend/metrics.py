@@ -1,4 +1,4 @@
-"""Computed metrics: CVD, volume imbalance, OI momentum, phase classifier."""
+"""Computed metrics: CVD, volume imbalance, OI momentum, phase classifier — multi-symbol."""
 import time
 from typing import Dict, List, Optional
 
@@ -10,10 +10,10 @@ from storage import (
 )
 
 
-async def compute_cvd(window_seconds: int = 3600) -> List[Dict]:
+async def compute_cvd(window_seconds: int = 3600, symbol: str = None) -> List[Dict]:
     """Cumulative Volume Delta over the last window."""
     since = time.time() - window_seconds
-    trades = await get_trades_for_cvd(since)
+    trades = await get_trades_for_cvd(since, symbol=symbol)
 
     cvd = 0.0
     result = []
@@ -35,10 +35,10 @@ async def compute_cvd(window_seconds: int = 3600) -> List[Dict]:
     return result
 
 
-async def compute_volume_imbalance(window_seconds: int = 60) -> Dict:
+async def compute_volume_imbalance(window_seconds: int = 60, symbol: str = None) -> Dict:
     """Buy vs sell volume ratio over window."""
     since = time.time() - window_seconds
-    trades = await get_trades_for_cvd(since)
+    trades = await get_trades_for_cvd(since, symbol=symbol)
 
     buy_vol = sum(t["qty"] for t in trades if t["side"] in ("buy", "Buy"))
     sell_vol = sum(t["qty"] for t in trades if t["side"] in ("sell", "Sell"))
@@ -55,15 +55,14 @@ async def compute_volume_imbalance(window_seconds: int = 60) -> Dict:
     }
 
 
-async def compute_oi_momentum(window_seconds: int = 300) -> Dict:
+async def compute_oi_momentum(window_seconds: int = 300, symbol: str = None) -> Dict:
     """OI rate of change over window."""
     since = time.time() - window_seconds
-    oi_data = await get_oi_history(limit=500, since=since)
+    oi_data = await get_oi_history(limit=500, since=since, symbol=symbol)
 
     if len(oi_data) < 2:
         return {"momentum": 0, "oi_start": None, "oi_end": None, "pct_change": 0}
 
-    # Group by exchange and compute momentum
     exchanges = {}
     for row in oi_data:
         ex = row["exchange"]
@@ -83,7 +82,6 @@ async def compute_oi_momentum(window_seconds: int = 300) -> Dict:
                 "momentum": round(end - start, 2),
             }
 
-    # Aggregate
     all_pct = [v["pct_change"] for v in results.values()]
     avg_pct = sum(all_pct) / len(all_pct) if all_pct else 0
 
@@ -94,7 +92,7 @@ async def compute_oi_momentum(window_seconds: int = 300) -> Dict:
     }
 
 
-async def classify_market_phase() -> Dict:
+async def classify_market_phase(symbol: str = None) -> Dict:
     """
     Phase classifier based on OI momentum + price change + CVD.
 
@@ -104,12 +102,10 @@ async def classify_market_phase() -> Dict:
     - Markup: price up, OI up, CVD strongly positive
     - Markdown: price down, OI up or down, CVD strongly negative
     """
-    # Get CVD trend
-    cvd_data = await compute_cvd(window_seconds=300)
-    oi_mom = await compute_oi_momentum(window_seconds=300)
-    ob_data = await get_latest_orderbook(limit=2)
+    cvd_data = await compute_cvd(window_seconds=300, symbol=symbol)
+    oi_mom = await compute_oi_momentum(window_seconds=300, symbol=symbol)
+    ob_data = await get_latest_orderbook(symbol=symbol, limit=2)
 
-    # Price change
     price_change_pct = 0.0
     if len(ob_data) >= 2:
         p1 = ob_data[0].get("mid_price") or 0
@@ -117,14 +113,12 @@ async def classify_market_phase() -> Dict:
         if p2:
             price_change_pct = ((p1 - p2) / p2) * 100
 
-    # CVD direction
     cvd_delta = 0.0
     if len(cvd_data) >= 2:
         cvd_delta = cvd_data[-1]["cvd"] - cvd_data[0]["cvd"]
 
     oi_pct = oi_mom.get("avg_pct_change", 0)
 
-    # Classification logic
     phase = "Unknown"
     confidence = 0.5
 
