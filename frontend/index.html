@@ -493,6 +493,7 @@
   </div>
 
   <button id="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light theme">🌙 Dark</button>
+  <button onclick="showHotkeyHelp()" title="Keyboard shortcuts (?)" style="font-size:11px;padding:3px 9px;border-radius:8px;border:1px solid var(--border);background:var(--bg3);color:var(--muted);cursor:pointer;margin-left:4px;">⌨️ ?</button>
 
   <div id="status">
     <div class="status-indicator" id="status-dot"></div>
@@ -4505,7 +4506,118 @@ async function refreshSignalsScanner() {
   refreshStatsSummary();
   setInterval(refreshStatsSummary, 60000);
 
-  // Keyboard shortcuts: 1-9 switch symbols, S toggle sound, M mute
+  // ── Keyboard Shortcut Help Modal ──────────────────────────────────────────
+  (function buildHotkeyModal() {
+    const overlay = document.createElement('div');
+    overlay.id = 'hotkey-overlay';
+    overlay.style.cssText = [
+      'display:none',
+      'position:fixed',
+      'inset:0',
+      'background:rgba(0,0,0,0.72)',
+      'z-index:99999',
+      'align-items:center',
+      'justify-content:center',
+    ].join(';');
+
+    const box = document.createElement('div');
+    box.style.cssText = [
+      'background:var(--bg2)',
+      'border:1px solid var(--border)',
+      'border-radius:10px',
+      'padding:24px 30px',
+      'min-width:340px',
+      'max-width:480px',
+      'color:var(--text)',
+      'font-size:13px',
+      'box-shadow:0 8px 40px rgba(0,0,0,0.5)',
+      'position:relative',
+    ].join(';');
+
+    const title = document.createElement('div');
+    title.textContent = '⌨️  Keyboard Shortcuts';
+    title.style.cssText = 'font-size:15px;font-weight:600;margin-bottom:16px;color:var(--accent)';
+
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕';
+    closeBtn.style.cssText = [
+      'position:absolute',
+      'top:14px',
+      'right:16px',
+      'background:none',
+      'border:none',
+      'color:var(--muted)',
+      'font-size:16px',
+      'cursor:pointer',
+      'line-height:1',
+    ].join(';');
+    closeBtn.onclick = () => { overlay.style.display = 'none'; };
+
+    const shortcuts = [
+      ['1 – 9',          'Switch to symbol N'],
+      ['S',              'Toggle alert sounds'],
+      ['T',              'Toggle dark / light theme'],
+      ['R',              'Force refresh all data'],
+      ['Esc',            'Close this modal'],
+      ['?',              'Show this help panel'],
+    ];
+
+    const table = document.createElement('table');
+    table.style.cssText = 'width:100%;border-collapse:collapse';
+    shortcuts.forEach(([key, desc]) => {
+      const tr = document.createElement('tr');
+      tr.style.cssText = 'border-bottom:1px solid var(--border)';
+
+      const tdKey = document.createElement('td');
+      tdKey.style.cssText = 'padding:7px 12px 7px 0;white-space:nowrap';
+      const kbd = document.createElement('kbd');
+      kbd.textContent = key;
+      kbd.style.cssText = [
+        'background:var(--bg3)',
+        'border:1px solid var(--border)',
+        'border-radius:4px',
+        'padding:2px 7px',
+        'font-family:monospace',
+        'font-size:12px',
+        'color:var(--accent)',
+      ].join(';');
+      tdKey.appendChild(kbd);
+
+      const tdDesc = document.createElement('td');
+      tdDesc.textContent = desc;
+      tdDesc.style.cssText = 'padding:7px 0;color:var(--muted)';
+
+      tr.appendChild(tdKey);
+      tr.appendChild(tdDesc);
+      table.appendChild(tr);
+    });
+
+    const hint = document.createElement('div');
+    hint.textContent = 'Press ? or Esc to dismiss';
+    hint.style.cssText = 'margin-top:14px;font-size:11px;color:var(--muted);text-align:center';
+
+    box.appendChild(closeBtn);
+    box.appendChild(title);
+    box.appendChild(table);
+    box.appendChild(hint);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+
+    // Close on overlay background click
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) overlay.style.display = 'none';
+    });
+
+    window._hotkeyOverlay = overlay;
+  })();
+
+  function showHotkeyHelp() {
+    const ov = window._hotkeyOverlay;
+    if (!ov) return;
+    ov.style.display = ov.style.display === 'none' ? 'flex' : 'none';
+  }
+
+  // Keyboard shortcuts: 1-9 switch symbols, S toggle sound, T theme, R refresh, ? help
   window.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
     const n = parseInt(e.key);
@@ -4513,6 +4625,15 @@ async function refreshSignalsScanner() {
       selectSymbol(allSymbols[n - 1]);
     } else if (e.key === 's' || e.key === 'S') {
       toggleAlertSound();
+    } else if (e.key === 't' || e.key === 'T') {
+      if (typeof toggleTheme === 'function') toggleTheme();
+    } else if (e.key === 'r' || e.key === 'R') {
+      location.reload();
+    } else if (e.key === '?') {
+      showHotkeyHelp();
+    } else if (e.key === 'Escape') {
+      const ov = window._hotkeyOverlay;
+      if (ov && ov.style.display !== 'none') ov.style.display = 'none';
     }
   });
 })();
