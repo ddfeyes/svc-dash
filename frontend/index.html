@@ -1038,6 +1038,33 @@
     </div>
   </div>
 
+  <!-- Cumulative Funding Cost -->
+  <div class="card" id="card-funding-cost">
+    <h2><span class="card-icon">💸</span>Funding Cost
+      <span style="margin-left:auto;display:flex;gap:4px;">
+        <button onclick="setFundingCostSide('long')" id="fc-btn-long"
+          style="background:var(--bg3);border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:2px 6px;font-size:9px;cursor:pointer;">Long</button>
+        <button onclick="setFundingCostSide('short')" id="fc-btn-short"
+          style="background:var(--bg3);border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:2px 6px;font-size:9px;cursor:pointer;">Short</button>
+      </span>
+    </h2>
+    <div style="display:flex;align-items:baseline;gap:6px;margin-bottom:4px;">
+      <span id="fc-cost" style="font-size:22px;font-weight:700;color:var(--muted);">—</span>
+      <span id="fc-cost-pct" style="font-size:12px;color:var(--muted);"></span>
+    </div>
+    <div id="fc-description" style="font-size:10px;color:var(--muted);margin-bottom:6px;">—</div>
+    <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);">
+      <span>Avg rate: <b id="fc-avg-rate">—</b></span>
+      <span>Latest: <b id="fc-latest-rate">—</b></span>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-top:3px;">
+      Position: <input id="fc-position-input" type="number" value="10000" min="1" step="1000"
+        style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:2px 5px;border-radius:3px;font-size:10px;width:70px;"
+        oninput="refreshFundingCost()" />
+      <span style="margin-left:3px;">USD</span>
+    </div>
+  </div>
+
   <!-- Price Alert -->
   <div class="card" id="card-price-alert">
     <h2><span class="card-icon">🎯</span>Price Alert
@@ -2322,6 +2349,7 @@ function selectSymbol(sym) {
   refreshPriceVelocity();
   refreshCvdDivergence();
   refreshTradeBursts();
+  refreshFundingCost();
   initTape();
 }
 
@@ -4249,6 +4277,60 @@ async function refreshLiqPressure() {
   }
 }
 
+// ── Cumulative Funding Cost Tracker ─────────────────────────────────────────
+let _fundingCostSide = 'long';
+function setFundingCostSide(side) {
+  _fundingCostSide = side;
+  const longBtn = document.getElementById('fc-btn-long');
+  const shortBtn = document.getElementById('fc-btn-short');
+  if (longBtn) longBtn.style.color = side === 'long' ? 'var(--green)' : 'var(--muted)';
+  if (shortBtn) shortBtn.style.color = side === 'short' ? 'var(--red)' : 'var(--muted)';
+  refreshFundingCost();
+}
+
+async function refreshFundingCost() {
+  const enc = encodeURIComponent(currentSymbol);
+  const pos = parseFloat(document.getElementById('fc-position-input')?.value || '10000');
+  const url = `/api/funding-cost?symbol=${enc}&session_hours=8&position_usd=${pos}&side=${_fundingCostSide}`;
+  const data = await fetchJSON(url);
+  if (!data || !data.symbols) return;
+
+  const sym = data.symbols[currentSymbol] || data.symbols[Object.keys(data.symbols)[0]];
+  if (!sym) return;
+
+  const costEl    = document.getElementById('fc-cost');
+  const costPctEl = document.getElementById('fc-cost-pct');
+  const descEl    = document.getElementById('fc-description');
+  const avgEl     = document.getElementById('fc-avg-rate');
+  const latEl     = document.getElementById('fc-latest-rate');
+
+  const cost = sym.total_cost_usd;
+  const favorable = sym.favorable;
+  const color = favorable ? 'var(--green)' : 'var(--red)';
+  const sign = cost < 0 ? '−' : '+';
+
+  if (costEl) {
+    costEl.textContent = `${sign}$${Math.abs(cost).toFixed(4)}`;
+    costEl.style.color = color;
+  }
+  if (costPctEl) {
+    costPctEl.textContent = `(${sign}${Math.abs(sym.total_cost_pct).toFixed(4)}%)`;
+    costPctEl.style.color = color;
+  }
+  if (descEl) {
+    descEl.textContent = sym.description || '—';
+    descEl.style.color = color;
+  }
+  if (avgEl) avgEl.textContent = `${sym.avg_rate_pct > 0 ? '+' : ''}${sym.avg_rate_pct.toFixed(4)}%`;
+  if (latEl) {
+    latEl.textContent = `${sym.latest_rate_pct > 0 ? '+' : ''}${sym.latest_rate_pct.toFixed(4)}%`;
+    latEl.style.color = sym.latest_rate_pct > 0.01 ? 'var(--red)' : sym.latest_rate_pct < -0.01 ? 'var(--green)' : 'var(--muted)';
+  }
+
+  // Update side button highlights
+  setFundingCostSide(_fundingCostSide);  // ensure btn colors correct
+}
+
 // ── Trade Burst Detector ──────────────────────────────────────────────────────
 async function refreshTradeBursts() {
   const enc = encodeURIComponent(currentSymbol);
@@ -5288,6 +5370,8 @@ async function refreshSignalsScanner() {
   setInterval(refreshSymbolSparklines, 30000);  // every 30s
   refreshTradeBursts();
   setInterval(refreshTradeBursts, 5000);  // every 5s — fast
+  refreshFundingCost();
+  setInterval(refreshFundingCost, 60000);  // every 1min
   refreshFreshness();
   setInterval(refreshFreshness, 15000);
   refreshStatsSummary();

@@ -2147,3 +2147,107 @@ async def trade_bursts(
         }
 
     return {"status": "ok", "ts": now, "window_s": window, "burst_window_s": burst_window, "threshold": threshold, "symbols": result}
+
+
+# ── Cumulative Funding Cost Tracker ─────────────────────────────────────────
+
+@router.get("/funding-cost")
+async def funding_cost(
+    symbol: Optional[str] = Query(default=None),
+    session_hours: float = Query(default=8.0, ge=0.1, le=168, description="Session duration in hours (how long you've been in the trade)"),
+    position_usd: float = Query(default=10000.0, ge=1, description="Position size in USD"),
+    side: str = Query(default="long", description="Position side: long or short"),
+):
+    """
+    Cumulative funding cost since session open.
+    - Fetches all funding rate samples in the window
+    - Funding is paid every 8h: sums up intervals * rate * position
+    - Returns cost per symbol, direction, and rate trend
+    """
+    symbols = [symbol] if symbol else get_symbols()
+    now = time.time()
+    since = now - session_hours * 3600
+    result = {}
+
+    for sym in symbols:
+        funding_rows = await get_funding_history(limit=10000, since=since, symbol=sym)
+        if not funding_rows:
+            result[sym] = {
+                "total_cost_usd": 0.0,
+                "total_cost_pct": 0.0,
+                "intervals_counted": 0,
+                "avg_rate": 0.0,
+                "latest_rate": 0.0,
+                "favorable": False,
+                "description": "No funding data in window",
+            }
+            continue
+
+        # Group by exchange and compute per-interval costs
+        # Funding rates are sampled ~every 8h; each sample represents one funding payment
+        # We'll use the actual rate samples weighted by time intervals between them
+        by_exchange = {}
+        for r in funding_rows:
+            ex = r["exchange"]
+            if ex not in by_exchange:
+                by_exchange[ex] = []
+            by_exchange[ex].append(r)
+
+        all_costs = []
+        FUNDING_INTERVAL = 28800  # 8h in seconds
+        for ex, rows in by_exchange.items():
+            rows.sort(key=lambda r: r["ts"])
+            # Deduplicate: snap each row to its 8h funding slot (ts // 28800)
+            seen_slots = {}
+            for row in rows:
+                slot = int(row["ts"] // FUNDING_INTERVAL)
+                # Keep the latest reading for each slot
+                if slot not in seen_slots or row["ts"] > seen_slots[slot]["ts"]:
+                    seen_slots[slot] = row
+            deduped = sorted(seen_slots.values(), key=lambda r: r["ts"])
+
+            # Each deduped row = one funding payment
+            for row in deduped:
+                rate = row.get("rate", 0) or 0
+                # Cost: for long, pay if rate > 0; receive if rate < 0
+                if side == "long":
+                    cost = rate * position_usd
+                else:
+                    cost = -rate * position_usd  # short is opposite
+                all_costs.append(cost)
+
+        total_cost = sum(all_costs)
+        # Count unique 8h funding intervals elapsed
+        intervals_counted = len(set(int(r["ts"] // FUNDING_INTERVAL) for r in funding_rows))
+
+        # Latest rate
+        latest = sorted(funding_rows, key=lambda r: r["ts"])[-1]
+        latest_rate = latest.get("rate", 0) or 0
+
+        # Average rate across all samples
+        rates = [r.get("rate", 0) or 0 for r in funding_rows]
+        avg_rate = sum(rates) / len(rates) if rates else 0
+
+        # Favorable = we're receiving funding (negative cost)
+        favorable = total_cost < 0
+
+        result[sym] = {
+            "total_cost_usd": round(total_cost, 4),
+            "total_cost_pct": round(total_cost / position_usd * 100, 4),
+            "intervals_counted": intervals_counted,
+            "avg_rate": round(avg_rate * 100, 6),
+            "avg_rate_pct": round(avg_rate * 100, 4),
+            "latest_rate": round(latest_rate, 8),
+            "latest_rate_pct": round(latest_rate * 100, 4),
+            "favorable": favorable,
+            "side": side,
+            "position_usd": position_usd,
+            "session_hours": session_hours,
+            "description": (
+                f"{'📥 Receiving' if favorable else '📤 Paying'} ${abs(total_cost):.4f} "
+                f"({'−' if favorable else '+'}{ abs(total_cost/position_usd*100):.4f}%) "
+                f"over {session_hours:.1f}h"
+            ),
+        }
+
+    return {"status": "ok", "ts": now, "symbols": result}
