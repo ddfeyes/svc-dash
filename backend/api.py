@@ -69,6 +69,7 @@ from metrics import (
     compute_volume_bars,
     compute_price_ladder,
     compute_market_microstructure_score,
+    compute_session_stats,
 )
 
 router = APIRouter(prefix="/api")
@@ -4316,12 +4317,24 @@ async def tick_imbalance_endpoint(
     }
 
 
-    result = compute_volume_bars(trades, volume_threshold=volume_threshold)
+@router.get("/session-stats")
+async def session_stats_endpoint(
+    symbol: str = Query(..., description="Symbol e.g. BTCUSDT"),
+    window: int = Query(default=86400, ge=300, le=604800, description="Max lookback in seconds (default 24h)"),
+    session_start: float = Query(default=None, description="Session start Unix timestamp; auto = start of UTC day if omitted"),
+):
+    """
+    Session statistics: total traded volume USD, avg trade size, max single trade,
+    buy/sell ratio, VWAP, price high/low for the current trading session.
+    """
+    since = time.time() - window
+    trades = await get_recent_trades(symbol=symbol, since=since, limit=100000)
+
+    result = compute_session_stats(trades, session_start=session_start)
 
     return {
         "status": "ok",
         "symbol": symbol,
-        "window_seconds": window,
         **result,
     }
 
@@ -4376,6 +4389,15 @@ async def volume_clock_endpoint(
     trades = await get_recent_trades(symbol=symbol, since=since, limit=50000)
 
     result = compute_volume_bars(trades, volume_threshold=volume_threshold)
+
+    return {
+        "status": "ok",
+        "symbol": symbol,
+        "window_seconds": window,
+        **result,
+    }
+
+
 @router.get("/price-ladder")
 async def price_ladder_endpoint(
     symbol: str = Query(..., description="Symbol e.g. BTCUSDT"),

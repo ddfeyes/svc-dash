@@ -3686,3 +3686,129 @@ def compute_market_microstructure_score(
         },
         "weights": norm_weights,
     }
+
+
+def compute_session_stats(trades, session_start=None):
+    """
+    Session statistics: volume, trade size, buy/sell split, VWAP, price range.
+
+    Args:
+        trades:        list of {ts, price, qty, side}
+        session_start: Unix timestamp; trades with ts < session_start are excluded.
+                       If None, uses floor(max_ts / 86400) * 86400 (UTC day of latest trade).
+
+    Returns dict with total_volume_usd, total_qty, trade_count, avg_trade_size_usd,
+    max_trade_usd, max_trade_price, buy/sell split, buy_sell_ratio, timestamps, vwap,
+    price_high, price_low, session_start.
+    """
+    # Resolve session_start
+    if session_start is None:
+        if trades:
+            max_ts = max(float(t["ts"]) for t in trades)
+            session_start = (max_ts // 86400) * 86400
+        else:
+            session_start = 0.0
+
+    session_start = float(session_start)
+
+    # Filter to session window
+    session = [t for t in trades if float(t["ts"]) >= session_start]
+
+    empty = {
+        "total_volume_usd":   0.0,
+        "total_qty":          0.0,
+        "trade_count":        0,
+        "avg_trade_size_usd": 0.0,
+        "max_trade_usd":      0.0,
+        "max_trade_price":    0.0,
+        "buy_volume_usd":     0.0,
+        "sell_volume_usd":    0.0,
+        "buy_qty":            0.0,
+        "sell_qty":           0.0,
+        "buy_sell_ratio":     0.5,
+        "buy_count":          0,
+        "sell_count":         0,
+        "session_start":      session_start,
+        "first_trade_ts":     None,
+        "last_trade_ts":      None,
+        "vwap":               0.0,
+        "price_high":         0.0,
+        "price_low":          0.0,
+    }
+
+    if not session:
+        return empty
+
+    total_vol_usd   = 0.0
+    total_qty       = 0.0
+    buy_vol_usd     = 0.0
+    sell_vol_usd    = 0.0
+    buy_qty         = 0.0
+    sell_qty        = 0.0
+    buy_count       = 0
+    sell_count      = 0
+    max_usd         = 0.0
+    max_price       = 0.0
+    price_high      = 0.0
+    price_low       = float("inf")
+    pv_sum          = 0.0   # sum(price*qty) for VWAP
+
+    timestamps = []
+
+    for t in session:
+        ts    = float(t["ts"])
+        price = float(t["price"])
+        qty   = float(t["qty"])
+        side  = t.get("side", "buy")
+        usd   = price * qty
+
+        total_vol_usd += usd
+        total_qty     += qty
+        pv_sum        += usd
+        timestamps.append(ts)
+
+        if price > price_high:
+            price_high = price
+        if price < price_low:
+            price_low = price
+
+        if usd > max_usd:
+            max_usd   = usd
+            max_price = price
+
+        if side == "buy":
+            buy_vol_usd += usd
+            buy_qty     += qty
+            buy_count   += 1
+        else:
+            sell_vol_usd += usd
+            sell_qty     += qty
+            sell_count   += 1
+
+    n = len(session)
+    avg_usd = total_vol_usd / n if n > 0 else 0.0
+    vwap    = pv_sum / total_qty if total_qty > 0 else 0.0
+    total_both = buy_vol_usd + sell_vol_usd
+    buy_sell_ratio = buy_vol_usd / total_both if total_both > 0 else 0.5
+
+    return {
+        "total_volume_usd":   round(total_vol_usd, 4),
+        "total_qty":          round(total_qty, 8),
+        "trade_count":        n,
+        "avg_trade_size_usd": round(avg_usd, 4),
+        "max_trade_usd":      round(max_usd, 4),
+        "max_trade_price":    round(max_price, 8),
+        "buy_volume_usd":     round(buy_vol_usd, 4),
+        "sell_volume_usd":    round(sell_vol_usd, 4),
+        "buy_qty":            round(buy_qty, 8),
+        "sell_qty":           round(sell_qty, 8),
+        "buy_sell_ratio":     round(buy_sell_ratio, 6),
+        "buy_count":          buy_count,
+        "sell_count":         sell_count,
+        "session_start":      session_start,
+        "first_trade_ts":     min(timestamps),
+        "last_trade_ts":      max(timestamps),
+        "vwap":               round(vwap, 8),
+        "price_high":         round(price_high, 8),
+        "price_low":          round(price_low if price_low != float("inf") else 0.0, 8),
+    }
