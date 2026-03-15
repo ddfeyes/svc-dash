@@ -1,5 +1,6 @@
 """Computed metrics: CVD, volume imbalance, OI momentum, phase classifier — multi-symbol."""
 import asyncio
+import json
 import time
 from typing import Dict, List, Optional
 
@@ -79,6 +80,52 @@ async def compute_cvd(window_seconds: int = 3600, symbol: str = None) -> List[Di
         step = len(result) // 300
         result = result[::step]
 
+    return result
+
+
+def compute_depth_ratio(snapshot: dict, levels: int = 5) -> Optional[float]:
+    """Compute bid/ask depth ratio from the top N price levels of an orderbook snapshot.
+
+    Args:
+        snapshot: dict with ``bids`` and ``asks`` (JSON string or list of [price, qty]).
+        levels:   number of best price levels to sum (default 5).
+
+    Returns:
+        bid_depth / ask_depth, or None if data is invalid / ask depth is zero.
+    """
+    try:
+        raw_bids = snapshot.get("bids")
+        raw_asks = snapshot.get("asks")
+        if raw_bids is None or raw_asks is None:
+            return None
+
+        bids = json.loads(raw_bids) if isinstance(raw_bids, str) else raw_bids
+        asks = json.loads(raw_asks) if isinstance(raw_asks, str) else raw_asks
+    except (ValueError, TypeError):
+        return None
+
+    try:
+        bid_depth = sum(float(b[1]) for b in bids[:levels])
+        ask_depth = sum(float(a[1]) for a in asks[:levels])
+    except (IndexError, TypeError, ValueError):
+        return None
+
+    if ask_depth == 0:
+        return None if bid_depth > 0 else 0.0
+    return round(bid_depth / ask_depth, 6)
+
+
+def compute_depth_ratio_series(snapshots: List[dict], levels: int = 5) -> List[dict]:
+    """Map compute_depth_ratio over an ordered list of orderbook snapshots.
+
+    Snapshots with None ratio (empty asks, malformed data) are excluded.
+    Returns list of {ts, ratio} sorted by ts ascending.
+    """
+    result = []
+    for snap in sorted(snapshots, key=lambda s: s["ts"]):
+        ratio = compute_depth_ratio(snap, levels=levels)
+        if ratio is not None:
+            result.append({"ts": snap["ts"], "ratio": ratio})
     return result
 
 

@@ -655,6 +655,22 @@
     <div id="spread-alert" style="margin-top:6px;font-size:10px;display:none;padding:4px 8px;border-radius:4px;background:rgba(255,80,80,0.15);color:var(--red);"></div>
   </div>
 
+  <!-- Top-of-Book Depth Ratio -->
+  <div class="card">
+    <h2><span class="card-icon">⚖️</span>Depth Ratio (bid5/ask5)
+      <span id="depth-ratio-info" style="margin-left:auto;font-size:10px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;"></span>
+    </h2>
+    <!-- Current ratio gauge -->
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
+      <div style="flex:0 0 auto;text-align:center;min-width:70px;">
+        <div id="depth-ratio-val" style="font-size:22px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--text);">—</div>
+        <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">ratio now</div>
+      </div>
+      <div id="depth-ratio-interp" style="font-size:11px;font-weight:600;color:var(--muted);"></div>
+    </div>
+    <canvas id="chart-depth-ratio" style="height:120px !important;"></canvas>
+  </div>
+
   <!-- Trade Count Rate Chart -->
   <div class="card">
     <h2><span class="card-icon">🔢</span>Trade Rate (trades/min)
@@ -2107,6 +2123,45 @@ let chartLiqHeatmap = null;
   });
 })();
 
+// Depth Ratio rolling line chart
+let chartDepthRatio = null;
+(function initDepthRatioChart() {
+  const ctx = document.getElementById('chart-depth-ratio');
+  if (!ctx) return;
+  chartDepthRatio = new Chart(ctx, {
+    type: 'line',
+    data: { labels: [], datasets: [{
+      label: 'Bid/Ask depth ratio (best 5)',
+      data: [],
+      borderColor: 'rgba(171,125,248,0.9)',
+      backgroundColor: 'rgba(171,125,248,0.08)',
+      borderWidth: 1.5,
+      pointRadius: 0,
+      fill: false,
+      tension: 0.3,
+    }]},
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: ctx => `ratio: ${ctx.parsed.y.toFixed(3)}` } },
+        annotation: { annotations: {
+          balanced: {
+            type: 'line', yMin: 1.0, yMax: 1.0,
+            borderColor: 'rgba(255,255,255,0.2)', borderWidth: 1, borderDash: [4, 4],
+          }
+        }},
+      },
+      scales: {
+        x: { ticks: { color: 'rgba(200,200,200,0.5)', font: { size: 8 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 10 }, grid: { color: 'rgba(255,255,255,0.04)' } },
+        y: { ticks: { color: 'rgba(200,200,200,0.5)', font: { size: 8 }, callback: v => v.toFixed(2) }, grid: { color: 'rgba(255,255,255,0.04)' } },
+      },
+    },
+  });
+})();
+
 // Trade Count Rate area chart
 let chartTradeRate = null;
 (function initTradeRateChart() {
@@ -3067,7 +3122,7 @@ async function refreshAll() {
   if (!activeSymbol) return;
   const sym = encodeURIComponent(activeSymbol);
 
-  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas, volspike, whales, patternLive, patternHist, oiDelta, tradeRate, spreadData, flowImb, liqHeatmap] = await Promise.all([
+  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas, volspike, whales, patternLive, patternHist, oiDelta, tradeRate, spreadData, flowImb, liqHeatmap, depthRatio] = await Promise.all([
     fetchJSON(`/api/cvd/history?window=3600&symbol=${sym}`),
     fetchJSON(`/api/oi/history?limit=300&symbol=${sym}`),
     fetchJSON(`/api/funding/history?limit=200&symbol=${sym}`),
@@ -3086,6 +3141,7 @@ async function refreshAll() {
     fetchJSON(`/api/spread-tracker?window=1800&symbol=${sym}`),
     fetchJSON(`/api/flow-imbalance?window=3600&bucket_size=60&symbol=${sym}`),
     fetchJSON(`/api/liquidation-heatmap?window=3600&time_bucket=300&price_bins=20&symbol=${sym}`),
+    fetchJSON(`/api/depth-ratio?window=600&levels=5&symbol=${sym}`),
   ]);
 
   // CVD + Price dual-axis chart
@@ -3328,6 +3384,38 @@ async function refreshAll() {
     if (infoEl) {
       infoEl.textContent = `total: $${(totalUsd/1000).toFixed(1)}k · longs: $${(longUsd/1000).toFixed(1)}k · shorts: $${(shortUsd/1000).toFixed(1)}k`;
       infoEl.style.color = longUsd > shortUsd ? 'var(--red)' : 'var(--accent)';
+    }
+  }
+
+  // ── Top-of-Book Depth Ratio chart ────────────────────────────────────────
+  if (chartDepthRatio && depthRatio?.series?.length) {
+    const series = depthRatio.series;
+    chartDepthRatio.data.labels = series.map(d => fmtTs(d.ts));
+    chartDepthRatio.data.datasets[0].data = series.map(d => d.ratio);
+    chartDepthRatio.update('none');
+
+    const cur = depthRatio.current_ratio;
+    const interp = depthRatio.interpretation || 'unknown';
+    const valEl   = document.getElementById('depth-ratio-val');
+    const interpEl = document.getElementById('depth-ratio-interp');
+    const infoEl  = document.getElementById('depth-ratio-info');
+
+    if (valEl && cur != null) {
+      valEl.textContent = cur.toFixed(3);
+      valEl.style.color = interp === 'bid_heavy' ? 'var(--green)'
+                        : interp === 'ask_heavy' ? 'var(--red)'
+                        : 'var(--muted)';
+    }
+    if (interpEl) {
+      const labels = { bid_heavy: '▲ Bid-heavy — buyers stacking', ask_heavy: '▼ Ask-heavy — sellers stacking', balanced: '= Balanced' };
+      interpEl.textContent = labels[interp] || '';
+      interpEl.style.color = interp === 'bid_heavy' ? 'var(--green)' : interp === 'ask_heavy' ? 'var(--red)' : 'var(--muted)';
+    }
+    if (infoEl) {
+      const avg = series.reduce((s, d) => s + d.ratio, 0) / series.length;
+      const mn = Math.min(...series.map(d => d.ratio));
+      const mx = Math.max(...series.map(d => d.ratio));
+      infoEl.textContent = `avg: ${avg.toFixed(3)} · min: ${mn.toFixed(3)} · max: ${mx.toFixed(3)}`;
     }
   }
 

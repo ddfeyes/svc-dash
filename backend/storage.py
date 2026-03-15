@@ -528,6 +528,32 @@ async def get_orderbook_history(
             return [dict(r) for r in reversed(rows)]  # chronological
 
 
+async def get_orderbook_snapshots_for_depth_ratio(
+    symbol: str,
+    since: float,
+    limit: int = 2000,
+    exchange: str = None,
+) -> List[Dict]:
+    """Fetch orderbook snapshots for depth ratio computation.
+
+    Returns ts + bids + asks (JSON strings) ordered ascending by ts.
+    Keeps payload small — no full bids/asks needed beyond top 5, but we
+    fetch the stored JSON and let the metric layer slice to N levels.
+    """
+    params: list = [since, symbol]
+    q = "SELECT ts, bids, asks FROM orderbook_snapshots WHERE ts > ? AND symbol = ?"
+    if exchange:
+        q += " AND exchange = ?"
+        params.append(exchange)
+    q += " ORDER BY ts ASC LIMIT ?"
+    params.append(limit)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(q, params) as cur:
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
+
+
 async def get_ohlcv(
     interval_seconds: int = 60,
     window_seconds: int = 3600,

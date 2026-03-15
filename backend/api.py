@@ -18,6 +18,7 @@ from storage import (
     get_funding_history,
     get_recent_liquidations,
     get_orderbook_snapshots_for_heatmap,
+    get_orderbook_snapshots_for_depth_ratio,
     get_ohlcv,
     insert_alert,
     get_alert_history,
@@ -32,6 +33,8 @@ from storage import (
 from metrics import (
     _cvd_delta,
     compute_cvd,
+    compute_depth_ratio,
+    compute_depth_ratio_series,
     compute_liq_heatmap,
     compute_volume_imbalance,
     compute_oi_momentum,
@@ -3323,4 +3326,52 @@ async def liquidation_heatmap(
         "symbol": target,
         "window_seconds": window,
         **heatmap,
+    }
+
+
+@router.get("/depth-ratio")
+async def depth_ratio_endpoint(
+    symbol: Optional[str] = Query(default=None),
+    window: int = Query(default=600, ge=60, le=3600, description="Lookback window in seconds (default 10min)"),
+    levels: int = Query(default=5, ge=1, le=20, description="Number of best price levels to sum"),
+    exchange: Optional[str] = Query(default=None),
+):
+    """
+    Top-of-book depth ratio: bid_depth / ask_depth at best N price levels.
+
+    Returns:
+      current_ratio:  latest snapshot ratio (None if data unavailable)
+      series:         [{ts, ratio}] rolling window — one point per OB snapshot
+      levels:         N used
+      interpretation: "bid_heavy" | "ask_heavy" | "balanced"
+    """
+    target = symbol.upper() if symbol else (get_symbols()[0] if get_symbols() else None)
+    if not target:
+        return {"error": "No symbol available"}
+
+    since = time.time() - window
+    snapshots = await get_orderbook_snapshots_for_depth_ratio(
+        symbol=target, since=since, limit=2000, exchange=exchange,
+    )
+
+    series = compute_depth_ratio_series(snapshots, levels=levels)
+
+    current_ratio = series[-1]["ratio"] if series else None
+    if current_ratio is None:
+        interpretation = "unknown"
+    elif current_ratio > 1.1:
+        interpretation = "bid_heavy"
+    elif current_ratio < 0.9:
+        interpretation = "ask_heavy"
+    else:
+        interpretation = "balanced"
+
+    return {
+        "status": "ok",
+        "symbol": target,
+        "current_ratio": current_ratio,
+        "levels": levels,
+        "interpretation": interpretation,
+        "window_seconds": window,
+        "series": series,
     }
