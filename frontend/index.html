@@ -920,6 +920,25 @@
     <div id="pos-result" style="margin-top:10px;font-size:11px;"></div>
   </div>
 
+  <!-- Trade Journal / P&L Tracker -->
+  <div class="card" id="card-trade-journal">
+    <h2><span class="card-icon">📒</span>Trade Journal
+      <span id="journal-pnl-total" style="margin-left:auto;font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;text-transform:none;letter-spacing:0;"></span>
+    </h2>
+    <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+      <select id="journal-dir" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 6px;border-radius:4px;font-size:11px;">
+        <option value="long">Long</option>
+        <option value="short">Short</option>
+      </select>
+      <input id="journal-entry-price" type="number" step="any" placeholder="Entry price"
+        style="flex:1;min-width:80px;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px;font-size:11px;" />
+      <input id="journal-qty" type="number" step="any" placeholder="Qty (coins)"
+        style="flex:1;min-width:60px;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px;font-size:11px;" />
+      <button onclick="addJournalEntry()" style="background:var(--accent);color:#0e1117;border:none;padding:4px 10px;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">+</button>
+    </div>
+    <div id="journal-list" style="max-height:180px;overflow-y:auto;font-size:11px;"></div>
+  </div>
+
   <!-- Signals Scanner (multi-symbol) -->
   <div class="card wide" id="card-signals-scanner">
     <h2><span class="card-icon">🚦</span>Signals Scanner
@@ -3357,6 +3376,94 @@ function checkPriceAlerts(price) {
   } catch {}
 }
 
+// ── Trade Journal / P&L Tracker ───────────────────────────────────────────────
+let _journalEntries = JSON.parse(localStorage.getItem('trade_journal') || '[]');
+
+function saveJournal() {
+  localStorage.setItem('trade_journal', JSON.stringify(_journalEntries));
+}
+
+function addJournalEntry() {
+  const dir = document.getElementById('journal-dir')?.value;
+  const ep  = parseFloat(document.getElementById('journal-entry-price')?.value);
+  const qty = parseFloat(document.getElementById('journal-qty')?.value);
+  if (!ep || !qty) return;
+
+  _journalEntries.unshift({
+    id: Date.now(),
+    sym: activeSymbol,
+    dir,
+    entry: ep,
+    qty,
+    ts: Date.now(),
+  });
+  saveJournal();
+  document.getElementById('journal-entry-price').value = '';
+  document.getElementById('journal-qty').value = '';
+  renderJournal();
+}
+
+function removeJournalEntry(id) {
+  _journalEntries = _journalEntries.filter(e => e.id !== id);
+  saveJournal();
+  renderJournal();
+}
+
+function renderJournal() {
+  const el = document.getElementById('journal-list');
+  const totalEl = document.getElementById('journal-pnl-total');
+  if (!el) return;
+
+  if (!_journalEntries.length) {
+    el.innerHTML = '<div style="color:var(--muted);text-align:center;padding:12px;">No entries. Log a trade above.</div>';
+    if (totalEl) totalEl.textContent = '';
+    return;
+  }
+
+  const curPrices = {};
+  // Use last known prices from multiOverviewData
+  for (const sym of allSymbols) {
+    if (multiOverviewData[sym]?.price) curPrices[sym] = multiOverviewData[sym].price;
+  }
+  // Override with current WS price for active
+  const livePrice = parseFloat(document.getElementById('price-display')?.textContent?.replace(/[^0-9.]/g,''));
+  if (activeSymbol && livePrice) curPrices[activeSymbol] = livePrice;
+
+  let totalPnl = 0;
+  const rows = _journalEntries.map(e => {
+    const curP = curPrices[e.sym];
+    let pnlStr = '—', pnlColor = 'var(--muted)';
+    let pnl = null;
+    if (curP) {
+      pnl = e.dir === 'long'
+        ? (curP - e.entry) * e.qty
+        : (e.entry - curP) * e.qty;
+      totalPnl += pnl;
+      const pnlPct = (e.dir === 'long' ? (curP - e.entry) : (e.entry - curP)) / e.entry * 100;
+      pnlColor = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+      pnlStr = `${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)`;
+    }
+    const sym = e.sym?.replace('USDT','') || '?';
+    const ts = new Date(e.ts).toLocaleTimeString();
+    const dirColor = e.dir === 'long' ? 'var(--green)' : 'var(--red)';
+    return `<div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid var(--border);">
+      <span style="color:var(--muted);font-size:9px;min-width:55px;">${ts}</span>
+      <span style="color:${dirColor};font-weight:700;min-width:35px;">${sym} ${e.dir.toUpperCase()}</span>
+      <span style="color:var(--muted);flex:1;">@${e.entry.toPrecision(4)} × ${e.qty}</span>
+      <span style="color:${pnlColor};font-weight:${pnl != null && Math.abs(pnl) > 0 ? '700' : '400'};">${pnlStr}</span>
+      <button onclick="removeJournalEntry(${e.id})" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px;padding:0 2px;">×</button>
+    </div>`;
+  });
+
+  el.innerHTML = rows.join('');
+
+  if (totalEl) {
+    const tColor = totalPnl >= 0 ? 'var(--green)' : 'var(--red)';
+    totalEl.style.color = tColor;
+    totalEl.textContent = `Total: ${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)}`;
+  }
+}
+
 // ── Position Sizing Calculator ────────────────────────────────────────────────
 let _lastAtr = null;
 
@@ -3696,6 +3803,8 @@ async function refreshSignalsScanner() {
   setInterval(refreshCvdMomentum, 10000);
   refreshAtr();
   setInterval(refreshAtr, 60000);
+  renderJournal();
+  setInterval(renderJournal, 5000);
   refreshSignalsScanner();
   setInterval(refreshSignalsScanner, 15000);
   refreshMarketRegime();
