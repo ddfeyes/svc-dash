@@ -2066,3 +2066,84 @@ async def cvd_divergence_endpoint(
             }
 
     return {"status": "ok", "ts": now, "window_s": window, "symbols": result}
+
+
+# ── Trade Momentum Burst Detector ────────────────────────────────────────────
+
+@router.get("/trade-bursts")
+async def trade_bursts(
+    symbol: Optional[str] = Query(default=None),
+    window: int = Query(default=60, ge=10, le=300, description="Total lookback window in seconds"),
+    burst_window: int = Query(default=5, ge=1, le=30, description="Burst detection window in seconds"),
+    threshold: int = Query(default=10, ge=3, le=100, description="Min trades in burst_window to count as burst"),
+):
+    """
+    Detect trade momentum bursts: periods with >threshold trades in burst_window seconds.
+    Returns detected bursts + current rate (trades/sec in last 10s).
+    """
+    symbols = [symbol] if symbol else get_symbols()
+    now = time.time()
+    result = {}
+
+    for sym in symbols:
+        trades = await get_recent_trades(limit=5000, since=now - window, symbol=sym)
+        if not trades:
+            result[sym] = {"burst_active": False, "burst_count": 0, "rate_now": 0.0, "bursts": []}
+            continue
+
+        trades.sort(key=lambda t: t.get("ts", 0))
+        timestamps = [t["ts"] for t in trades]
+
+        # Sliding window burst detection
+        bursts = []
+        i = 0
+        while i < len(timestamps):
+            ts_start = timestamps[i]
+            ts_end = ts_start + burst_window
+            j = i
+            while j < len(timestamps) and timestamps[j] <= ts_end:
+                j += 1
+            count = j - i
+            if count >= threshold:
+                # Collect burst info
+                burst_trades = trades[i:j]
+                buy_vol  = sum((t.get("price",0) or 0)*(t.get("qty",0) or 0) for t in burst_trades if t.get("side")=="buy")
+                sell_vol = sum((t.get("price",0) or 0)*(t.get("qty",0) or 0) for t in burst_trades if t.get("side")=="sell")
+                direction = "buy" if buy_vol > sell_vol else "sell"
+                bursts.append({
+                    "ts_start": round(ts_start, 2),
+                    "ts_end": round(timestamps[j-1], 2),
+                    "trade_count": count,
+                    "rate_per_sec": round(count / burst_window, 2),
+                    "buy_vol": round(buy_vol, 2),
+                    "sell_vol": round(sell_vol, 2),
+                    "direction": direction,
+                })
+                i = j  # skip past this burst
+            else:
+                i += 1
+
+        # Current rate: trades in last 10 seconds
+        recent_ts = now - 10
+        recent_count = sum(1 for t in timestamps if t >= recent_ts)
+        rate_now = round(recent_count / 10, 2)
+
+        # Is a burst active right now?
+        burst_active = False
+        if timestamps:
+            last_10s = [t for t in timestamps if t >= now - burst_window]
+            burst_active = len(last_10s) >= threshold
+
+        # Latest burst
+        latest_burst = bursts[-1] if bursts else None
+
+        result[sym] = {
+            "burst_active": burst_active,
+            "burst_count": len(bursts),
+            "rate_now": rate_now,
+            "current_burst_trades": len([t for t in timestamps if t >= now - burst_window]),
+            "bursts": bursts[-5:],  # last 5 bursts
+            "latest_burst": latest_burst,
+        }
+
+    return {"status": "ok", "ts": now, "window_s": window, "burst_window_s": burst_window, "threshold": threshold, "symbols": result}

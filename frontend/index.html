@@ -746,6 +746,19 @@
       <div id="div-severity" style="margin-top:5px;"></div>
     </div>
 
+    <div id="alert-trade-bursts" class="alert-box">
+      <div class="alert-label" style="display:flex;align-items:center;gap:6px;">
+        ⚡ TRADE BURST DETECTOR
+        <span id="burst-active-badge" style="display:none;padding:1px 6px;border-radius:10px;font-size:9px;font-weight:700;background:var(--accent);color:#000;">BURST!</span>
+      </div>
+      <div style="display:flex;align-items:baseline;gap:8px;margin-top:4px;">
+        <span id="burst-rate" style="font-size:20px;font-weight:700;color:var(--muted);">0.0</span>
+        <span style="font-size:10px;color:var(--muted);">trades/sec (10s)</span>
+      </div>
+      <div id="burst-detail" style="font-size:10px;color:var(--muted);margin-top:2px;">—</div>
+      <div id="burst-history" style="margin-top:6px;font-size:10px;color:var(--muted);"></div>
+    </div>
+
     <div id="alert-cvd-divergence" class="alert-box">
       <div class="alert-label" style="display:flex;align-items:center;gap:6px;">
         📈 CVD NEW-HIGH DIVERGENCE
@@ -2308,6 +2321,7 @@ function selectSymbol(sym) {
   refreshLiqPressure();
   refreshPriceVelocity();
   refreshCvdDivergence();
+  refreshTradeBursts();
   initTape();
 }
 
@@ -4235,6 +4249,57 @@ async function refreshLiqPressure() {
   }
 }
 
+// ── Trade Burst Detector ──────────────────────────────────────────────────────
+async function refreshTradeBursts() {
+  const enc = encodeURIComponent(currentSymbol);
+  const data = await fetchJSON(`/api/trade-bursts?symbol=${enc}&window=60&burst_window=5&threshold=10`);
+  const box = document.getElementById('alert-trade-bursts');
+  if (!data || !data.symbols || !box) return;
+
+  const sym = data.symbols[currentSymbol] || data.symbols[Object.keys(data.symbols)[0]];
+  if (!sym) return;
+
+  const rateEl   = document.getElementById('burst-rate');
+  const detailEl = document.getElementById('burst-detail');
+  const histEl   = document.getElementById('burst-history');
+  const badgeEl  = document.getElementById('burst-active-badge');
+
+  if (rateEl) {
+    rateEl.textContent = sym.rate_now.toFixed(1);
+    rateEl.style.color = sym.burst_active ? 'var(--accent)' : sym.rate_now > 1 ? 'var(--text)' : 'var(--muted)';
+  }
+
+  if (badgeEl) {
+    badgeEl.style.display = sym.burst_active ? 'inline-block' : 'none';
+    if (sym.latest_burst) {
+      const dir = sym.latest_burst.direction;
+      badgeEl.style.background = dir === 'buy' ? 'var(--green)' : 'var(--red)';
+      badgeEl.textContent = dir === 'buy' ? '🟢 BUY BURST!' : '🔴 SELL BURST!';
+    }
+  }
+
+  if (detailEl) {
+    const parts = [];
+    if (sym.burst_count > 0) parts.push(`${sym.burst_count} burst${sym.burst_count !== 1 ? 's' : ''} in 60s`);
+    if (sym.current_burst_trades > 0) parts.push(`${sym.current_burst_trades} trades/5s now`);
+    detailEl.textContent = parts.join('  ·  ') || 'No bursts detected';
+  }
+
+  if (histEl && sym.bursts?.length > 0) {
+    histEl.innerHTML = sym.bursts.slice().reverse().map(b => {
+      const t = new Date(b.ts_start * 1000).toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+      const dir = b.direction;
+      const c = dir === 'buy' ? 'var(--green)' : 'var(--red)';
+      const arrow = dir === 'buy' ? '▲' : '▼';
+      return `<div style="display:flex;justify-content:space-between;"><span style="color:${c}">${arrow} ${b.trade_count}T/${b.rate_per_sec.toFixed(1)}/s</span><span style="color:var(--muted)">${t}</span></div>`;
+    }).join('');
+  } else if (histEl) {
+    histEl.innerHTML = '';
+  }
+
+  box.className = sym.burst_active ? 'alert-box active' : 'alert-box';
+}
+
 // ── CVD New-High Divergence ───────────────────────────────────────────────────
 async function refreshCvdDivergence() {
   const enc = encodeURIComponent(currentSymbol);
@@ -5221,6 +5286,8 @@ async function refreshSignalsScanner() {
   setInterval(refreshCvdDivergence, 20000);  // every 20s
   refreshSymbolSparklines();
   setInterval(refreshSymbolSparklines, 30000);  // every 30s
+  refreshTradeBursts();
+  setInterval(refreshTradeBursts, 5000);  // every 5s — fast
   refreshFreshness();
   setInterval(refreshFreshness, 15000);
   refreshStatsSummary();
