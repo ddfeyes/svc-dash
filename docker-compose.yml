@@ -12,6 +12,7 @@ services:
       - ${HOME}/.lain-secrets/.env:/secrets/.env:ro
     environment:
       - DOTENV_PATH=/secrets/.env
+      - SYMBOLS=BANANAS31USDT,COSUSDT,DEXEUSDT,LYNUSDT
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/metrics/summary"]
       interval: 30s

@@ -1,4 +1,4 @@
-"""SQLite storage layer using aiosqlite."""
+"""SQLite storage layer using aiosqlite — multi-symbol."""
 import aiosqlite
 import asyncio
 import os
@@ -91,10 +91,15 @@ async def init_db():
 
         # Indexes for time-range queries
         await db.execute("CREATE INDEX IF NOT EXISTS idx_ob_ts ON orderbook_snapshots(ts)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_ob_sym ON orderbook_snapshots(symbol, ts)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_trades_ts ON trades(ts)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_trades_sym ON trades(symbol, ts)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_oi_ts ON open_interest(ts)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_oi_sym ON open_interest(symbol, ts)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_fr_ts ON funding_rate(ts)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_fr_sym ON funding_rate(symbol, ts)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_liq_ts ON liquidations(ts)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_liq_sym ON liquidations(symbol, ts)")
 
         await db.commit()
 
@@ -164,12 +169,48 @@ async def insert_liquidation(exchange: str, symbol: str, side: str, price: float
         await db.commit()
 
 
-async def get_latest_orderbook(exchange: str = None, limit: int = 1) -> List[Dict]:
+def _build_query(base: str, filters: list, order: str, limit: int) -> tuple:
+    """Helper to build parameterized queries."""
+    params = []
+    where_parts = []
+    for col, val in filters:
+        if val is not None:
+            where_parts.append(f"{col} = ?")
+            params.append(val)
+    if where_parts:
+        base += " WHERE " + " AND ".join(where_parts)
+    base += f" {order} LIMIT ?"
+    params.append(limit)
+    return base, params
+
+
+def _build_query_with_since(base: str, since: float, symbol: Optional[str], order: str, limit: int) -> tuple:
+    params = [since]
+    q = base + " WHERE ts > ?"
+    if symbol:
+        q += " AND symbol = ?"
+        params.append(symbol)
+    q += f" {order} LIMIT ?"
+    params.append(limit)
+    return q, params
+
+
+async def get_latest_orderbook(
+    exchange: str = None,
+    symbol: str = None,
+    limit: int = 1
+) -> List[Dict]:
     q = "SELECT * FROM orderbook_snapshots"
     params = []
+    where = []
     if exchange:
-        q += " WHERE exchange = ?"
+        where.append("exchange = ?")
         params.append(exchange)
+    if symbol:
+        where.append("symbol = ?")
+        params.append(symbol)
+    if where:
+        q += " WHERE " + " AND ".join(where)
     q += " ORDER BY ts DESC LIMIT ?"
     params.append(limit)
     async with aiosqlite.connect(DB_PATH) as db:
@@ -179,14 +220,15 @@ async def get_latest_orderbook(exchange: str = None, limit: int = 1) -> List[Dic
             return [dict(r) for r in rows]
 
 
-async def get_recent_trades(limit: int = 100, since: float = None) -> List[Dict]:
-    q = "SELECT * FROM trades"
-    params = []
-    if since:
-        q += " WHERE ts > ?"
-        params.append(since)
-    q += " ORDER BY ts DESC LIMIT ?"
-    params.append(limit)
+async def get_recent_trades(
+    limit: int = 100,
+    since: float = None,
+    symbol: str = None,
+) -> List[Dict]:
+    since = since or (time.time() - 300)
+    q, params = _build_query_with_since(
+        "SELECT * FROM trades", since, symbol, "ORDER BY ts DESC", limit
+    )
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(q, params) as cur:
@@ -194,49 +236,64 @@ async def get_recent_trades(limit: int = 100, since: float = None) -> List[Dict]
             return [dict(r) for r in rows]
 
 
-async def get_oi_history(limit: int = 300, since: float = None) -> List[Dict]:
+async def get_oi_history(
+    limit: int = 300,
+    since: float = None,
+    symbol: str = None,
+) -> List[Dict]:
     since = since or (time.time() - 3600)
+    q, params = _build_query_with_since(
+        "SELECT * FROM open_interest", since, symbol, "ORDER BY ts ASC", limit
+    )
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT * FROM open_interest WHERE ts > ? ORDER BY ts ASC LIMIT ?",
-            (since, limit)
-        ) as cur:
+        async with db.execute(q, params) as cur:
             rows = await cur.fetchall()
             return [dict(r) for r in rows]
 
 
-async def get_funding_history(limit: int = 100, since: float = None) -> List[Dict]:
+async def get_funding_history(
+    limit: int = 100,
+    since: float = None,
+    symbol: str = None,
+) -> List[Dict]:
     since = since or (time.time() - 86400)
+    q, params = _build_query_with_since(
+        "SELECT * FROM funding_rate", since, symbol, "ORDER BY ts ASC", limit
+    )
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT * FROM funding_rate WHERE ts > ? ORDER BY ts ASC LIMIT ?",
-            (since, limit)
-        ) as cur:
+        async with db.execute(q, params) as cur:
             rows = await cur.fetchall()
             return [dict(r) for r in rows]
 
 
-async def get_recent_liquidations(limit: int = 50, since: float = None) -> List[Dict]:
+async def get_recent_liquidations(
+    limit: int = 50,
+    since: float = None,
+    symbol: str = None,
+) -> List[Dict]:
     since = since or (time.time() - 3600)
+    q, params = _build_query_with_since(
+        "SELECT * FROM liquidations", since, symbol, "ORDER BY ts DESC", limit
+    )
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT * FROM liquidations WHERE ts > ? ORDER BY ts DESC LIMIT ?",
-            (since, limit)
-        ) as cur:
+        async with db.execute(q, params) as cur:
             rows = await cur.fetchall()
             return [dict(r) for r in rows]
 
 
-async def get_trades_for_cvd(since: float) -> List[Dict]:
+async def get_trades_for_cvd(since: float, symbol: str = None) -> List[Dict]:
+    params: list = [since]
+    q = "SELECT ts, price, qty, side FROM trades WHERE ts > ?"
+    if symbol:
+        q += " AND symbol = ?"
+        params.append(symbol)
+    q += " ORDER BY ts ASC"
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT ts, price, qty, side FROM trades WHERE ts > ? ORDER BY ts ASC",
-            (since,)
-        ) as cur:
+        async with db.execute(q, params) as cur:
             rows = await cur.fetchall()
             return [dict(r) for r in rows]
 
@@ -244,7 +301,7 @@ async def get_trades_for_cvd(since: float) -> List[Dict]:
 async def cleanup_old_data(max_age_seconds: int = 86400 * 7):
     cutoff = time.time() - max_age_seconds
     async with aiosqlite.connect(DB_PATH) as db:
-        for table in ["orderbook_snapshots", "trades", "open_interest", "funding_rate", "liquidations"]:
+        for table in ["trades", "open_interest", "funding_rate", "liquidations"]:
             await db.execute(f"DELETE FROM {table} WHERE ts < ?", (cutoff,))
         # Keep orderbook more recent (1 hour)
         await db.execute("DELETE FROM orderbook_snapshots WHERE ts < ?", (time.time() - 3600,))
