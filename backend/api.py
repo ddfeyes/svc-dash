@@ -1885,3 +1885,82 @@ async def liq_pressure(
         }
 
     return {"status": "ok", "ts": now, "symbols": result}
+
+
+# ── Price Velocity Indicator ──────────────────────────────────────────────────
+
+@router.get("/price-velocity")
+async def price_velocity(
+    symbol: Optional[str] = Query(default=None),
+    short_window: int = Query(default=10, ge=5, le=60, description="Short window (seconds) for instant velocity"),
+    long_window: int = Query(default=60, ge=15, le=300, description="Long window (seconds) for trend velocity"),
+):
+    """
+    Price velocity: rate of price change in $/second (and %/second).
+    Returns instant velocity (short_window) + trend velocity (long_window).
+    Also returns a normalized -100 to +100 score for a speedometer needle.
+    """
+    symbols = [symbol] if symbol else get_symbols()
+    now = time.time()
+    result = {}
+
+    for sym in symbols:
+        # Fetch trades for long window
+        trades = await get_recent_trades(limit=2000, since=now - long_window, symbol=sym)
+        if not trades:
+            result[sym] = {
+                "instant_velocity": 0.0,
+                "trend_velocity": 0.0,
+                "instant_pct_per_sec": 0.0,
+                "trend_pct_per_sec": 0.0,
+                "score": 0,
+                "direction": "flat",
+                "price_now": None,
+            }
+            continue
+
+        # Sort by timestamp
+        trades.sort(key=lambda t: t.get("ts", 0))
+
+        now_ts = trades[-1]["ts"]
+        price_now = trades[-1].get("price", 0) or 0
+
+        # Instant velocity: short window
+        cutoff_short = now_ts - short_window
+        short_trades = [t for t in trades if t.get("ts", 0) >= cutoff_short]
+        if len(short_trades) >= 2:
+            p_start = short_trades[0]["price"] or 0
+            p_end = short_trades[-1]["price"] or 0
+            dt = short_trades[-1]["ts"] - short_trades[0]["ts"]
+            inst_vel = (p_end - p_start) / dt if dt > 0 else 0.0
+            inst_pct = (inst_vel / p_start * 100) if p_start else 0.0
+        else:
+            inst_vel = 0.0
+            inst_pct = 0.0
+
+        # Trend velocity: long window
+        p_start_long = trades[0]["price"] or 0
+        p_end_long = trades[-1]["price"] or 0
+        dt_long = trades[-1]["ts"] - trades[0]["ts"]
+        trend_vel = (p_end_long - p_start_long) / dt_long if dt_long > 0 else 0.0
+        trend_pct = (trend_vel / p_start_long * 100) if p_start_long else 0.0
+
+        # Normalize to -100..+100 score based on %/sec (cap at ±0.1%/sec)
+        MAX_PCT_PER_SEC = 0.05  # 0.05%/s = extreme
+        score = max(-100, min(100, round(inst_pct / MAX_PCT_PER_SEC * 100)))
+
+        direction = "up" if score > 5 else ("down" if score < -5 else "flat")
+
+        result[sym] = {
+            "instant_velocity": round(inst_vel, 8),
+            "trend_velocity": round(trend_vel, 8),
+            "instant_pct_per_sec": round(inst_pct, 6),
+            "trend_pct_per_sec": round(trend_pct, 6),
+            "score": score,
+            "direction": direction,
+            "price_now": round(price_now, 8),
+            "short_window_s": short_window,
+            "long_window_s": long_window,
+        }
+
+    return {"status": "ok", "ts": now, "symbols": result}

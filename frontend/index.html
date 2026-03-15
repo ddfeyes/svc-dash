@@ -1041,6 +1041,42 @@
   </div>
 
   <!-- CVD Momentum -->
+  <!-- Price Velocity Speedometer -->
+  <div class="card" id="card-price-velocity">
+    <h2><span class="card-icon">⚡</span>Price Velocity</h2>
+    <div style="display:flex;align-items:center;gap:14px;">
+      <!-- Speedometer SVG -->
+      <div style="position:relative;width:90px;height:52px;flex-shrink:0;">
+        <svg viewBox="0 0 120 70" width="90" height="52" style="overflow:visible;">
+          <!-- Background arc segments: blue(left) gray(center) red(right) -->
+          <path d="M10,65 A50,50 0 0,1 60,15" fill="none" stroke="#1565c0" stroke-width="10" stroke-linecap="butt" opacity="0.4"/>
+          <path d="M60,15 A50,50 0 0,1 110,65" fill="none" stroke="#b71c1c" stroke-width="10" stroke-linecap="butt" opacity="0.4"/>
+          <!-- Center band -->
+          <path d="M35,22 A50,50 0 0,1 85,22" fill="none" stroke="#2a2a3a" stroke-width="10" stroke-linecap="butt"/>
+          <!-- Tick marks -->
+          <line x1="10" y1="65" x2="14" y2="61" stroke="#555" stroke-width="1.5"/>
+          <line x1="60" y1="15" x2="60" y2="20" stroke="#555" stroke-width="1.5"/>
+          <line x1="110" y1="65" x2="106" y2="61" stroke="#555" stroke-width="1.5"/>
+          <!-- Needle -->
+          <line id="pv-needle" x1="60" y1="65" x2="60" y2="20"
+            stroke="#fff" stroke-width="2.5" stroke-linecap="round"
+            style="transform-origin:60px 65px;transform:rotate(0deg);transition:transform 0.4s ease;"/>
+          <circle cx="60" cy="65" r="4" fill="#fff"/>
+          <!-- Score text -->
+          <text id="pv-score-text" x="60" y="60" text-anchor="middle"
+            font-size="9" fill="rgba(255,255,255,0.6)">0</text>
+        </svg>
+      </div>
+      <div style="flex:1;min-width:0;">
+        <div id="pv-direction" style="font-size:18px;font-weight:700;color:var(--muted);">FLAT</div>
+        <div id="pv-instant" style="font-size:11px;color:var(--muted);margin-top:2px;">—</div>
+        <div id="pv-trend" style="font-size:10px;color:var(--muted);margin-top:1px;">trend —</div>
+      </div>
+    </div>
+    <!-- Per-symbol velocity bars -->
+    <div id="pv-symbol-bars" style="margin-top:8px;display:flex;flex-direction:column;gap:3px;"></div>
+  </div>
+
   <div class="card" id="card-cvd-momentum">
     <h2><span class="card-icon">🌊</span>CVD Momentum
       <span id="cvd-mom-window-btns" style="margin-left:auto;display:flex;gap:4px;">
@@ -2259,6 +2295,7 @@ function selectSymbol(sym) {
   loadPhaseTimeline();
   refreshOiMcap();
   refreshLiqPressure();
+  refreshPriceVelocity();
   initTape();
 }
 
@@ -4148,6 +4185,93 @@ async function refreshLiqPressure() {
   }
 }
 
+// ── Price Velocity Speedometer ────────────────────────────────────────────────
+async function refreshPriceVelocity() {
+  const enc = encodeURIComponent(currentSymbol);
+  const data = await fetchJSON(`/api/price-velocity?symbol=${enc}&short_window=10&long_window=60`);
+  if (!data || !data.symbols) return;
+
+  const allData = data.symbols;
+  const sym = allData[currentSymbol] || allData[Object.keys(allData)[0]];
+  if (!sym) return;
+
+  const score = sym.score || 0;  // -100 to +100
+  const direction = sym.direction || 'flat';
+  const instPct = sym.instant_pct_per_sec || 0;
+  const trendPct = sym.trend_pct_per_sec || 0;
+
+  const dirColors = { up: 'var(--green)', down: 'var(--red)', flat: 'var(--muted)' };
+  const color = dirColors[direction] || 'var(--muted)';
+
+  // Direction label
+  const dirEl = document.getElementById('pv-direction');
+  if (dirEl) {
+    const arrows = { up: '▲ UP', down: '▼ DOWN', flat: '— FLAT' };
+    dirEl.textContent = arrows[direction] || 'FLAT';
+    dirEl.style.color = color;
+  }
+
+  // Instant velocity text
+  const instEl = document.getElementById('pv-instant');
+  if (instEl) {
+    const sign = instPct > 0 ? '+' : '';
+    instEl.textContent = `${sign}${(instPct * 1000).toFixed(3)}‰/s (10s)`;
+    instEl.style.color = color;
+  }
+
+  // Trend velocity text
+  const trendEl = document.getElementById('pv-trend');
+  if (trendEl) {
+    const sign = trendPct > 0 ? '+' : '';
+    trendEl.textContent = `trend ${sign}${(trendPct * 1000).toFixed(3)}‰/s (60s)`;
+    trendEl.style.color = trendPct > 0 ? 'rgba(129,199,132,0.7)' : (trendPct < 0 ? 'rgba(239,83,80,0.7)' : 'var(--muted)');
+  }
+
+  // Rotate needle: score -100=left(-90°), 0=up(0°), +100=right(+90°)
+  const needleEl = document.getElementById('pv-needle');
+  if (needleEl) {
+    const deg = (score / 100) * 90;
+    needleEl.style.transform = `rotate(${deg}deg)`;
+    needleEl.setAttribute('stroke', color);
+  }
+
+  // Score text
+  const scoreTextEl = document.getElementById('pv-score-text');
+  if (scoreTextEl) scoreTextEl.textContent = score;
+
+  // Per-symbol bars
+  const barsEl = document.getElementById('pv-symbol-bars');
+  if (barsEl) {
+    const syms = Object.entries(allData);
+    if (syms.length > 1) {
+      barsEl.innerHTML = syms.map(([s, d]) => {
+        const sc = d.score || 0;
+        const dir = d.direction || 'flat';
+        const c = dirColors[dir] || 'var(--muted)';
+        const shortSym = s.replace('USDT','');
+        // Center bar: left half = negative (red), right half = positive (green)
+        const pct = Math.abs(sc) / 2;  // 0-50% of half-width
+        const isNeg = sc < 0;
+        return `<div style="display:flex;align-items:center;gap:6px;font-size:10px;">
+          <span style="width:48px;color:var(--muted)">${shortSym}</span>
+          <div style="flex:1;height:4px;background:var(--bg3);border-radius:2px;overflow:hidden;display:flex;">
+            <div style="width:50%;display:flex;justify-content:flex-end;">
+              <div style="width:${isNeg ? pct*2 : 0}%;height:100%;background:var(--red);border-radius:2px 0 0 2px;transition:width 0.4s;"></div>
+            </div>
+            <div style="width:1px;background:var(--border);"></div>
+            <div style="width:50%;">
+              <div style="width:${!isNeg ? pct*2 : 0}%;height:100%;background:var(--green);border-radius:0 2px 2px 0;transition:width 0.4s;"></div>
+            </div>
+          </div>
+          <span style="width:28px;text-align:right;color:${c}">${sc > 0 ? '+' : ''}${sc}</span>
+        </div>`;
+      }).join('');
+    } else {
+      barsEl.innerHTML = '';
+    }
+  }
+}
+
 // ── 24h Stats Summary ─────────────────────────────────────────────────────────
 async function refreshStatsSummary() {
   const el = document.getElementById('stats-summary-content');
@@ -4990,6 +5114,8 @@ async function refreshSignalsScanner() {
   setInterval(refreshOiMcap, 120000);  // 2min — CoinGecko free tier rate limit
   refreshLiqPressure();
   setInterval(refreshLiqPressure, 15000);  // every 15s
+  refreshPriceVelocity();
+  setInterval(refreshPriceVelocity, 5000);  // every 5s — fast indicator
   refreshFreshness();
   setInterval(refreshFreshness, 15000);
   refreshStatsSummary();
