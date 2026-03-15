@@ -153,6 +153,57 @@ async def classify_market_phase(symbol: str = None) -> Dict:
     }
 
 
+async def detect_oi_spike(window_seconds: int = 300, threshold_pct: float = 3.0, symbol: str = None) -> Dict:
+    """
+    OI spike detector: if OI changes >threshold_pct in window, alert.
+    """
+    since = time.time() - window_seconds
+    oi_data = await get_oi_history(limit=500, since=since, symbol=symbol)
+
+    if len(oi_data) < 2:
+        return {"spike": False, "exchanges": {}, "description": "Insufficient OI data"}
+
+    exchanges = {}
+    for row in oi_data:
+        ex = row["exchange"]
+        if ex not in exchanges:
+            exchanges[ex] = []
+        exchanges[ex].append({"ts": row["ts"], "oi": row["oi_value"]})
+
+    results = {}
+    spikes = []
+    for ex, rows in exchanges.items():
+        if len(rows) < 2:
+            continue
+        oi_start = rows[0]["oi"]
+        oi_end = rows[-1]["oi"]
+        if oi_start == 0:
+            continue
+        pct = (oi_end - oi_start) / oi_start * 100
+        direction = "up" if pct > 0 else "down"
+        is_spike = abs(pct) >= threshold_pct
+        results[ex] = {
+            "oi_start": round(oi_start, 2),
+            "oi_end": round(oi_end, 2),
+            "pct_change": round(pct, 4),
+            "direction": direction,
+            "spike": is_spike,
+        }
+        if is_spike:
+            spikes.append(f"{ex}: OI {direction} {abs(pct):.2f}%")
+
+    overall_spike = len(spikes) > 0
+    description = " | ".join(spikes) if spikes else "OI stable"
+
+    return {
+        "spike": overall_spike,
+        "exchanges": results,
+        "description": description,
+        "threshold_pct": threshold_pct,
+        "window_seconds": window_seconds,
+    }
+
+
 async def detect_delta_divergence(window_seconds: int = 300, symbol: str = None) -> Dict:
     """
     Delta divergence: price moving up but CVD moving down (or vice versa).
@@ -247,96 +298,6 @@ async def detect_large_trades(window_seconds: int = 300, min_usd: float = 10000,
     }
 
 
-async def compute_volume_profile(window_seconds: int = 3600, bins: int = 50, symbol: str = None) -> Dict:
-    """
-    Volume Profile: aggregate traded volume by price level.
-    Returns POC (Point of Control), VAH (Value Area High), VAL (Value Area Low),
-    and the full histogram of bins.
-    """
-    since = time.time() - window_seconds
-    trades = await get_trades_for_cvd(since, symbol=symbol)
-
-    if not trades:
-        return {"poc": None, "vah": None, "val": None, "bins": [], "total_volume": 0}
-
-    prices = [t["price"] for t in trades]
-    min_p, max_p = min(prices), max(prices)
-
-    if min_p == max_p:
-        return {
-            "poc": min_p,
-            "vah": min_p,
-            "val": min_p,
-            "bins": [{"price": min_p, "volume": sum(t["qty"] for t in trades), "buy_vol": 0, "sell_vol": 0}],
-            "total_volume": sum(t["qty"] for t in trades),
-        }
-
-    bin_size = (max_p - min_p) / bins
-
-    # Build histogram
-    histogram = {}
-    for t in trades:
-        bin_idx = min(int((t["price"] - min_p) / bin_size), bins - 1)
-        if bin_idx not in histogram:
-            histogram[bin_idx] = {"volume": 0.0, "buy_vol": 0.0, "sell_vol": 0.0}
-        histogram[bin_idx]["volume"] += t["qty"]
-        if t["side"] in ("buy", "Buy"):
-            histogram[bin_idx]["buy_vol"] += t["qty"]
-        else:
-            histogram[bin_idx]["sell_vol"] += t["qty"]
-
-    # Fill gaps and sort
-    full_hist = []
-    for i in range(bins):
-        p = min_p + (i + 0.5) * bin_size
-        h = histogram.get(i, {"volume": 0.0, "buy_vol": 0.0, "sell_vol": 0.0})
-        full_hist.append({
-            "price": round(p, 8),
-            "volume": round(h["volume"], 6),
-            "buy_vol": round(h["buy_vol"], 6),
-            "sell_vol": round(h["sell_vol"], 6),
-        })
-
-    total_vol = sum(h["volume"] for h in full_hist)
-
-    # POC: highest volume bin
-    poc_entry = max(full_hist, key=lambda h: h["volume"])
-    poc = poc_entry["price"]
-
-    # Value Area: 70% of total volume centered on POC
-    target = total_vol * 0.70
-    poc_idx = full_hist.index(poc_entry)
-    accumulated = poc_entry["volume"]
-    lo_idx, hi_idx = poc_idx, poc_idx
-
-    while accumulated < target:
-        expand_down = lo_idx > 0
-        expand_up = hi_idx < len(full_hist) - 1
-        if not expand_down and not expand_up:
-            break
-        vol_down = full_hist[lo_idx - 1]["volume"] if expand_down else -1
-        vol_up = full_hist[hi_idx + 1]["volume"] if expand_up else -1
-        if vol_down >= vol_up:
-            lo_idx -= 1
-            accumulated += full_hist[lo_idx]["volume"]
-        else:
-            hi_idx += 1
-            accumulated += full_hist[hi_idx]["volume"]
-
-    val = full_hist[lo_idx]["price"]
-    vah = full_hist[hi_idx]["price"]
-
-    return {
-        "poc": round(poc, 8),
-        "vah": round(vah, 8),
-        "val": round(val, 8),
-        "total_volume": round(total_vol, 6),
-        "value_area_pct": round(accumulated / total_vol * 100, 1) if total_vol > 0 else 0,
-        "bins": full_hist,
-        "window_seconds": window_seconds,
-    }
-
-
 async def compute_volume_profile(symbol: str, timeframe_seconds: int = 3600) -> dict:
     """
     Volume Profile: POC, VAH, VAL over the last timeframe_seconds.
@@ -349,7 +310,7 @@ async def compute_volume_profile(symbol: str, timeframe_seconds: int = 3600) -> 
     Returns dict with poc_price, poc_volume, vah, val, and full profile list.
     """
     since = time.time() - timeframe_seconds
-    rows = await get_trades_for_volume_profile(since, symbol=symbol)
+    rows, tick_size = await get_trades_for_volume_profile(since, symbol=symbol)
 
     if not rows:
         return {
@@ -360,7 +321,12 @@ async def compute_volume_profile(symbol: str, timeframe_seconds: int = 3600) -> 
             "profile": [],
             "total_volume": 0,
             "timeframe_seconds": timeframe_seconds,
+            "tick_size": None,
         }
+
+    # Determine display precision from tick_size
+    import math
+    decimals = max(0, -int(math.floor(math.log10(tick_size)))) + 1 if tick_size > 0 else 2
 
     # Build profile list sorted by price
     profile = [{"price": row["price_level"], "volume": row["volume"]} for row in rows]
@@ -403,13 +369,14 @@ async def compute_volume_profile(symbol: str, timeframe_seconds: int = 3600) -> 
     val = profile[lo_idx]["price"]
 
     return {
-        "poc_price": round(poc_price, 2),
+        "poc_price": round(poc_price, decimals),
         "poc_volume": round(poc_volume, 6),
-        "vah": round(vah, 2),
-        "val": round(val, 2),
+        "vah": round(vah, decimals),
+        "val": round(val, decimals),
         "total_volume": round(total_volume, 6),
         "value_area_pct": round(accumulated / total_volume * 100, 2) if total_volume else 0,
-        "profile": [{"price": round(p["price"], 2), "volume": round(p["volume"], 6)} for p in profile],
+        "tick_size": tick_size,
+        "profile": [{"price": round(p["price"], decimals), "volume": round(p["volume"], 6)} for p in profile],
         "timeframe_seconds": timeframe_seconds,
     }
 

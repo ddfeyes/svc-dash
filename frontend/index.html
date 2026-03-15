@@ -159,9 +159,13 @@
     <canvas id="chart-vp" style="height:200px !important;"></canvas>
   </div>
 
-  <!-- Delta Divergence + Large Trades -->
+  <!-- Alerts: OI Spike + Delta Divergence + Large Trades -->
   <div class="card">
     <h2>Alerts</h2>
+    <div id="alert-oi-spike" style="margin-bottom:8px; padding:10px; border-radius:6px; background:var(--bg3); font-size:12px; border-left:3px solid var(--border);">
+      <div style="font-size:10px; color:var(--muted); margin-bottom:4px;">OI SPIKE (&gt;3% / 5min)</div>
+      <div id="oi-spike-text" style="color:var(--muted)">Loading...</div>
+    </div>
     <div id="alert-divergence" style="margin-bottom:12px; padding:10px; border-radius:6px; background:var(--bg3); font-size:12px;">
       <div style="font-size:10px; color:var(--muted); margin-bottom:4px;">DELTA DIVERGENCE</div>
       <div id="div-text" style="color:var(--muted)">Loading...</div>
@@ -326,6 +330,7 @@ function selectSymbol(sym) {
   document.getElementById('vp-poc').textContent = '—';
   document.getElementById('vp-vah').textContent = '—';
   document.getElementById('vp-val').textContent = '—';
+  document.getElementById('oi-spike-text').textContent = 'Loading...';
   document.getElementById('div-text').textContent = 'Loading...';
   document.getElementById('div-text').style.color = 'var(--muted)';
   document.getElementById('lt-buy').textContent = '—';
@@ -355,7 +360,7 @@ async function refreshAll() {
   if (!activeSymbol) return;
   const sym = encodeURIComponent(activeSymbol);
 
-  const [summary, cvd, oi, funding, liqs, vp, divg, ltrades] = await Promise.all([
+  const [summary, cvd, oi, funding, liqs, vp, divg, ltrades, oisp] = await Promise.all([
     fetchJSON(`/api/metrics/summary?symbol=${sym}`),
     fetchJSON(`/api/cvd/history?window=3600&symbol=${sym}`),
     fetchJSON(`/api/oi/history?limit=300&symbol=${sym}`),
@@ -364,6 +369,7 @@ async function refreshAll() {
     fetchJSON(`/api/volume-profile?window=3600&bins=50&symbol=${sym}`),
     fetchJSON(`/api/delta-divergence?window=300&symbol=${sym}`),
     fetchJSON(`/api/large-trades?window=300&min_usd=10000&symbol=${sym}`),
+    fetchJSON(`/api/oi-spike?window=300&threshold=3&symbol=${sym}`),
   ]);
 
   // Price
@@ -465,6 +471,21 @@ async function refreshAll() {
     charts.liq.data.datasets[0].data = mins.map(m => buckets[m].sell);
     charts.liq.data.datasets[1].data = mins.map(m => buckets[m].buy);
     charts.liq.update('none');
+  }
+
+  // OI Spike
+  if (oisp) {
+    const spikeEl = document.getElementById('oi-spike-text');
+    const spikeBox = document.getElementById('alert-oi-spike');
+    if (oisp.spike) {
+      spikeEl.style.color = 'var(--accent)';
+      spikeEl.textContent = '🚨 ' + (oisp.description || 'OI spike detected');
+      spikeBox.style.borderLeftColor = 'var(--accent)';
+    } else {
+      spikeEl.style.color = 'var(--muted)';
+      spikeEl.textContent = oisp.description || 'OI stable';
+      spikeBox.style.borderLeftColor = 'var(--border)';
+    }
   }
 
   // Delta Divergence

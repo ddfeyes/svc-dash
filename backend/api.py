@@ -21,6 +21,7 @@ from metrics import (
     compute_volume_profile,
     detect_delta_divergence,
     detect_large_trades,
+    detect_oi_spike,
 )
 
 router = APIRouter(prefix="/api")
@@ -95,28 +96,29 @@ async def cvd_history(
 
 @router.get("/volume-profile")
 async def volume_profile(
-    window: int = Query(default=3600, le=86400),
-    bins: int = Query(default=50, le=200),
-    symbol: Optional[str] = None,
-):
-    syms = get_symbols()
-    target = symbol if symbol and symbol in syms else syms[0]
-    data = await compute_volume_profile(window_seconds=window, bins=bins, symbol=target)
-    return {"status": "ok", "symbol": target, **data}
-
-
-@router.get("/volume-profile")
-async def volume_profile(
     symbol: Optional[str] = Query(default=None),
     timeframe: int = Query(default=3600, le=86400, description="Lookback window in seconds"),
 ):
     """
     Volume Profile for a symbol over the given timeframe.
-    Returns POC, VAH, VAL and full price/volume profile.
+    Returns POC (Point of Control), VAH (Value Area High), VAL (Value Area Low),
+    and the full price/volume profile with 0.01 price resolution.
     """
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
     data = await compute_volume_profile(symbol=target, timeframe_seconds=timeframe)
+    return {"status": "ok", "symbol": target, **data}
+
+
+@router.get("/oi-spike")
+async def oi_spike(
+    window: int = Query(default=300, le=3600),
+    threshold: float = Query(default=3.0, le=50.0),
+    symbol: Optional[str] = None,
+):
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await detect_oi_spike(window_seconds=window, threshold_pct=threshold, symbol=target)
     return {"status": "ok", "symbol": target, **data}
 
 

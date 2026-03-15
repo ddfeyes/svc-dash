@@ -284,25 +284,52 @@ async def get_recent_liquidations(
             return [dict(r) for r in rows]
 
 
-async def get_trades_for_volume_profile(since: float, symbol: str = None) -> List[Dict]:
-    """Return aggregated volume per price level (rounded to 0.01) for volume profile."""
+async def get_trades_for_volume_profile(since: float, symbol: str = None, tick_size: float = None) -> List[Dict]:
+    """
+    Return aggregated volume per price level for volume profile.
+    tick_size controls price resolution (default: auto-detected from data).
+    If tick_size is None, first fetches price range to pick an appropriate resolution.
+    """
     params: list = [since]
-    q = """
+    sym_filter = ""
+    if symbol:
+        sym_filter = " AND symbol = ?"
+        params.append(symbol)
+
+    if tick_size is None:
+        # Auto-detect: get avg price to pick tick size
+        range_q = f"SELECT AVG(price) as avg_price FROM trades WHERE ts > ?{sym_filter}"
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(range_q, params) as cur:
+                row = await cur.fetchone()
+                avg_price = row["avg_price"] if row and row["avg_price"] else 1.0
+
+        # Pick tick size as ~0.05% of avg price, rounded to a nice number
+        import math
+        magnitude = 10 ** math.floor(math.log10(avg_price * 0.0005))
+        tick_size = round(avg_price * 0.0005 / magnitude) * magnitude
+        tick_size = max(tick_size, 1e-8)
+
+    q = f"""
         SELECT
-            ROUND(price / 0.01) * 0.01 AS price_level,
+            ROUND(price / ?) * ? AS price_level,
             SUM(qty) AS volume
         FROM trades
-        WHERE ts > ?
+        WHERE ts > ?{sym_filter}
+        GROUP BY price_level
+        ORDER BY price_level ASC
     """
+    # Rebuild params with tick_size first (used twice in ROUND), then since, then optional symbol
+    tick_params: list = [tick_size, tick_size, since]
     if symbol:
-        q += " AND symbol = ?"
-        params.append(symbol)
-    q += " GROUP BY price_level ORDER BY price_level ASC"
+        tick_params.append(symbol)
+
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute(q, params) as cur:
+        async with db.execute(q, tick_params) as cur:
             rows = await cur.fetchall()
-            return [dict(r) for r in rows]
+            return [dict(r) for r in rows], tick_size
 
 
 async def get_trades_for_cvd(since: float, symbol: str = None) -> List[Dict]:
