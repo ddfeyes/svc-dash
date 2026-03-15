@@ -132,37 +132,29 @@ html, body {
 /* ── Layout ───────────────────────────────────────────────────────────────── */
 #main {
   display: grid;
-  grid-template-columns: 1fr 320px;
-  grid-template-rows: auto auto;
+  grid-template-columns: 1fr 1fr 320px;
   gap: 12px;
   padding: 12px;
-  max-width: 1600px;
+  max-width: 1800px;
   margin: 0 auto;
 }
 
-/* Price chart takes full width on first row */
-#card-price {
-  grid-column: 1 / 2;
-  grid-row: 1 / 2;
-}
+/* Price chart: spans left two columns */
+#card-price  { grid-column: 1 / 3; grid-row: 1; }
 
-/* OI chart on second row, left */
-#card-oi {
-  grid-column: 1 / 2;
-  grid-row: 2 / 3;
-}
+/* OI + CVD on second row, left 2 cols */
+#card-oi     { grid-column: 1 / 2; grid-row: 2; }
+#card-cvd    { grid-column: 2 / 3; grid-row: 2; }
 
-/* Trade tape: full height right column */
-#card-trades {
-  grid-column: 2 / 3;
-  grid-row: 1 / 3;
-}
+/* Funding + Flow on third row */
+#card-funding { grid-column: 1 / 2; grid-row: 3; }
+#card-flow    { grid-column: 2 / 3; grid-row: 3; }
 
-/* Phase card: below OI */
-#card-phase {
-  grid-column: 1 / 3;
-  grid-row: 3 / 4;
-}
+/* Trade tape: full height right column, rows 1-3 */
+#card-trades { grid-column: 3 / 4; grid-row: 1 / 4; }
+
+/* Phase card: full width bottom row */
+#card-phase  { grid-column: 1 / 4; grid-row: 4; }
 
 /* ── Cards ────────────────────────────────────────────────────────────────── */
 .card {
@@ -232,8 +224,10 @@ html, body {
   position: relative;
 }
 
-/* ── CVD Chart ────────────────────────────────────────────────────────────── */
-#cvd-chart-container {
+/* ── CVD / Funding / Flow Charts ─────────────────────────────────────────── */
+#cvd-chart-container,
+#funding-chart-container,
+#flow-chart-container {
   height: 120px;
   position: relative;
 }
@@ -255,7 +249,7 @@ html, body {
 
 .trade-row {
   display: grid;
-  grid-template-columns: 32px 80px 60px 50px;
+  grid-template-columns: 32px 80px 70px 50px;
   gap: 4px;
   align-items: center;
   padding: 3px 4px;
@@ -361,10 +355,13 @@ html, body {
     grid-template-columns: 1fr;
     grid-template-rows: auto;
   }
-  #card-price  { grid-column: 1; grid-row: auto; }
-  #card-oi     { grid-column: 1; grid-row: auto; }
-  #card-trades { grid-column: 1; grid-row: auto; }
-  #card-phase  { grid-column: 1; grid-row: auto; }
+  #card-price   { grid-column: 1; grid-row: auto; }
+  #card-oi      { grid-column: 1; grid-row: auto; }
+  #card-cvd     { grid-column: 1; grid-row: auto; }
+  #card-funding { grid-column: 1; grid-row: auto; }
+  #card-flow    { grid-column: 1; grid-row: auto; }
+  #card-trades  { grid-column: 1; grid-row: auto; }
+  #card-phase   { grid-column: 1; grid-row: auto; }
 
   #trade-tape  { max-height: 300px; }
 }

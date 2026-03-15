@@ -40,7 +40,7 @@
   <section class="card" id="card-oi">
     <div class="card-header">
       <span class="card-title">Open Interest</span>
-      <span class="card-meta">last 200 points</span>
+      <span class="card-meta">USDT · last 200 points</span>
     </div>
     <div id="oi-metrics"></div>
     <div id="oi-chart-container">
@@ -54,13 +54,49 @@
       <span class="card-title">Trade Tape</span>
       <span class="card-meta">live · last 100</span>
     </div>
-    <div style="display:grid;grid-template-columns:32px 80px 60px 50px;gap:4px;padding:0 4px 4px;font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">
+    <div style="display:grid;grid-template-columns:32px 80px 70px 50px;gap:4px;padding:0 4px 4px;font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">
       <span></span>
       <span style="text-align:right">price</span>
-      <span style="text-align:right">qty</span>
+      <span style="text-align:right">usd</span>
       <span style="text-align:right">time</span>
     </div>
     <div id="trade-tape"></div>
+  </section>
+
+  <!-- CVD Chart -->
+  <section class="card" id="card-cvd">
+    <div class="card-header">
+      <span class="card-title">CVD</span>
+      <span class="card-meta">cumulative volume delta · 1h</span>
+    </div>
+    <div id="cvd-metrics"></div>
+    <div id="cvd-chart-container">
+      <canvas id="cvd-canvas"></canvas>
+    </div>
+  </section>
+
+  <!-- Funding Rate Chart -->
+  <section class="card" id="card-funding">
+    <div class="card-header">
+      <span class="card-title">Funding Rate</span>
+      <span class="card-meta">last 100 periods</span>
+    </div>
+    <div id="funding-metrics"></div>
+    <div id="funding-chart-container">
+      <canvas id="funding-canvas"></canvas>
+    </div>
+  </section>
+
+  <!-- Volume Imbalance / Flow -->
+  <section class="card" id="card-flow">
+    <div class="card-header">
+      <span class="card-title">Volume Imbalance</span>
+      <span class="card-meta">buy/sell ratio · 1h</span>
+    </div>
+    <div id="flow-metrics"></div>
+    <div id="flow-chart-container">
+      <canvas id="flow-canvas"></canvas>
+    </div>
   </section>
 
   <!-- Phase / Market Regime -->
