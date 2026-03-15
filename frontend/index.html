@@ -1379,6 +1379,20 @@
     <div id="cdv-osc-divs" style="margin-top:6px;font-size:10px;display:flex;flex-wrap:wrap;gap:4px;"></div>
   </div>
 
+  <!-- Session VWAP Band Chart -->
+  <div class="card" id="card-vwap-band">
+    <h2><span class="card-icon">📐</span>Session VWAP Bands
+      <span id="vwap-band-window-btns" style="margin-left:auto;display:flex;gap:4px;">
+        <button onclick="setVwapBandWindow(3600)"  id="vwap-band-1h"  style="background:var(--bg3);border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:2px 7px;font-size:9px;cursor:pointer;">1h</button>
+        <button onclick="setVwapBandWindow(14400)" id="vwap-band-4h"  style="background:var(--bg3);border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:2px 7px;font-size:9px;cursor:pointer;">4h</button>
+        <button onclick="setVwapBandWindow(28800)" id="vwap-band-8h"  style="background:var(--bg3);border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:2px 7px;font-size:9px;cursor:pointer;">8h</button>
+      </span>
+    </h2>
+    <div id="vwap-band-signal" style="font-size:10px;color:var(--muted);margin-bottom:6px;">Loading...</div>
+    <canvas id="chart-vwap-band" style="max-height:180px;"></canvas>
+    <div id="vwap-band-stats" style="margin-top:6px;font-size:10px;display:flex;gap:12px;flex-wrap:wrap;"></div>
+  </div>
+
   <!-- Position Sizing Calculator -->
   <div class="card" id="card-position-calc">
     <h2><span class="card-icon">🧮</span>Position Sizing
@@ -1905,6 +1919,106 @@ let chartCdvOsc = null;
           position: 'top',
           align: 'end',
           labels: { color: TICK_COLOR, font: { size: 9 }, boxWidth: 10, padding: 8 },
+        },
+        tooltip: chartDefaults().plugins.tooltip,
+      },
+    }),
+  });
+})();
+
+// Session VWAP Band chart
+let chartVwapBand = null;
+(function initVwapBandChart() {
+  const ctx = document.getElementById('chart-vwap-band');
+  if (!ctx) return;
+  chartVwapBand = new Chart(ctx.getContext('2d'), {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [
+        {
+          label: '+2σ',
+          data: [],
+          borderColor: 'rgba(66,165,245,0.3)',
+          backgroundColor: 'rgba(66,165,245,0.06)',
+          borderWidth: 1,
+          pointRadius: 0,
+          fill: '+1',
+          tension: 0.2,
+          borderDash: [4, 3],
+        },
+        {
+          label: '+1σ',
+          data: [],
+          borderColor: 'rgba(66,165,245,0.55)',
+          backgroundColor: 'rgba(66,165,245,0.10)',
+          borderWidth: 1,
+          pointRadius: 0,
+          fill: '+1',
+          tension: 0.2,
+          borderDash: [2, 3],
+        },
+        {
+          label: 'VWAP',
+          data: [],
+          borderColor: 'rgba(66,165,245,0.9)',
+          borderWidth: 1.8,
+          pointRadius: 0,
+          fill: false,
+          tension: 0.2,
+          borderDash: [4, 2],
+        },
+        {
+          label: '-1σ',
+          data: [],
+          borderColor: 'rgba(66,165,245,0.55)',
+          backgroundColor: 'rgba(66,165,245,0.10)',
+          borderWidth: 1,
+          pointRadius: 0,
+          fill: '-1',
+          tension: 0.2,
+          borderDash: [2, 3],
+        },
+        {
+          label: '-2σ',
+          data: [],
+          borderColor: 'rgba(66,165,245,0.3)',
+          backgroundColor: 'rgba(66,165,245,0.06)',
+          borderWidth: 1,
+          pointRadius: 0,
+          fill: '-1',
+          tension: 0.2,
+          borderDash: [4, 3],
+        },
+        {
+          label: 'Price',
+          data: [],
+          borderColor: '#f0c040',
+          borderWidth: 1.8,
+          pointRadius: 0,
+          fill: false,
+          tension: 0.2,
+        },
+      ],
+    },
+    options: chartDefaults({
+      scales: {
+        x: {
+          display: true,
+          ticks: { color: TICK_COLOR, font: { size: 9 }, maxTicksLimit: 8, maxRotation: 0 },
+          grid: { color: GRID_COLOR },
+        },
+        y: {
+          ticks: { color: TICK_COLOR, font: TICK_FONT, maxTicksLimit: 5 },
+          grid: { color: GRID_COLOR },
+        },
+      },
+      plugins: {
+        legend: {
+          display: true,
+          position: 'top',
+          align: 'end',
+          labels: { color: TICK_COLOR, font: { size: 9 }, boxWidth: 10, padding: 6 },
         },
         tooltip: chartDefaults().plugins.tooltip,
       },
@@ -2870,6 +2984,7 @@ function selectSymbol(sym) {
   refreshTradeDist();
   refreshCvdMomentum();
   refreshCdvOscillator();
+  refreshVwapBand();
   refreshMarketRegime();
   refreshVolatilityRegime();
   refreshAtr();
@@ -6254,6 +6369,63 @@ async function refreshCdvOscillator() {
   }
 }
 
+// ── Session VWAP Band ─────────────────────────────────────────────────────────
+let _vwapBandWindow = 28800;
+function setVwapBandWindow(w) {
+  _vwapBandWindow = w;
+  ['1h','4h','8h'].forEach(l => {
+    const btn = document.getElementById('vwap-band-' + l);
+    if (btn) { btn.style.background = 'var(--bg3)'; btn.style.color = 'var(--muted)'; }
+  });
+  const labelMap = {3600:'1h', 14400:'4h', 28800:'8h'};
+  const activeBtn = document.getElementById('vwap-band-' + labelMap[w]);
+  if (activeBtn) { activeBtn.style.background = 'var(--accent)'; activeBtn.style.color = '#0e1117'; }
+  refreshVwapBand();
+}
+
+async function refreshVwapBand() {
+  if (!activeSymbol || !chartVwapBand) return;
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await fetchJSON(`/api/vwap-band?symbol=${sym}&window=${_vwapBandWindow}&bucket=60`);
+  if (!data || !data.series || data.series.length === 0) return;
+
+  const labels = data.series.map(s => fmtTime(s.ts));
+
+  chartVwapBand.data.labels = labels;
+  chartVwapBand.data.datasets[0].data = data.series.map(s => s.upper2);   // +2σ
+  chartVwapBand.data.datasets[1].data = data.series.map(s => s.upper1);   // +1σ
+  chartVwapBand.data.datasets[2].data = data.series.map(s => s.vwap);     // VWAP
+  chartVwapBand.data.datasets[3].data = data.series.map(s => s.lower1);   // -1σ
+  chartVwapBand.data.datasets[4].data = data.series.map(s => s.lower2);   // -2σ
+  chartVwapBand.data.datasets[5].data = data.series.map(s => s.close);    // Price
+  chartVwapBand.update('none');
+
+  // Signal text
+  const signalEl = document.getElementById('vwap-band-signal');
+  if (signalEl && data.description) {
+    const sig = data.current?.signal || '';
+    let color = 'var(--muted)';
+    if (sig === 'above_2sigma') color = '#ef5350';
+    else if (sig === 'above_1sigma') color = 'rgba(255,167,38,0.9)';
+    else if (sig === 'below_2sigma') color = '#26a69a';
+    else if (sig === 'below_1sigma') color = 'rgba(66,165,245,0.9)';
+    else if (sig === 'inside_1sigma') color = 'var(--green)';
+    signalEl.innerHTML = `<span style="color:${color};">${data.description}</span>`;
+  }
+
+  // Stats row
+  const statsEl = document.getElementById('vwap-band-stats');
+  if (statsEl && data.current) {
+    const c = data.current;
+    const vwapFmt = c.vwap ? c.vwap.toFixed(6) : '—';
+    const stdFmt  = c.std  ? c.std.toFixed(6)  : '—';
+    statsEl.innerHTML = `
+      <span style="color:var(--muted);">VWAP: <b style="color:rgba(66,165,245,0.9);">${vwapFmt}</b></span>
+      <span style="color:var(--muted);">σ: <b style="color:rgba(171,125,248,0.9);">${stdFmt}</b></span>
+    `;
+  }
+}
+
 // ── CVD Momentum ─────────────────────────────────────────────────────────────
 let _cvdMomWindow = 60;
 function setCvdMomWindow(w) {
@@ -6496,6 +6668,9 @@ async function refreshSignalsScanner() {
 
   setCdvOscWindow(1800);  // sets active button + calls refresh
   setInterval(refreshCdvOscillator, 15000);  // every 15s
+
+  setVwapBandWindow(28800);  // sets active button (8h default) + calls refresh
+  setInterval(refreshVwapBand, 20000);  // every 20s
 
   // ── Keyboard Shortcut Help Modal ──────────────────────────────────────────
   (function buildHotkeyModal() {

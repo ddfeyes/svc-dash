@@ -1,6 +1,7 @@
 """FastAPI REST endpoints — multi-symbol."""
 import asyncio
 import json
+import math
 import time
 from typing import Optional, Set
 import aiosqlite
@@ -3149,6 +3150,148 @@ async def cdv_oscillator_endpoint(
         "divergences": deduped,
         "current_oscillator": osc_now,
         "signal": signal,
+        "description": desc,
+        "window_seconds": window,
+        "bucket_size": bucket,
+    }
+
+
+# ── Session VWAP Band Chart ──────────────────────────────────────────────────
+
+@router.get("/vwap-band")
+async def vwap_band_endpoint(
+    symbol: Optional[str] = Query(default=None),
+    window: int = Query(default=28800, ge=900, le=86400, description="Session window in seconds (default 8h)"),
+    bucket: int = Query(default=60, ge=15, le=300, description="Bucket size in seconds"),
+):
+    """
+    Session VWAP Band chart.
+
+    Computes cumulative VWAP from session open (default: last 8h) and the
+    volume-weighted standard deviation of price around VWAP. Returns per-bucket:
+    - close price
+    - cumulative VWAP
+    - upper/lower 1σ band (VWAP ± 1 std)
+    - upper/lower 2σ band (VWAP ± 2 std)
+
+    The bands are computed from volume-weighted variance:
+      var = sum(vol * (price - vwap)^2) / sum(vol)
+      std = sqrt(var)
+    """
+    target = symbol or (get_symbols()[0] if get_symbols() else None)
+    if not target:
+        return {"error": "No symbol available"}
+
+    since = time.time() - window
+    trades = await get_recent_trades(limit=100000, since=since, symbol=target)
+
+    if not trades or len(trades) < 5:
+        return {
+            "status": "ok",
+            "symbol": target,
+            "series": [],
+            "description": "Insufficient trade data",
+        }
+
+    trades.sort(key=lambda t: t["ts"])
+
+    # Build per-bucket stats: first/last price, volume, sum(pv)
+    buckets_map: dict = {}
+    for t in trades:
+        b = int(t["ts"] // bucket) * bucket
+        p = float(t.get("price") or 0)
+        q = float(t.get("qty") or 0)
+        if p <= 0 or q <= 0:
+            continue
+        if b not in buckets_map:
+            buckets_map[b] = {"open": p, "close": p, "high": p, "low": p,
+                               "volume": 0.0, "pv": 0.0, "prices_vols": []}
+        bc = buckets_map[b]
+        bc["close"] = p
+        bc["high"] = max(bc["high"], p)
+        bc["low"] = min(bc["low"], p)
+        bc["volume"] += q
+        bc["pv"] += p * q
+        bc["prices_vols"].append((p, q))
+
+    sorted_buckets = sorted(buckets_map.items())
+    if not sorted_buckets:
+        return {"status": "ok", "symbol": target, "series": [], "description": "No data"}
+
+    # Cumulative VWAP and volume-weighted variance
+    cum_pv = 0.0
+    cum_vol = 0.0
+    cum_pv2 = 0.0  # sum(vol * price^2) for variance computation
+
+    series = []
+    for b_ts, bc in sorted_buckets:
+        vol = bc["volume"]
+        pv = bc["pv"]
+        cum_pv += pv
+        cum_vol += vol
+
+        # sum(vol * price^2) for variance: E[price^2] - E[price]^2
+        pv2 = sum(p * p * q for p, q in bc["prices_vols"])
+        cum_pv2 += pv2
+
+        vwap = cum_pv / cum_vol if cum_vol > 0 else None
+
+        if vwap and cum_vol > 0:
+            # Var = E[p^2] - E[p]^2 = (cum_pv2/cum_vol) - vwap^2
+            variance = max(0.0, (cum_pv2 / cum_vol) - vwap * vwap)
+            std = math.sqrt(variance)
+        else:
+            std = None
+
+        entry = {
+            "ts": b_ts,
+            "close": round(bc["close"], 8),
+            "vwap": round(vwap, 8) if vwap else None,
+            "std": round(std, 8) if std is not None else None,
+            "upper1": round(vwap + std, 8) if (vwap and std is not None) else None,
+            "lower1": round(vwap - std, 8) if (vwap and std is not None) else None,
+            "upper2": round(vwap + 2 * std, 8) if (vwap and std is not None) else None,
+            "lower2": round(vwap - 2 * std, 8) if (vwap and std is not None) else None,
+            "volume": round(vol, 4),
+        }
+        series.append(entry)
+
+    # Current state
+    last = series[-1] if series else {}
+    current_price = last.get("close")
+    current_vwap = last.get("vwap")
+    current_std = last.get("std")
+
+    signal = "at_vwap"
+    desc = "Price near VWAP"
+    if current_price and current_vwap and current_std and current_std > 0:
+        dev = (current_price - current_vwap) / current_std
+        if dev > 2:
+            signal = "above_2sigma"
+            desc = f"Price +{dev:.1f}σ above VWAP — extended, potential reversion zone"
+        elif dev > 1:
+            signal = "above_1sigma"
+            desc = f"Price +{dev:.1f}σ above VWAP — upper band"
+        elif dev < -2:
+            signal = "below_2sigma"
+            desc = f"Price {dev:.1f}σ below VWAP — extended, potential support zone"
+        elif dev < -1:
+            signal = "below_1sigma"
+            desc = f"Price {dev:.1f}σ below VWAP — lower band"
+        else:
+            signal = "inside_1sigma"
+            desc = f"Price within ±1σ of VWAP ({dev:+.2f}σ) — balanced"
+
+    return {
+        "status": "ok",
+        "symbol": target,
+        "series": series,
+        "current": {
+            "price": current_price,
+            "vwap": current_vwap,
+            "std": current_std,
+            "signal": signal,
+        },
         "description": desc,
         "window_seconds": window,
         "bucket_size": bucket,
