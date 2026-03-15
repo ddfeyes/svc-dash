@@ -793,6 +793,36 @@
       <div id="oi-mcap-detail" style="font-size:10px;margin-top:3px;color:var(--muted);"></div>
     </div>
 
+    <div id="alert-liq-pressure" class="alert-box">
+      <div class="alert-label">🔥 LIQ PRESSURE SCORE</div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:6px;">
+        <div id="liq-pressure-gauge" style="position:relative;width:64px;height:36px;flex-shrink:0;">
+          <svg viewBox="0 0 100 56" width="64" height="36" style="overflow:visible;">
+            <!-- Background arc -->
+            <path d="M10,50 A40,40 0 0,1 90,50" fill="none" stroke="#2a2a3a" stroke-width="12" stroke-linecap="round"/>
+            <!-- Colored arc (filled by JS) -->
+            <path id="liq-pressure-arc" d="M10,50 A40,40 0 0,1 90,50" fill="none" stroke="#666" stroke-width="12" stroke-linecap="round"
+              stroke-dasharray="0 126" style="transition:stroke-dasharray 0.6s,stroke 0.6s;"/>
+            <!-- Needle -->
+            <line id="liq-pressure-needle" x1="50" y1="50" x2="50" y2="14"
+              stroke="#fff" stroke-width="2" stroke-linecap="round"
+              style="transform-origin:50px 50px;transform:rotate(-90deg);transition:transform 0.6s;"/>
+            <!-- Center dot -->
+            <circle cx="50" cy="50" r="3" fill="#fff"/>
+            <!-- Score text -->
+            <text id="liq-pressure-score-text" x="50" y="54" text-anchor="middle"
+              font-size="11" fill="#fff" font-weight="bold">—</text>
+          </svg>
+        </div>
+        <div style="flex:1;min-width:0;">
+          <div id="liq-pressure-level" style="font-size:16px;font-weight:700;color:var(--muted);">CALM</div>
+          <div id="liq-pressure-detail" style="font-size:10px;color:var(--muted);margin-top:2px;">—</div>
+        </div>
+      </div>
+      <!-- Per-symbol mini bars -->
+      <div id="liq-pressure-bars" style="margin-top:8px;display:flex;flex-direction:column;gap:3px;"></div>
+    </div>
+
     <div class="divider"></div>
     <div class="section-title">Large Trades &gt;$10k (5min)</div>
     <div class="metrics-grid" style="margin-bottom:8px;">
@@ -2228,6 +2258,7 @@ function selectSymbol(sym) {
   refreshAtr();
   loadPhaseTimeline();
   refreshOiMcap();
+  refreshLiqPressure();
   initTape();
 }
 
@@ -4033,6 +4064,90 @@ async function refreshOiMcap() {
   }
 }
 
+// ── Liquidation Pressure Score ────────────────────────────────────────────────
+async function refreshLiqPressure() {
+  const enc = encodeURIComponent(currentSymbol);
+  const data = await fetchJSON(`/api/liq-pressure?symbol=${enc}`);
+  const box = document.getElementById('alert-liq-pressure');
+  if (!data || !data.symbols || !box) return;
+
+  const sym = data.symbols[currentSymbol] || data.symbols[Object.keys(data.symbols)[0]];
+  if (!sym) return;
+
+  const score = sym.score || 0;
+  const level = sym.level || 'calm';
+
+  const levelColors = {
+    calm:     'var(--muted)',
+    low:      'var(--green)',
+    medium:   'var(--accent)',
+    high:     '#ff9800',
+    critical: 'var(--red)',
+  };
+  const color = levelColors[level] || 'var(--muted)';
+
+  // Update level label
+  const levelEl = document.getElementById('liq-pressure-level');
+  if (levelEl) {
+    levelEl.textContent = level.toUpperCase();
+    levelEl.style.color = color;
+  }
+
+  // Update gauge arc (semicircle, total arc length ≈ 126px)
+  const arcLen = 126;
+  const filled = Math.round((score / 100) * arcLen);
+  const arcEl = document.getElementById('liq-pressure-arc');
+  if (arcEl) {
+    arcEl.setAttribute('stroke-dasharray', `${filled} ${arcLen}`);
+    arcEl.setAttribute('stroke', color);
+  }
+
+  // Update needle (rotate from -90deg = 0 to +90deg = 100)
+  const needleEl = document.getElementById('liq-pressure-needle');
+  if (needleEl) {
+    const deg = -90 + (score / 100) * 180;
+    needleEl.style.transform = `rotate(${deg}deg)`;
+  }
+
+  // Update score text
+  const scoreTextEl = document.getElementById('liq-pressure-score-text');
+  if (scoreTextEl) scoreTextEl.textContent = score.toFixed(0);
+
+  // Update detail text
+  const detailEl = document.getElementById('liq-pressure-detail');
+  if (detailEl) {
+    const liqK = sym.liq_usd ? `$${(sym.liq_usd/1000).toFixed(1)}k liq` : '';
+    const oiPct = sym.oi_pct_change != null ? `OI ${sym.oi_pct_change > 0 ? '+' : ''}${sym.oi_pct_change.toFixed(2)}%` : '';
+    detailEl.textContent = [liqK, oiPct].filter(Boolean).join('  ·  ') || '—';
+  }
+
+  // Alert box activation
+  box.className = (level === 'critical' || level === 'high') ? 'alert-box active' : 'alert-box';
+
+  // Per-symbol mini bars
+  const barsEl = document.getElementById('liq-pressure-bars');
+  if (barsEl) {
+    const syms = Object.entries(data.symbols);
+    if (syms.length > 1) {
+      barsEl.innerHTML = syms.map(([s, d]) => {
+        const sc = d.score || 0;
+        const lv = d.level || 'calm';
+        const c = levelColors[lv] || 'var(--muted)';
+        const shortSym = s.replace('USDT','');
+        return `<div style="display:flex;align-items:center;gap:6px;font-size:10px;">
+          <span style="width:48px;color:var(--muted)">${shortSym}</span>
+          <div style="flex:1;height:4px;background:var(--bg3);border-radius:2px;overflow:hidden;">
+            <div style="width:${sc}%;height:100%;background:${c};border-radius:2px;transition:width 0.5s,background 0.5s;"></div>
+          </div>
+          <span style="width:28px;text-align:right;color:${c}">${sc.toFixed(0)}</span>
+        </div>`;
+      }).join('');
+    } else {
+      barsEl.innerHTML = '';
+    }
+  }
+}
+
 // ── 24h Stats Summary ─────────────────────────────────────────────────────────
 async function refreshStatsSummary() {
   const el = document.getElementById('stats-summary-content');
@@ -4873,6 +4988,8 @@ async function refreshSignalsScanner() {
   setInterval(loadPhaseTimeline, 60000);
   refreshOiMcap();
   setInterval(refreshOiMcap, 120000);  // 2min — CoinGecko free tier rate limit
+  refreshLiqPressure();
+  setInterval(refreshLiqPressure, 15000);  // every 15s
   refreshFreshness();
   setInterval(refreshFreshness, 15000);
   refreshStatsSummary();

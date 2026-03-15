@@ -1811,3 +1811,77 @@ async def funding_heatmap(
         "global_max": global_max,
         "extremes": extremes,
     }
+
+
+# ── Liquidation Pressure Score ────────────────────────────────────────────────
+
+@router.get("/liq-pressure")
+async def liq_pressure(
+    symbol: Optional[str] = Query(default=None),
+    window: int = Query(default=300, ge=30, le=3600, description="Window seconds for OI velocity"),
+    liq_window: int = Query(default=120, ge=30, le=1800, description="Window seconds for liq volume"),
+):
+    """
+    Liquidation Pressure Score (0-100):
+    Combines recent liquidation volume + OI velocity into a single 0-100 score.
+    High = extreme pressure (potential cascade), Low = calm.
+    """
+    symbols = [symbol] if symbol else get_symbols()
+    now = time.time()
+    result = {}
+
+    for sym in symbols:
+        # 1) Liquidation volume score (0-50 points)
+        liq_data = await get_recent_liquidations(limit=1000, since=now - liq_window, symbol=sym)
+        liq_usd = sum(r.get("value", 0) or 0 for r in liq_data)
+
+        # Normalize: $0 → 0pts, $100k → 25pts, $500k → 50pts (logarithmic)
+        import math
+        if liq_usd <= 0:
+            liq_score = 0.0
+        else:
+            # log scale: ln(liq_usd/1000) / ln(500) * 50, clamp 0-50
+            liq_score = min(50.0, max(0.0, math.log(liq_usd / 1000 + 1) / math.log(501) * 50))
+
+        # Long vs short breakdown
+        long_liq = sum(r.get("value", 0) or 0 for r in liq_data if r.get("side") == "sell")
+        short_liq = sum(r.get("value", 0) or 0 for r in liq_data if r.get("side") == "buy")
+
+        # 2) OI velocity score (0-50 points)
+        oi_mom = await compute_oi_momentum(window_seconds=window, symbol=sym)
+        oi_pct = abs(oi_mom.get("avg_pct_change", 0))
+
+        # Normalize: 0% → 0pts, 1% → 25pts, 3%+ → 50pts
+        if oi_pct <= 0:
+            oi_score = 0.0
+        else:
+            oi_score = min(50.0, oi_pct / 3.0 * 50)
+
+        total_score = round(liq_score + oi_score, 1)
+
+        # Severity label
+        if total_score >= 80:
+            level = "critical"
+        elif total_score >= 60:
+            level = "high"
+        elif total_score >= 35:
+            level = "medium"
+        elif total_score >= 15:
+            level = "low"
+        else:
+            level = "calm"
+
+        result[sym] = {
+            "score": total_score,
+            "level": level,
+            "liq_score": round(liq_score, 1),
+            "oi_score": round(oi_score, 1),
+            "liq_usd": round(liq_usd, 2),
+            "long_liq_usd": round(long_liq, 2),
+            "short_liq_usd": round(short_liq, 2),
+            "oi_pct_change": round(oi_mom.get("avg_pct_change", 0), 4),
+            "liq_window_s": liq_window,
+            "oi_window_s": window,
+        }
+
+    return {"status": "ok", "ts": now, "symbols": result}
