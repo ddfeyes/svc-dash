@@ -684,6 +684,32 @@ async def multi_summary():
     return {"status": "ok", "symbols": results}
 
 
+@router.get("/momentum")
+async def momentum_table():
+    """Price momentum for all symbols: 1h, 4h, 24h change%."""
+    syms = get_symbols()
+
+    async def sym_momentum(sym: str):
+        try:
+            windows = [3600, 14400, 86400]  # 1h, 4h, 24h
+            tasks = [get_ohlcv(interval_seconds=300, window_seconds=w, symbol=sym) for w in windows]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            pcts = {}
+            for w, candles in zip(["1h", "4h", "24h"], results):
+                if isinstance(candles, list) and len(candles) >= 2:
+                    o = candles[0]["open"]
+                    c = candles[-1]["close"]
+                    pcts[w] = round((c - o) / o * 100, 4) if o else 0
+                else:
+                    pcts[w] = None
+            return sym, pcts
+        except Exception as e:
+            return sym, {"error": str(e)}
+
+    pairs = await asyncio.gather(*[sym_momentum(sym) for sym in syms])
+    return {"status": "ok", "symbols": {sym: pcts for sym, pcts in pairs}}
+
+
 @router.get("/correlations")
 async def price_correlations(window: int = Query(default=3600, le=86400)):
     """
