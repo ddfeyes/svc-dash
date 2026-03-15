@@ -647,8 +647,20 @@ async def export_csv(
     elif metric == "cvd":
         rows = await compute_cvd(window_seconds=window, symbol=target)
         fields = ["ts", "price", "cvd", "delta"]
+    elif metric == "whales":
+        rows = await get_whale_trades(symbol=target, limit=10000)
+        fields = ["ts", "exchange", "symbol", "price", "qty", "side", "value_usd"]
+    elif metric == "patterns":
+        rows = await get_pattern_history(symbol=target, limit=10000)
+        fields = ["ts", "symbol", "pattern_type", "confidence", "description"]
+    elif metric == "phases":
+        rows = await get_phase_snapshots(symbol=target, limit=10000)
+        fields = ["ts", "symbol", "phase", "confidence", "composite_score"]
+    elif metric == "alerts":
+        rows = await get_alert_history(symbol=target, limit=10000)
+        fields = ["ts", "symbol", "alert_type", "severity", "description"]
     else:
-        return JSONResponse({"error": "Unknown metric. Use: trades|oi|funding|liquidations|cvd"}, status_code=400)
+        return JSONResponse({"error": "Unknown metric. Use: trades|oi|funding|liquidations|cvd|whales|patterns|phases|alerts"}, status_code=400)
 
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")

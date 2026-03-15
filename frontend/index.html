@@ -486,6 +486,10 @@
     <a id="exp-oi" href="#">oi</a>
     <a id="exp-cvd" href="#">cvd</a>
     <a id="exp-liqs" href="#">liqs</a>
+    <a id="exp-whales" href="#">whales</a>
+    <a id="exp-patterns" href="#">patterns</a>
+    <a id="exp-phases" href="#">phases</a>
+    <a id="exp-alerts" href="#">alerts</a>
   </div>
 
   <button id="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light theme">🌙 Dark</button>
@@ -1974,10 +1978,14 @@ function updateSummary(summary) {
 // ── Symbol tabs ──────────────────────────────────────────────────────────────
 function updateExportLinks(sym) {
   const s = encodeURIComponent(sym);
-  document.getElementById('exp-trades').href = `/api/export/trades?symbol=${s}&window=3600`;
-  document.getElementById('exp-oi').href     = `/api/export/oi?symbol=${s}&window=3600`;
-  document.getElementById('exp-cvd').href    = `/api/export/cvd?symbol=${s}&window=3600`;
-  document.getElementById('exp-liqs').href   = `/api/export/liquidations?symbol=${s}&window=3600`;
+  document.getElementById('exp-trades').href   = `/api/export/trades?symbol=${s}&window=3600`;
+  document.getElementById('exp-oi').href       = `/api/export/oi?symbol=${s}&window=3600`;
+  document.getElementById('exp-cvd').href      = `/api/export/cvd?symbol=${s}&window=3600`;
+  document.getElementById('exp-liqs').href     = `/api/export/liquidations?symbol=${s}&window=3600`;
+  document.getElementById('exp-whales').href   = `/api/export/whales?symbol=${s}&window=86400`;
+  document.getElementById('exp-patterns').href = `/api/export/patterns?symbol=${s}&window=86400`;
+  document.getElementById('exp-phases').href   = `/api/export/phases?symbol=${s}&window=86400`;
+  document.getElementById('exp-alerts').href   = `/api/export/alerts?symbol=${s}&window=86400`;
 }
 
 function renderSymbolTabs() {
