@@ -71,6 +71,7 @@ from metrics import (
     compute_market_microstructure_score,
     compute_session_stats,
     compute_inter_exchange_oi_divergence,
+    compute_whale_clustering,
 )
 
 router = APIRouter(prefix="/api")
@@ -4565,10 +4566,41 @@ async def oi_divergence_endpoint(
             },
         )
 
+@router.get("/whale-clustering")
+async def whale_clustering_endpoint(
+    symbol: str = Query(...),
+    window: int = Query(1800, description="Lookback seconds (default 30 min)"),
+    bin_size: float = Query(None, description="Fixed price bin width in USD"),
+    n_bins: int = Query(50, description="Number of bins when bin_size not set"),
+    zone_sigma: float = Query(1.0, description="Sigma multiplier for zone threshold"),
+    min_whale_usd: float = Query(10_000, description="Minimum trade size to include"),
+):
+    """Group whale trades by price level and detect high-volume concentration zones."""
+    since = time.time() - window
+    raw_trades = await get_whale_trades(symbol=symbol, since=since, min_value_usd=min_whale_usd)
+
+    trades = [
+        {
+            "price":     float(t["price"]),
+            "qty":       float(t["qty"]),
+            "side":      str(t.get("side", "buy")).lower(),
+            "value_usd": float(t["value_usd"]),
+        }
+        for t in raw_trades
+    ]
+
+    result = compute_whale_clustering(
+        trades,
+        bin_size=bin_size,
+        n_bins=n_bins,
+        zone_sigma=zone_sigma,
+    )
+
     return JSONResponse({
         "status": "ok",
         "symbol": symbol,
         "window_seconds": window,
         "exchanges_queried": exchange_list,
+        "min_whale_usd": min_whale_usd,
         **result,
     })
