@@ -40,11 +40,49 @@
   <section class="card" id="card-oi">
     <div class="card-header">
       <span class="card-title">Open Interest</span>
-      <span class="card-meta">last 200 points</span>
+      <span class="card-meta">USDT · last 200 points</span>
     </div>
     <div id="oi-metrics"></div>
     <div id="oi-chart-container">
       <canvas id="oi-canvas"></canvas>
+    </div>
+  </section>
+
+  <!-- CVD Chart -->
+  <section class="card" id="card-cvd">
+    <div class="card-header">
+      <span class="card-title">CVD</span>
+      <span class="card-meta">Cumulative Volume Delta · 1h</span>
+    </div>
+    <div id="cvd-metrics"></div>
+    <div id="cvd-chart-container">
+      <canvas id="cvd-canvas"></canvas>
+    </div>
+  </section>
+
+  <!-- Funding Rate -->
+  <section class="card" id="card-funding">
+    <div class="card-header">
+      <span class="card-title">Funding Rate</span>
+      <span id="funding-badge" class="card-badge" style="display:none"></span>
+      <span class="card-meta">last 100 entries</span>
+    </div>
+    <div id="funding-metrics"></div>
+    <div id="funding-chart-container">
+      <canvas id="funding-canvas"></canvas>
+    </div>
+  </section>
+
+  <!-- Bid-Ask Spread -->
+  <section class="card" id="card-spread">
+    <div class="card-header">
+      <span class="card-title">Bid-Ask Spread</span>
+      <span id="spread-badge" class="card-badge" style="display:none"></span>
+      <span class="card-meta">spread % · 30 min</span>
+    </div>
+    <div id="spread-metrics"></div>
+    <div id="spread-chart-container">
+      <canvas id="spread-canvas"></canvas>
     </div>
   </section>
 
@@ -61,6 +99,24 @@
       <span style="text-align:right">time</span>
     </div>
     <div id="trade-tape"></div>
+  </section>
+
+  <!-- Volume Imbalance -->
+  <section class="card" id="card-vol-imbalance">
+    <div class="card-header">
+      <span class="card-title">Volume Imbalance</span>
+      <span class="card-meta">buy vs sell · 1 min</span>
+    </div>
+    <div id="vol-imbalance-content"></div>
+  </section>
+
+  <!-- Alerts Feed -->
+  <section class="card" id="card-alerts">
+    <div class="card-header">
+      <span class="card-title">Alerts</span>
+      <span class="card-meta">live feed</span>
+    </div>
+    <div id="alerts-feed"></div>
   </section>
 
   <!-- Phase / Market Regime -->

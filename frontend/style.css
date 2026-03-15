@@ -133,36 +133,26 @@ html, body {
 #main {
   display: grid;
   grid-template-columns: 1fr 320px;
-  grid-template-rows: auto auto;
   gap: 12px;
   padding: 12px;
   max-width: 1600px;
   margin: 0 auto;
 }
 
-/* Price chart takes full width on first row */
-#card-price {
-  grid-column: 1 / 2;
-  grid-row: 1 / 2;
-}
+/* Left column cards */
+#card-price    { grid-column: 1; grid-row: 1; }
+#card-oi       { grid-column: 1; grid-row: 2; }
+#card-cvd      { grid-column: 1; grid-row: 3; }
+#card-funding  { grid-column: 1; grid-row: 4; }
+#card-spread   { grid-column: 1; grid-row: 5; }
 
-/* OI chart on second row, left */
-#card-oi {
-  grid-column: 1 / 2;
-  grid-row: 2 / 3;
-}
+/* Right column cards */
+#card-trades        { grid-column: 2; grid-row: 1 / 4; }
+#card-vol-imbalance { grid-column: 2; grid-row: 4; }
+#card-alerts        { grid-column: 2; grid-row: 5; }
 
-/* Trade tape: full height right column */
-#card-trades {
-  grid-column: 2 / 3;
-  grid-row: 1 / 3;
-}
-
-/* Phase card: below OI */
-#card-phase {
-  grid-column: 1 / 3;
-  grid-row: 3 / 4;
-}
+/* Phase full width */
+#card-phase { grid-column: 1 / 3; grid-row: 6; }
 
 /* ── Cards ────────────────────────────────────────────────────────────────── */
 .card {
@@ -238,6 +228,58 @@ html, body {
   position: relative;
 }
 
+#cvd-metrics {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  flex-wrap: wrap;
+}
+
+.cvd-stat {
+  color: var(--muted);
+}
+.cvd-stat span { color: var(--fg); font-weight: 700; }
+
+/* ── Funding Rate ─────────────────────────────────────────────────────────── */
+#funding-chart-container {
+  height: 100px;
+  position: relative;
+}
+
+#funding-metrics {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.funding-stat {
+  color: var(--muted);
+}
+.funding-stat span { font-weight: 700; }
+
+/* ── Spread ───────────────────────────────────────────────────────────────── */
+#spread-chart-container {
+  height: 100px;
+  position: relative;
+}
+
+#spread-metrics {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  flex-wrap: wrap;
+}
+
+.spread-stat {
+  color: var(--muted);
+}
+.spread-stat span { font-weight: 700; }
+
 /* ── Trade Tape ───────────────────────────────────────────────────────────── */
 #card-trades {
   display: flex;
@@ -296,6 +338,103 @@ html, body {
 
 .trade-row.whale .trade-price { color: var(--yellow); font-weight: 700; }
 .trade-row.whale .trade-qty   { color: var(--yellow); }
+
+/* ── Volume Imbalance ─────────────────────────────────────────────────────── */
+#vol-imbalance-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.imbalance-bar-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.imbalance-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+}
+
+.imbalance-track {
+  height: 18px;
+  background: var(--bg3);
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+}
+
+.imbalance-fill-buy {
+  height: 100%;
+  background: linear-gradient(90deg, var(--green), rgba(0,224,130,0.6));
+  border-radius: 4px 0 0 4px;
+  transition: width 0.4s ease;
+  float: left;
+}
+
+.imbalance-fill-sell {
+  height: 100%;
+  background: linear-gradient(90deg, rgba(255,77,79,0.6), var(--red));
+  border-radius: 0 4px 4px 0;
+  transition: width 0.4s ease;
+  float: left;
+}
+
+.imbalance-nums {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.imbalance-score {
+  text-align: center;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 4px 0;
+}
+
+/* ── Alerts Feed ──────────────────────────────────────────────────────────── */
+#card-alerts {
+  display: flex;
+  flex-direction: column;
+}
+
+#alerts-feed {
+  flex: 1;
+  overflow-y: auto;
+  max-height: 220px;
+  font-size: 10px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.alert-row {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  padding: 4px 2px;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+}
+
+.alert-time {
+  color: var(--muted);
+  font-size: 9px;
+  white-space: nowrap;
+  padding-top: 1px;
+  min-width: 56px;
+}
+
+.alert-text {
+  color: var(--fg);
+  line-height: 1.35;
+}
+
+.alert-row.sev-high   .alert-text { color: var(--red); }
+.alert-row.sev-medium .alert-text { color: var(--yellow); }
+.alert-row.sev-low    .alert-text { color: var(--muted); }
 
 /* ── Phase Card ───────────────────────────────────────────────────────────── */
 #phase-content {
@@ -359,14 +498,19 @@ html, body {
 @media (max-width: 900px) {
   #main {
     grid-template-columns: 1fr;
-    grid-template-rows: auto;
   }
-  #card-price  { grid-column: 1; grid-row: auto; }
-  #card-oi     { grid-column: 1; grid-row: auto; }
-  #card-trades { grid-column: 1; grid-row: auto; }
-  #card-phase  { grid-column: 1; grid-row: auto; }
+  #card-price         { grid-column: 1; grid-row: auto; }
+  #card-oi            { grid-column: 1; grid-row: auto; }
+  #card-cvd           { grid-column: 1; grid-row: auto; }
+  #card-funding       { grid-column: 1; grid-row: auto; }
+  #card-spread        { grid-column: 1; grid-row: auto; }
+  #card-trades        { grid-column: 1; grid-row: auto; }
+  #card-vol-imbalance { grid-column: 1; grid-row: auto; }
+  #card-alerts        { grid-column: 1; grid-row: auto; }
+  #card-phase         { grid-column: 1; grid-row: auto; }
 
   #trade-tape  { max-height: 300px; }
+  #alerts-feed { max-height: 160px; }
 }
 
 /* ── Utilities ────────────────────────────────────────────────────────────── */

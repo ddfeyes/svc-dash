@@ -318,6 +318,18 @@ async def cvd_history(
     return {"status": "ok", "data": data, "count": len(data)}
 
 
+@router.get("/volume-imbalance")
+async def volume_imbalance_endpoint(
+    window: int = Query(default=60, le=3600),
+    symbol: Optional[str] = None,
+):
+    """Buy vs sell volume imbalance over last `window` seconds."""
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await compute_volume_imbalance(window_seconds=window, symbol=target)
+    return {"status": "ok", "symbol": target, **data}
+
+
 @router.get("/volume-profile")
 async def volume_profile(
     window: int = Query(default=3600, le=86400),
