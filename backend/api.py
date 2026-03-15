@@ -887,6 +887,73 @@ async def symbol_stats(symbol: Optional[str] = None):
     }
 
 
+@router.get("/session")
+async def session_stats(symbol: Optional[str] = None):
+    """
+    Intraday trading session stats: current candle, session H/L, VWAP,
+    buy/sell ratio, total liq, trade count. Useful as a session summary card.
+    """
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    now = time.time()
+
+    # Session = last 8h (rough Asia/EU/US session overlap)
+    session_start = now - 8 * 3600
+
+    candles_1h, trades_1h, liqs_1h = await asyncio.gather(
+        get_ohlcv(interval_seconds=300, window_seconds=8 * 3600, symbol=target),
+        get_recent_trades(limit=100000, since=session_start, symbol=target),
+        get_recent_liquidations(limit=10000, since=session_start, symbol=target),
+    )
+
+    # Session H/L/VWAP
+    if candles_1h:
+        s_high = max(c["high"] for c in candles_1h)
+        s_low  = min(c["low"]  for c in candles_1h)
+        s_open = candles_1h[0]["open"]
+        s_close = candles_1h[-1]["close"]
+        s_change = ((s_close - s_open) / s_open * 100) if s_open else 0
+        # VWAP from candles
+        cum_pv = sum(((c["high"] + c["low"] + c["close"]) / 3) * c["volume"] for c in candles_1h)
+        cum_v  = sum(c["volume"] for c in candles_1h)
+        vwap = cum_pv / cum_v if cum_v > 0 else None
+    else:
+        s_high = s_low = s_open = s_close = vwap = None
+        s_change = 0
+
+    # Buy/sell breakdown
+    buy_vol = sum(t["qty"] * t["price"] for t in trades_1h if t["side"] in ("buy", "Buy"))
+    sell_vol = sum(t["qty"] * t["price"] for t in trades_1h if t["side"] not in ("buy", "Buy"))
+    total_vol = buy_vol + sell_vol
+    buy_pct = (buy_vol / total_vol * 100) if total_vol > 0 else 50
+
+    # Liquidation totals
+    liq_long  = sum(l["value"] or 0 for l in liqs_1h if l["side"] != "buy")  # long liq = sell side
+    liq_short = sum(l["value"] or 0 for l in liqs_1h if l["side"] == "buy")  # short liq = buy side
+    liq_total = liq_long + liq_short
+
+    return {
+        "status": "ok",
+        "symbol": target,
+        "session_hours": 8,
+        "session": {
+            "high": s_high,
+            "low": s_low,
+            "open": s_open,
+            "close": s_close,
+            "change_pct": round(s_change, 4),
+            "vwap": round(vwap, 8) if vwap else None,
+            "buy_usd": round(buy_vol, 2),
+            "sell_usd": round(sell_vol, 2),
+            "buy_pct": round(buy_pct, 2),
+            "trade_count": len(trades_1h),
+            "liq_total_usd": round(liq_total, 2),
+            "liq_long_usd": round(liq_long, 2),
+            "liq_short_usd": round(liq_short, 2),
+        }
+    }
+
+
 @router.get("/metrics/summary")
 async def metrics_summary(symbol: Optional[str] = None):
     syms = get_symbols()

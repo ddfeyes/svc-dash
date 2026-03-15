@@ -481,6 +481,8 @@
     <canvas id="chart-price" style="height:200px !important;"></canvas>
     <canvas id="chart-volume" style="height:60px !important; margin-top:4px;"></canvas>
     <canvas id="chart-rsi" style="height:60px !important; margin-top:4px;"></canvas>
+    <canvas id="chart-macd" style="height:60px !important; margin-top:4px;"></canvas>
+    <div id="bb-squeeze-bar" style="margin-top:6px;font-size:10px;color:var(--muted);display:flex;gap:12px;align-items:center;"></div>
   </div>
 
   <!-- Market Phase + Summary -->
@@ -748,6 +750,45 @@
       <button class="ah-filter-btn" data-type="phase_change" onclick="setAlertHistoryFilter('phase_change',this)">Phase Change</button>
     </div>
     <div id="alert-history-list" style="max-height:300px;overflow-y:auto;font-size:11px;font-family:'Menlo','Monaco','Consolas',monospace;"></div>
+  </div>
+
+  <!-- Session Stats -->
+  <div class="card" id="card-session">
+    <h2><span class="card-icon">📋</span>Session (8h)
+      <span id="session-change" style="margin-left:auto;font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;text-transform:none;letter-spacing:0;"></span>
+    </h2>
+    <div class="metrics-grid" style="margin-bottom:8px;">
+      <div class="metric">
+        <div class="val positive" id="sess-high" style="font-size:14px;">—</div>
+        <div class="lbl">Session High</div>
+      </div>
+      <div class="metric">
+        <div class="val negative" id="sess-low" style="font-size:14px;">—</div>
+        <div class="lbl">Session Low</div>
+      </div>
+      <div class="metric">
+        <div class="val" id="sess-vwap" style="font-size:14px;color:rgba(66,165,245,0.9);">—</div>
+        <div class="lbl">VWAP (8h)</div>
+      </div>
+      <div class="metric">
+        <div class="val" id="sess-trades" style="font-size:14px;">—</div>
+        <div class="lbl">Trade Count</div>
+      </div>
+    </div>
+    <div style="margin-bottom:6px;">
+      <div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:3px;">
+        <span style="color:var(--green);" id="sess-buy-pct">Buy —%</span>
+        <span style="color:var(--red);" id="sess-sell-pct">Sell —%</span>
+      </div>
+      <div style="height:6px;background:var(--bg3);border-radius:3px;overflow:hidden;">
+        <div id="sess-buy-bar" style="height:100%;background:var(--green);width:50%;border-radius:3px;transition:width 0.5s;"></div>
+      </div>
+    </div>
+    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);">
+      <span>Liq Total: <b id="sess-liq-total" style="color:var(--text);">—</b></span>
+      <span>Long: <b id="sess-liq-long" style="color:var(--red);">—</b></span>
+      <span>Short: <b id="sess-liq-short" style="color:var(--green);">—</b></span>
+    </div>
   </div>
 
   <!-- Price Alert -->
@@ -1399,6 +1440,11 @@ function selectSymbol(sym) {
     c.update('none');
   });
   if (chartRsi) { chartRsi.data.labels = []; chartRsi.data.datasets[0].data = []; chartRsi.update('none'); }
+  if (chartMacd) {
+    chartMacd.data.labels = [];
+    chartMacd.data.datasets.forEach(ds => { ds.data = []; });
+    chartMacd.update('none');
+  }
   Object.values(sparklines).forEach(sc => { if (sc) { sc.data.labels = []; sc.data.datasets[0].data = []; sc.update('none'); } });
   Object.keys(sparkData).forEach(k => { sparkData[k] = []; });
 
@@ -1437,6 +1483,7 @@ function selectSymbol(sym) {
   refreshTradeFlowHeatmap();
   refreshPriceChart();
   refreshMultiOverview();
+  refreshSession();
   initTape();
 }
 
@@ -1585,6 +1632,22 @@ async function refreshAll() {
       alertBox.className = 'alert-box ' + (divg.divergence === 'bearish' ? 'active-red' : 'active-green');
     } else {
       alertBox.className = 'alert-box';
+    }
+  }
+
+  // Volume Spike
+  if (volspike) {
+    const vsEl  = document.getElementById('vol-spike-text');
+    const vsBox = document.getElementById('alert-vol-spike');
+    if (volspike.spike) {
+      activeAlerts++;
+      vsEl.style.color = 'var(--accent)';
+      vsEl.textContent = volspike.description || 'Volume spike!';
+      vsBox.className = 'alert-box active';
+    } else {
+      vsEl.style.color = 'var(--muted)';
+      vsEl.textContent = volspike.description || 'Normal';
+      vsBox.className = 'alert-box';
     }
   }
 
@@ -2150,6 +2213,24 @@ function initPriceCharts() {
           tension: 0.2,
           borderDash: [2, 4],
         },
+        {
+          label: 'EMA9',
+          data: [],
+          borderColor: 'rgba(255,167,38,0.8)',
+          borderWidth: 1.2,
+          pointRadius: 0,
+          fill: false,
+          tension: 0.2,
+        },
+        {
+          label: 'EMA21',
+          data: [],
+          borderColor: 'rgba(66,165,245,0.7)',
+          borderWidth: 1.2,
+          pointRadius: 0,
+          fill: false,
+          tension: 0.2,
+        },
       ]
     },
     options: chartDefaults({
@@ -2214,6 +2295,100 @@ function initPriceCharts() {
   });
 }
 
+// ── MACD Chart ────────────────────────────────────────────────────────────────
+let chartMacd = null;
+function initMacdChart() {
+  const ctx = document.getElementById('chart-macd').getContext('2d');
+  chartMacd = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: [],
+      datasets: [
+        {
+          label: 'MACD Hist',
+          data: [],
+          backgroundColor: [],
+          borderWidth: 0,
+          order: 2,
+        },
+        {
+          label: 'MACD',
+          data: [],
+          type: 'line',
+          borderColor: 'rgba(66,165,245,0.9)',
+          borderWidth: 1.2,
+          pointRadius: 0,
+          fill: false,
+          tension: 0.3,
+          order: 1,
+        },
+        {
+          label: 'Signal',
+          data: [],
+          type: 'line',
+          borderColor: 'rgba(239,83,80,0.8)',
+          borderWidth: 1.2,
+          pointRadius: 0,
+          fill: false,
+          tension: 0.3,
+          order: 0,
+        },
+      ]
+    },
+    options: {
+      animation: { duration: 300 },
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: {
+          display: true,
+          position: 'top',
+          align: 'end',
+          labels: { color: TICK_COLOR, font: { size: 9 }, boxWidth: 10, padding: 8 }
+        },
+        tooltip: {
+          ...chartDefaults().plugins.tooltip,
+          callbacks: { label: (ctx) => ` ${ctx.dataset.label}: ${ctx.parsed.y?.toFixed(6) ?? '—'}` }
+        },
+      },
+      scales: {
+        x: { display: false },
+        y: {
+          ticks: { color: TICK_COLOR, font: { size: 9 }, maxTicksLimit: 4 },
+          grid: { color: GRID_COLOR },
+        }
+      }
+    }
+  });
+}
+
+// EMA helper
+function computeEMA(data, period) {
+  const k = 2 / (period + 1);
+  const result = new Array(data.length).fill(null);
+  let ema = null;
+  for (let i = 0; i < data.length; i++) {
+    if (data[i] == null) continue;
+    if (ema === null) {
+      // seed with first valid value
+      let sum = 0, count = 0;
+      for (let j = i; j < Math.min(i + period, data.length); j++) {
+        if (data[j] != null) { sum += data[j]; count++; }
+      }
+      if (count === period) {
+        ema = sum / period;
+        result[i + period - 1] = ema;
+        i = i + period - 1;
+      }
+    } else {
+      ema = data[i] * k + ema * (1 - k);
+      result[i] = ema;
+    }
+  }
+  return result;
+}
+
 function setPriceInterval(secs) {
   priceInterval = secs;
   ['btn-1m','btn-5m','btn-15m'].forEach(id => {
@@ -2261,7 +2436,36 @@ async function refreshPriceChart() {
   chartPrice.data.datasets[4].data = bbUpper;
   chartPrice.data.datasets[5].data = bbLower;
 
+  // EMA 9 / 21
+  const ema9  = computeEMA(closes, 9);
+  const ema21 = computeEMA(closes, 21);
+  chartPrice.data.datasets[6].data = ema9;
+  chartPrice.data.datasets[7].data = ema21;
+
   chartPrice.update();
+
+  // BB Squeeze: bandwidth = (upper - lower) / sma
+  const bbWidths = bbUpper.map((u, i) => {
+    if (u == null || bbLower[i] == null) return null;
+    const sma = (u + bbLower[i]) / 2;
+    return sma > 0 ? (u - bbLower[i]) / sma * 100 : null;
+  });
+  const validWidths = bbWidths.filter(v => v !== null);
+  const lastWidth = validWidths[validWidths.length - 1] ?? 0;
+  const avgWidth = validWidths.length > 0 ? validWidths.reduce((a,b) => a+b,0)/validWidths.length : 0;
+  const isSqueeze = lastWidth < avgWidth * 0.5;
+  const squeezeEl = document.getElementById('bb-squeeze-bar');
+  if (squeezeEl) {
+    const sqColor = isSqueeze ? 'var(--accent)' : 'var(--muted)';
+    const ema9Last = ema9.filter(v => v !== null).slice(-1)[0];
+    const ema21Last = ema21.filter(v => v !== null).slice(-1)[0];
+    const emaSignal = ema9Last && ema21Last
+      ? (ema9Last > ema21Last ? '<span style="color:var(--green)">EMA9 > EMA21 ↑</span>' : '<span style="color:var(--red)">EMA9 < EMA21 ↓</span>')
+      : '';
+    squeezeEl.innerHTML =
+      `<span style="color:${sqColor};font-weight:${isSqueeze?'700':'400'};">BB Width: ${lastWidth.toFixed(2)}% ${isSqueeze ? '🔴 SQUEEZE' : ''}</span>` +
+      (emaSignal ? `<span>${emaSignal}</span>` : '');
+  }
 
   // RSI(14)
   if (chartRsi) {
@@ -2297,6 +2501,25 @@ async function refreshPriceChart() {
       chartRsi.data.datasets[0].borderColor = rsiColor;
     }
     chartRsi.update();
+  }
+
+  // MACD (12, 26, 9)
+  if (chartMacd) {
+    const ema12 = computeEMA(closes, 12);
+    const ema26 = computeEMA(closes, 26);
+    const macdLine = ema12.map((v, i) => (v != null && ema26[i] != null) ? v - ema26[i] : null);
+    const signalLine = computeEMA(macdLine.map(v => v ?? null), 9);
+    const histogram = macdLine.map((v, i) => (v != null && signalLine[i] != null) ? v - signalLine[i] : null);
+    const histColors = histogram.map(v => {
+      if (v == null) return 'rgba(0,0,0,0)';
+      return v >= 0 ? 'rgba(102,187,106,0.65)' : 'rgba(239,83,80,0.65)';
+    });
+    chartMacd.data.labels = labels;
+    chartMacd.data.datasets[0].data = histogram;
+    chartMacd.data.datasets[0].backgroundColor = histColors;
+    chartMacd.data.datasets[1].data = macdLine;
+    chartMacd.data.datasets[2].data = signalLine;
+    chartMacd.update();
   }
 
   chartVolume.data.labels = labels;
@@ -2495,6 +2718,43 @@ async function refreshMomentum() {
   el.innerHTML = html;
 }
 
+async function refreshSession() {
+  if (!activeSymbol) return;
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await fetchJSON(`/api/session?symbol=${sym}`);
+  if (!data?.session) return;
+  const s = data.session;
+  const chg = s.change_pct ?? 0;
+  const chgEl = document.getElementById('session-change');
+  if (chgEl) {
+    chgEl.style.color = chg > 0 ? 'var(--green)' : chg < 0 ? 'var(--red)' : 'var(--muted)';
+    chgEl.textContent = (chg > 0 ? '+' : '') + chg.toFixed(2) + '%';
+  }
+  const set = (id, val, dec=4) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val != null ? fmt(val, dec) : '—';
+  };
+  set('sess-high', s.high);
+  set('sess-low', s.low);
+  set('sess-vwap', s.vwap);
+  const tcEl = document.getElementById('sess-trades');
+  if (tcEl) tcEl.textContent = s.trade_count?.toLocaleString() ?? '—';
+  const buyPct = s.buy_pct ?? 50;
+  const sellPct = 100 - buyPct;
+  const bpEl = document.getElementById('sess-buy-pct');
+  const spEl = document.getElementById('sess-sell-pct');
+  const barEl = document.getElementById('sess-buy-bar');
+  if (bpEl) bpEl.textContent = `Buy ${buyPct.toFixed(1)}%`;
+  if (spEl) spEl.textContent = `Sell ${sellPct.toFixed(1)}%`;
+  if (barEl) barEl.style.width = buyPct + '%';
+  const ltEl = document.getElementById('sess-liq-total');
+  const llEl = document.getElementById('sess-liq-long');
+  const lsEl = document.getElementById('sess-liq-short');
+  if (ltEl) ltEl.textContent = '$' + fmtK(s.liq_total_usd);
+  if (llEl) llEl.textContent = '$' + fmtK(s.liq_long_usd);
+  if (lsEl) lsEl.textContent = '$' + fmtK(s.liq_short_usd);
+}
+
 async function refreshAlertHistory() {
   const sym = activeSymbol;
   if (!sym) return;
@@ -2611,6 +2871,7 @@ function checkPriceAlerts(price) {
 (async () => {
   initPriceCharts();
   initRsiChart();
+  initMacdChart();
   setPriceInterval(60);  // default to 1m active
 
   await loadSymbols();
@@ -2635,6 +2896,8 @@ function checkPriceAlerts(price) {
   setInterval(refreshCorrelations, 60000);
   refreshMomentum();
   setInterval(refreshMomentum, 30000);
+  refreshSession();
+  setInterval(refreshSession, 30000);
   window.addEventListener('resize', () => { renderHeatmap(); renderTradeFlowHeatmap(); });
 
   // Keyboard shortcuts: 1-9 switch symbols, S toggle sound, M mute
