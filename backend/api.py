@@ -72,6 +72,7 @@ from metrics import (
     compute_inter_exchange_oi_divergence,
     compute_whale_clustering,
     compute_tape_speed,
+    compute_aggressor_imbalance_streak,
 )
 
 router = APIRouter(prefix="/api")
@@ -577,6 +578,36 @@ async def aggressor_ratio_endpoint(
     target = symbol if symbol and symbol in syms else syms[0]
     data = await compute_aggressor_ratio_series(
         symbol=target, window_seconds=window, bucket_size=bucket
+    )
+    return {"status": "ok", "symbol": target, **data}
+
+
+@router.get("/aggressor-streak")
+async def aggressor_streak_endpoint(
+    symbol: Optional[str] = None,
+    window: int = Query(default=1800, ge=300, le=14400),
+    bucket: int = Query(default=60, ge=10, le=600),
+    threshold: float = Query(default=70.0, ge=50.0, le=95.0),
+    alert_streak: int = Query(default=3, ge=2, le=20),
+):
+    """
+    Aggressor imbalance streak counter.
+
+    Counts consecutive 1-min candles where buy aggressor > threshold% or
+    sell aggressor > threshold%. Returns alert=true when streak >= alert_streak.
+    """
+    from collectors import get_symbols
+    from storage import get_recent_trades
+
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    since = time.time() - window
+    trades = await get_recent_trades(limit=20000, since=since, symbol=target)
+    data = compute_aggressor_imbalance_streak(
+        trades,
+        bucket_size=bucket,
+        threshold_pct=threshold,
+        alert_streak=alert_streak,
     )
     return {"status": "ok", "symbol": target, **data}
 

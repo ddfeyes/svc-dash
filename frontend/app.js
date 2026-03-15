@@ -1391,6 +1391,70 @@ async function renderTapeSpeed() {
   `;
 }
 
+
+async function renderAggressorStreak() {
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/aggressor-streak?symbol=${sym}`);
+  if (!data) return;
+
+  const el    = document.getElementById('aggressor-streak-content');
+  const badge = document.getElementById('aggressor-streak-badge');
+  if (!el) return;
+
+  const streak    = data.streak || 0;
+  const dir       = data.streak_direction;
+  const alert     = data.alert;
+  const threshold = data.alert_streak || 3;
+  const candles   = data.candles || [];
+  const desc      = data.description || '—';
+
+  const dirColor = dir === 'buy' ? 'var(--green)' : dir === 'sell' ? 'var(--red)' : 'var(--muted)';
+  const dirLabel = dir ? dir.toUpperCase() : '—';
+
+  if (badge) {
+    if (streak === 0) {
+      badge.textContent  = 'no streak';
+      badge.className    = 'card-badge badge-gray';
+    } else if (alert) {
+      badge.textContent  = `ALERT ${streak}x ${dirLabel}`;
+      badge.className    = 'card-badge ' + (dir === 'buy' ? 'badge-green' : 'badge-red');
+    } else {
+      badge.textContent  = `${streak}x ${dirLabel}`;
+      badge.className    = 'card-badge ' + (dir === 'buy' ? 'badge-green' : 'badge-red');
+    }
+    badge.style.display = 'inline-block';
+  }
+
+  // Last 10 candles as mini bar indicators
+  const recent = candles.slice(-10);
+  const bars = recent.map(c => {
+    const col = c.direction === 'buy' ? 'var(--green)' : c.direction === 'sell' ? 'var(--red)' : 'var(--muted)';
+    const pct = c.direction === 'buy' ? c.buy_pct.toFixed(0) : c.direction === 'sell' ? c.sell_pct.toFixed(0) : '—';
+    return `<div class="metric-box" style="border-top:3px solid ${col}">
+      <div class="metric-label">${new Date(c.ts * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</div>
+      <div class="metric-value" style="color:${col};font-size:13px">${pct}%</div>
+    </div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="display:flex;gap:12px;align-items:center;margin-bottom:8px">
+      <div>
+        <div style="font-size:28px;font-weight:700;color:${dirColor}">${streak}</div>
+        <div style="font-size:11px;color:var(--muted)">streak</div>
+      </div>
+      <div style="flex:1">
+        <div style="font-size:13px;color:${alert ? dirColor : 'var(--fg)'}">
+          ${alert ? '⚡ ' : ''}${desc}
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">
+          alert at ${threshold}+ consecutive candles · 70% threshold
+        </div>
+      </div>
+    </div>
+    <div class="phase-metrics" style="flex-wrap:wrap">${bars || '<span style="color:var(--muted);font-size:11px">No candle data</span>'}</div>
+  `;
+}
+
 // ── Main Refresh Loop ─────────────────────────────────────────────────────────
 async function refresh() {
   if (!activeSymbol) return;
@@ -1415,6 +1479,7 @@ async function refresh() {
     renderAdaptiveVolumeProfile(),
     renderAggressorRatio(),
     renderTapeSpeed(),
+    renderAggressorStreak(),
   ]);
 }
 
