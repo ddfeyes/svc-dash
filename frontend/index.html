@@ -599,6 +599,7 @@
       <span>VAH: <b id="vp-vah" style="color:var(--green)">—</b></span>
       <span>VAL: <b id="vp-val" style="color:var(--red)">—</b></span>
       <span id="vp-va-pct" style="color:var(--muted)"></span>
+      <span id="vp-dist" style="color:var(--muted)"></span>
     </div>
     <canvas id="chart-vp" style="height:200px !important;"></canvas>
   </div>
@@ -1550,6 +1551,13 @@ async function refreshAll() {
     document.getElementById('vp-vah').textContent = fmt(vp.vah, 6);
     document.getElementById('vp-val').textContent = fmt(vp.val, 6);
     document.getElementById('vp-va-pct').textContent = `VA: ${vp.value_area_pct || 70}%`;
+    // Show distance from current price to POC
+    if (_lastPrice && vp.poc) {
+      const distPct = ((_lastPrice - vp.poc) / vp.poc * 100).toFixed(3);
+      const distColor = _lastPrice > vp.poc ? 'var(--green)' : 'var(--red)';
+      const distEl = document.getElementById('vp-dist');
+      if (distEl) { distEl.style.color = distColor; distEl.textContent = `Price vs POC: ${distPct > 0 ? '+' : ''}${distPct}%`; }
+    }
   }
 }
 
