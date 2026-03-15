@@ -31,6 +31,7 @@ from metrics import (
     detect_volume_spike,
     detect_liquidation_cascade,
     detect_funding_extreme,
+    detect_cvd_momentum,
 )
 
 router = APIRouter(prefix="/api")
@@ -230,6 +231,17 @@ async def funding_extreme(
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
     data = await detect_funding_extreme(symbol=target, threshold_pct=threshold_pct)
+    return {"status": "ok", "symbol": target, **data}
+
+
+@router.get("/cvd-momentum")
+async def cvd_momentum_endpoint(
+    symbol: Optional[str] = None,
+    window: int = Query(default=60, le=300),
+):
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await detect_cvd_momentum(window_seconds=window, symbol=target)
     return {"status": "ok", "symbol": target, **data}
 
 

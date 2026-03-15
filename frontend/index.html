@@ -859,6 +859,27 @@
     </div>
     <div id="price-alert-log" style="max-height:100px;overflow-y:auto;font-size:10px;font-family:'Menlo','Monaco','Consolas',monospace;color:var(--muted);"></div>
   </div>
+
+  <!-- CVD Momentum -->
+  <div class="card" id="card-cvd-momentum">
+    <h2><span class="card-icon">🌊</span>CVD Momentum
+      <span id="cvd-mom-window-btns" style="margin-left:auto;display:flex;gap:4px;">
+        <button onclick="setCvdMomWindow(60)"  id="cvd-mom-1m"  style="background:var(--bg3);border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:2px 7px;font-size:9px;cursor:pointer;">1m</button>
+        <button onclick="setCvdMomWindow(300)" id="cvd-mom-5m"  style="background:var(--bg3);border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:2px 7px;font-size:9px;cursor:pointer;">5m</button>
+        <button onclick="setCvdMomWindow(900)" id="cvd-mom-15m" style="background:var(--bg3);border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:2px 7px;font-size:9px;cursor:pointer;">15m</button>
+      </span>
+    </h2>
+    <div id="cvd-mom-content" style="font-size:11px;"></div>
+  </div>
+
+  <!-- Signals Scanner (multi-symbol) -->
+  <div class="card wide" id="card-signals-scanner">
+    <h2><span class="card-icon">🚦</span>Signals Scanner
+      <span id="scanner-ts" style="margin-left:auto;font-size:9px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;"></span>
+    </h2>
+    <div id="signals-scanner-content" style="font-size:11px;"></div>
+  </div>
+
 </div>
 
 <!-- Footer health bar -->
@@ -1644,6 +1665,7 @@ function selectSymbol(sym) {
   refreshSession();
   refreshMicrostructure();
   refreshTradeDist();
+  refreshCvdMomentum();
   initTape();
 }
 
@@ -3270,6 +3292,153 @@ function checkPriceAlerts(price) {
   } catch {}
 }
 
+// ── CVD Momentum ─────────────────────────────────────────────────────────────
+let _cvdMomWindow = 60;
+function setCvdMomWindow(w) {
+  _cvdMomWindow = w;
+  ['1m','5m','15m'].forEach(l => {
+    const btn = document.getElementById('cvd-mom-' + l);
+    if (btn) btn.style.background = 'var(--bg3)';
+  });
+  const labelMap = {60:'1m', 300:'5m', 900:'15m'};
+  const activeBtn = document.getElementById('cvd-mom-' + labelMap[w]);
+  if (activeBtn) { activeBtn.style.background = 'var(--accent)'; activeBtn.style.color = '#0e1117'; }
+  refreshCvdMomentum();
+}
+
+async function refreshCvdMomentum() {
+  if (!activeSymbol) return;
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await fetchJSON(`/api/cvd-momentum?symbol=${sym}&window=${_cvdMomWindow}`);
+  const el = document.getElementById('cvd-mom-content');
+  if (!el || !data) return;
+
+  const dirColor = data.direction === 'bullish' ? 'var(--green)' : data.direction === 'bearish' ? 'var(--red)' : 'var(--muted)';
+  const dirIcon  = data.direction === 'bullish' ? '▲' : data.direction === 'bearish' ? '▼' : '●';
+  const accelStr = data.accelerating ? '⚡ Accelerating' : '→ Steady';
+  const accelColor = data.accelerating ? 'var(--accent)' : 'var(--muted)';
+  const intensityPct = Math.round((data.intensity || 0) * 100);
+  const intensityColor = intensityPct > 60 ? 'var(--accent)' : intensityPct > 30 ? 'var(--blue)' : 'var(--muted)';
+
+  const fmtUSD = v => {
+    const abs = Math.abs(v);
+    if (abs >= 1e6) return (v / 1e6).toFixed(2) + 'M';
+    if (abs >= 1e3) return (v / 1e3).toFixed(1) + 'k';
+    return v.toFixed(0);
+  };
+
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+      <span style="font-size:28px;font-weight:700;color:${dirColor};">${dirIcon}</span>
+      <div>
+        <div style="font-size:16px;font-weight:700;color:${dirColor};text-transform:capitalize;">${data.direction}</div>
+        <div style="font-size:10px;color:var(--muted);">${_cvdMomWindow/60}min window</div>
+      </div>
+      <div style="margin-left:auto;text-align:right;">
+        <div style="font-size:11px;color:${accelColor};">${accelStr}</div>
+        <div style="font-size:10px;color:var(--muted);">accel: ${(data.acceleration > 0 ? '+' : '') + (data.acceleration * 100).toFixed(2)}%</div>
+      </div>
+    </div>
+    <div style="margin-bottom:8px;">
+      <div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:3px;">
+        <span style="color:var(--muted);">Intensity</span>
+        <span style="color:${intensityColor};font-weight:700;">${intensityPct}%</span>
+      </div>
+      <div style="height:6px;background:var(--bg3);border-radius:3px;overflow:hidden;">
+        <div style="height:100%;width:${intensityPct}%;background:${intensityColor};border-radius:3px;transition:width 0.4s;"></div>
+      </div>
+    </div>
+    <div style="display:flex;gap:12px;font-size:11px;flex-wrap:wrap;">
+      <span style="color:var(--muted);">CVD Total: <b style="color:${dirColor};">${fmtUSD(data.cvd_total_usd || 0)}</b></span>
+      <span style="color:var(--muted);">Rate: <b style="color:var(--text);">${fmtUSD(data.cvd_rate || 0)}/s</b></span>
+    </div>`;
+}
+
+// ── Signals Scanner ───────────────────────────────────────────────────────────
+async function refreshSignalsScanner() {
+  const el = document.getElementById('signals-scanner-content');
+  const tsEl = document.getElementById('scanner-ts');
+  if (!el) return;
+
+  if (!allSymbols || !allSymbols.length) return;
+
+  // Fetch signals for all symbols in parallel
+  const results = await Promise.all(allSymbols.map(async sym => {
+    const enc = encodeURIComponent(sym);
+    const [phase, diverg, liq, oi, funding, vol, cvdMom] = await Promise.all([
+      fetchJSON(`/api/metrics/summary?symbol=${enc}`),
+      fetchJSON(`/api/delta-divergence?symbol=${enc}`),
+      fetchJSON(`/api/liq-cascade?symbol=${enc}`),
+      fetchJSON(`/api/oi-spike?symbol=${enc}`),
+      fetchJSON(`/api/funding-extreme?symbol=${enc}`),
+      fetchJSON(`/api/volume-spike?symbol=${enc}&window=60&baseline=300`),
+      fetchJSON(`/api/cvd-momentum?symbol=${enc}&window=60`),
+    ]);
+    return { sym, phase, diverg, liq, oi, funding, vol, cvdMom };
+  }));
+
+  if (tsEl) tsEl.textContent = new Date().toLocaleTimeString();
+
+  const signalDot = (active, color, label) =>
+    `<span title="${label}" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${active ? color : 'var(--dim)'};margin-right:3px;"></span>`;
+
+  const rows = results.map(r => {
+    const base = r.sym.replace('USDT','');
+    const phaseObj = r.phase?.phase;
+    const phaseLabel = phaseObj?.phase || '—';
+    const phaseConf = phaseObj?.confidence != null ? phaseObj.confidence : (r.phase?.phase?.confidence || null);
+    // phase color
+    const phaseMap = { Accumulation: 'var(--green)', Distribution: 'var(--red)', 'Bull Trend': 'var(--green)', 'Bear Trend': 'var(--red)', Balanced: 'var(--muted)' };
+    const phaseColor = phaseMap[phaseLabel] || 'var(--muted)';
+
+    const div = r.diverg?.divergence || false;
+    const divSev = r.diverg?.severity || 0;
+
+    const liqActive = r.liq?.cascade_detected || false;
+    const oiActive = r.oi?.spike_detected || false;
+    const fundActive = r.funding?.extreme || false;
+    const volActive = r.vol?.spike_detected || false;
+    const cvdDir = r.cvdMom?.direction || 'neutral';
+    const cvdAccel = r.cvdMom?.accelerating || false;
+    const cvdColor = cvdDir === 'bullish' ? 'var(--green)' : cvdDir === 'bearish' ? 'var(--red)' : 'var(--muted)';
+    const cvdIcon = cvdDir === 'bullish' ? '▲' : cvdDir === 'bearish' ? '▼' : '●';
+    const intensity = Math.round((r.cvdMom?.intensity || 0) * 100);
+
+    const isActive = r.sym === activeSymbol;
+    const rowBg = isActive ? 'background:var(--bg3);' : '';
+
+    const signals = [
+      signalDot(div && divSev >= 2, 'var(--accent)', `Delta Divergence (sev:${divSev})`),
+      signalDot(liqActive, 'var(--red)', 'Liq Cascade'),
+      signalDot(oiActive, 'var(--purple)', 'OI Spike'),
+      signalDot(fundActive, 'var(--blue)', 'Funding Extreme'),
+      signalDot(volActive, 'var(--accent)', 'Volume Spike'),
+    ].join('');
+
+    const alertCount = [div && divSev >= 2, liqActive, oiActive, fundActive, volActive].filter(Boolean).length;
+    const alertBadge = alertCount > 0
+      ? `<span style="background:var(--red);color:#fff;border-radius:3px;padding:0px 5px;font-size:9px;font-weight:700;margin-left:6px;">${alertCount}</span>`
+      : '';
+
+    return `<tr style="${rowBg}cursor:pointer;" onclick="selectSymbol('${r.sym}')">
+      <td style="padding:5px 8px;font-weight:700;color:${isActive?'var(--accent)':'var(--text)'};">${base}${alertBadge}</td>
+      <td style="padding:5px 8px;color:${phaseColor};font-weight:600;font-size:10px;">${phaseLabel}</td>
+      <td style="padding:5px 8px;text-align:center;">${signals}</td>
+      <td style="padding:5px 8px;color:${cvdColor};font-weight:700;font-size:13px;text-align:center;">${cvdIcon} ${intensity}%${cvdAccel ? ' ⚡' : ''}</td>
+    </tr>`;
+  });
+
+  el.innerHTML = `<table style="width:100%;border-collapse:collapse;">
+    <thead><tr>
+      <th style="text-align:left;padding:4px 8px;color:var(--muted);font-size:9px;letter-spacing:1px;">SYMBOL</th>
+      <th style="text-align:left;padding:4px 8px;color:var(--muted);font-size:9px;letter-spacing:1px;">PHASE</th>
+      <th style="text-align:center;padding:4px 8px;color:var(--muted);font-size:9px;letter-spacing:1px;" title="DeltaDiv / LiqCascade / OISpike / FundingExt / VolSpike">SIGNALS ●●●●●</th>
+      <th style="text-align:center;padding:4px 8px;color:var(--muted);font-size:9px;letter-spacing:1px;">CVD MOM</th>
+    </tr></thead>
+    <tbody>${rows.join('')}</tbody>
+  </table>`;
+}
+
 // ── Boot ─────────────────────────────────────────────────────────────────────
 (async () => {
   initPriceCharts();
@@ -3309,6 +3478,10 @@ function checkPriceAlerts(price) {
   window.addEventListener('resize', () => { renderHeatmap(); renderTradeFlowHeatmap(); });
   refreshHealthBar();
   setInterval(refreshHealthBar, 60000);
+  setCvdMomWindow(60);  // sets active button + calls refresh
+  setInterval(refreshCvdMomentum, 10000);
+  refreshSignalsScanner();
+  setInterval(refreshSignalsScanner, 15000);
 
   // Keyboard shortcuts: 1-9 switch symbols, S toggle sound, M mute
   window.addEventListener('keydown', (e) => {

@@ -599,6 +599,58 @@ async def detect_funding_extreme(symbol: str = None, threshold_pct: float = 0.1)
     }
 
 
+async def detect_cvd_momentum(window_seconds: int = 60, symbol: str = None) -> Dict:
+    """
+    CVD momentum: rate of change of CVD in last window.
+    Returns: cvd_rate (CVD/s), direction, intensity (0-1), and acceleration.
+    Useful for catching momentum shifts early.
+    """
+    since = time.time() - window_seconds
+    trades = await get_trades_for_cvd(since, symbol=symbol)
+
+    if len(trades) < 5:
+        return {"cvd_rate": 0, "direction": "neutral", "intensity": 0, "acceleration": 0}
+
+    # Split into early/late half for acceleration
+    half = len(trades) // 2
+    early_trades = trades[:half]
+    late_trades  = trades[half:]
+
+    def cvd_of(ts_list):
+        c = 0.0
+        for t in ts_list:
+            c += t["price"] * t["qty"] if t["side"] in ("buy", "Buy") else -(t["price"] * t["qty"])
+        return c
+
+    total_vol_usd = sum(t["price"] * t["qty"] for t in trades)
+    early_cvd = cvd_of(early_trades)
+    late_cvd  = cvd_of(late_trades)
+    total_cvd = early_cvd + late_cvd
+
+    # Rate = CVD USD per second
+    span = max(trades[-1]["ts"] - trades[0]["ts"], 1)
+    cvd_rate = total_cvd / span
+
+    # Intensity = abs(total_cvd) / total_vol_usd
+    intensity = min(1.0, abs(total_cvd) / total_vol_usd) if total_vol_usd > 0 else 0
+
+    # Acceleration: is late_cvd larger than early_cvd (momentum increasing)?
+    acceleration = late_cvd - early_cvd
+    accel_norm = acceleration / total_vol_usd if total_vol_usd > 0 else 0
+
+    direction = "bullish" if total_cvd > 0 else "bearish" if total_cvd < 0 else "neutral"
+
+    return {
+        "cvd_rate": round(cvd_rate, 2),
+        "cvd_total_usd": round(total_cvd, 2),
+        "direction": direction,
+        "intensity": round(intensity, 4),
+        "acceleration": round(accel_norm, 4),
+        "accelerating": abs(late_cvd) > abs(early_cvd),
+        "window_seconds": window_seconds,
+    }
+
+
 async def detect_volume_spike(window_seconds: int = 30, baseline_seconds: int = 300, symbol: str = None) -> Dict:
     """
     Volume spike: compare recent window volume vs baseline average.
