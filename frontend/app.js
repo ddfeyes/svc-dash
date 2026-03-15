@@ -56,16 +56,16 @@ function fmt(n, decimals = 4) {
   return v.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
-/** Format a large number as $47.5M, $1.2k, etc. */
+/** Format a large number as $47.5M, $1.2K, etc. */
 function fmtUSD(n) {
   if (n == null) return '—';
   const v = parseFloat(n);
   if (isNaN(v)) return '—';
   const abs = Math.abs(v);
   const sign = v < 0 ? '-' : '';
-  if (abs >= 1e9) return sign + '$' + (abs / 1e9).toFixed(1) + 'B';
-  if (abs >= 1e6) return sign + '$' + (abs / 1e6).toFixed(1) + 'M';
-  if (abs >= 1e3) return sign + '$' + (abs / 1e3).toFixed(1) + 'k';
+  if (abs >= 1e9) return sign + '$' + (abs / 1e9).toFixed(2) + 'B';
+  if (abs >= 1e6) return sign + '$' + (abs / 1e6).toFixed(2) + 'M';
+  if (abs >= 1e3) return sign + '$' + (abs / 1e3).toFixed(1) + 'K';
   return sign + '$' + abs.toFixed(2);
 }
 
@@ -351,6 +351,19 @@ async function renderPriceChart() {
     }));
 
   if (candles.length) {
+    // Set Y-axis precision based on actual price magnitude
+    const minPrice = Math.min(...candles.map(c => c.low));
+    let precision, minMove;
+    if (minPrice < 0.0001)      { precision = 8; minMove = 0.00000001; }
+    else if (minPrice < 0.001)  { precision = 7; minMove = 0.0000001; }
+    else if (minPrice < 0.01)   { precision = 6; minMove = 0.000001; }
+    else if (minPrice < 0.1)    { precision = 5; minMove = 0.00001; }
+    else if (minPrice < 1)      { precision = 4; minMove = 0.0001; }
+    else if (minPrice < 10)     { precision = 3; minMove = 0.001; }
+    else if (minPrice < 1000)   { precision = 2; minMove = 0.01; }
+    else                        { precision = 2; minMove = 1; }
+    priceChart._candleSeries.applyOptions({ priceFormat: { type: 'price', precision, minMove } });
+
     priceChart._candleSeries.setData(candles);
     priceChart._volumeSeries.setData(volumes);
     document.getElementById('price-chart-container').classList.remove('empty');
@@ -367,8 +380,7 @@ function updateLastPrice(price, change) {
   const changeEl = document.getElementById('price-change');
   if (priceEl) priceEl.textContent = fmtPrice(price);
   if (changeEl) {
-    const sign = change >= 0 ? '+' : '';
-    changeEl.textContent = sign + fmtPrice(change);
+    changeEl.textContent = (change >= 0 ? '+' : '') + fmtPrice(change);
     changeEl.className = change >= 0 ? 'up' : 'down';
   }
 }
@@ -383,8 +395,17 @@ async function renderOiChart() {
   const src = rows.length ? rows : data.data;
 
   const labels = src.map(d => fmtTime(d.ts));
-  // Multiply raw OI (coins) by current price to get USDT value
-  const price = _lastPrice || 1;
+  // Multiply raw OI (contracts/tokens) by current price to get USDT value.
+  // Fetch price from trades if _lastPrice isn't set yet (parallel init).
+  let price = _lastPrice;
+  if (!price) {
+    const td = await apiFetch(`/trades/recent?limit=1&symbol=${sym}`);
+    if (td?.data?.length) {
+      price = parseFloat(td.data[0].price);
+      _lastPrice = price;
+    }
+    price = price || 1;
+  }
   const values = src.map(d => parseFloat(d.oi_value) * price);
 
   oiChart.data.labels = labels;
@@ -607,7 +628,11 @@ async function renderTradeTape() {
 async function renderPhase() {
   const sym = encodeURIComponent(activeSymbol);
   const data = await apiFetch(`/market-regime?symbol=${sym}`);
-  if (!data) return;
+  if (!data) {
+    const el = document.getElementById('phase-content');
+    if (el && el.textContent.includes('Loading')) el.innerHTML = '<div class="text-muted" style="font-size:11px;">No data yet</div>';
+    return;
+  }
 
   const phase  = data.phase  || data.regime || 'Unknown';
   const regime = data.regime || phase;
@@ -669,7 +694,11 @@ async function renderPhase() {
 async function renderOiDivergence() {
   const sym = encodeURIComponent(activeSymbol);
   const data = await apiFetch(`/oi-divergence?symbol=${sym}&window=3600`);
-  if (!data) return;
+  if (!data) {
+    const el = document.getElementById('oi-divergence-content');
+    if (el && el.textContent.includes('Loading')) el.innerHTML = '<div class="text-muted" style="font-size:11px;">No data yet</div>';
+    return;
+  }
 
   const badge = document.getElementById('oi-divergence-badge');
   if (badge) {
@@ -744,7 +773,11 @@ function _compColor(score) {
 async function renderMicrostructure() {
   const sym = encodeURIComponent(activeSymbol);
   const data = await apiFetch(`/market-microstructure?symbol=${sym}&window=300`);
-  if (!data) return;
+  if (!data) {
+    const el = document.getElementById('microstructure-content');
+    if (el && el.textContent.includes('Loading')) el.innerHTML = '<div class="text-muted" style="font-size:11px;">No data yet</div>';
+    return;
+  }
 
   const badge = document.getElementById('microstructure-badge');
   if (badge) {
@@ -947,7 +980,11 @@ async function renderWhaleClustering() {
 async function renderVwapDeviation() {
   const sym = encodeURIComponent(activeSymbol);
   const data = await apiFetch(`/vwap-deviation?symbol=${sym}`);
-  if (!data) return;
+  if (!data) {
+    const el = document.getElementById('vwap-deviation-content');
+    if (el && el.textContent.includes('Loading')) el.innerHTML = '<div class="text-muted" style="font-size:11px;">No data yet</div>';
+    return;
+  }
 
   const el    = document.getElementById('vwap-deviation-content');
   const badge = document.getElementById('vwap-deviation-badge');
@@ -989,7 +1026,11 @@ async function renderVwapDeviation() {
 async function renderMarketRegime() {
   const sym = encodeURIComponent(activeSymbol);
   const data = await apiFetch(`/market-regime?symbol=${sym}`);
-  if (!data) return;
+  if (!data) {
+    const el = document.getElementById('market-regime-content');
+    if (el && el.textContent.includes('Loading')) el.innerHTML = '<div class="text-muted" style="font-size:11px;">No data yet</div>';
+    return;
+  }
 
   const el    = document.getElementById('market-regime-content');
   const badge = document.getElementById('market-regime-badge');
