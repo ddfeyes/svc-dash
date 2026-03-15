@@ -480,6 +480,7 @@
     </h2>
     <canvas id="chart-price" style="height:200px !important;"></canvas>
     <canvas id="chart-volume" style="height:60px !important; margin-top:4px;"></canvas>
+    <canvas id="chart-rsi" style="height:60px !important; margin-top:4px;"></canvas>
   </div>
 
   <!-- Market Phase + Summary -->
@@ -981,6 +982,49 @@ const charts = {
   depth:   mkDepthChart('chart-depth'),
 };
 
+let chartRsi = null;
+function initRsiChart() {
+  const ctx = document.getElementById('chart-rsi').getContext('2d');
+  chartRsi = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [{
+        label: 'RSI(14)',
+        data: [],
+        borderColor: 'rgba(240,192,64,0.8)',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        fill: false,
+        tension: 0.3,
+      }]
+    },
+    options: {
+      animation: { duration: 300 },
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          ...chartDefaults().plugins.tooltip,
+          callbacks: { label: (ctx) => ` RSI: ${ctx.parsed.y.toFixed(2)}` }
+        },
+        annotation: undefined
+      },
+      scales: {
+        x: { display: false },
+        y: {
+          min: 0, max: 100,
+          ticks: { color: TICK_COLOR, font: { size: 9 }, values: [30, 50, 70] },
+          grid: { color: GRID_COLOR },
+          afterBuildTicks: (axis) => { axis.ticks = [{value:30},{value:50},{value:70}]; }
+        }
+      }
+    }
+  });
+}
+
 // ── Sparklines ────────────────────────────────────────────────────────────────
 const sparklines = {};
 function mkSparkline(id, color) {
@@ -1284,6 +1328,7 @@ function selectSymbol(sym) {
     c.data.datasets.forEach(ds => { ds.data = []; });
     c.update('none');
   });
+  if (chartRsi) { chartRsi.data.labels = []; chartRsi.data.datasets[0].data = []; chartRsi.update('none'); }
   Object.values(sparklines).forEach(sc => { if (sc) { sc.data.labels = []; sc.data.datasets[0].data = []; sc.update('none'); } });
   Object.keys(sparkData).forEach(k => { sparkData[k] = []; });
 
@@ -2137,6 +2182,42 @@ async function refreshPriceChart() {
 
   chartPrice.update();
 
+  // RSI(14)
+  if (chartRsi) {
+    const RSI_PERIOD = 14;
+    const rsiData = [];
+    let avgGain = 0, avgLoss = 0;
+    for (let i = 1; i <= RSI_PERIOD && i < closes.length; i++) {
+      const d = closes[i] - closes[i - 1];
+      avgGain += Math.max(d, 0);
+      avgLoss += Math.max(-d, 0);
+    }
+    avgGain /= RSI_PERIOD;
+    avgLoss /= RSI_PERIOD;
+    for (let i = 0; i < closes.length; i++) {
+      if (i < RSI_PERIOD) { rsiData.push(null); continue; }
+      if (i === RSI_PERIOD) {
+        const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+        rsiData.push(parseFloat((100 - 100 / (1 + rs)).toFixed(2)));
+        continue;
+      }
+      const d = closes[i] - closes[i - 1];
+      avgGain = (avgGain * (RSI_PERIOD - 1) + Math.max(d, 0)) / RSI_PERIOD;
+      avgLoss = (avgLoss * (RSI_PERIOD - 1) + Math.max(-d, 0)) / RSI_PERIOD;
+      const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+      rsiData.push(parseFloat((100 - 100 / (1 + rs)).toFixed(2)));
+    }
+    chartRsi.data.labels = labels;
+    chartRsi.data.datasets[0].data = rsiData;
+    // Color based on last RSI value
+    const lastRsi = rsiData.filter(v => v !== null).slice(-1)[0];
+    if (lastRsi !== undefined) {
+      const rsiColor = lastRsi > 70 ? 'var(--red)' : lastRsi < 30 ? 'var(--green)' : 'rgba(240,192,64,0.8)';
+      chartRsi.data.datasets[0].borderColor = rsiColor;
+    }
+    chartRsi.update();
+  }
+
   chartVolume.data.labels = labels;
   chartVolume.data.datasets[0].data = candles.map(c => c.buy_volume);
   chartVolume.data.datasets[1].data = candles.map(c => c.sell_volume);
@@ -2311,6 +2392,7 @@ async function refreshAlertHistory() {
 // ── Boot ─────────────────────────────────────────────────────────────────────
 (async () => {
   initPriceCharts();
+  initRsiChart();
   setPriceInterval(60);  // default to 1m active
 
   await loadSymbols();
