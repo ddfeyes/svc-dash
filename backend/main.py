@@ -23,7 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from storage import init_db, cleanup_old_data, insert_pattern
+from storage import init_db, cleanup_old_data, insert_pattern, insert_phase_snapshot
 from collectors import run_all_collectors, get_symbols
 from pollers import poller_loop
 from api import router
@@ -92,6 +92,40 @@ async def pattern_detection_loop():
             await asyncio.sleep(60)
 
 
+async def phase_snapshot_loop():
+    """Periodically snapshot market phase for all symbols (historical replay data)."""
+    from metrics import classify_market_phase, compute_market_regime
+    await asyncio.sleep(45)  # wait for collectors to warm up
+    SNAP_INTERVAL = 30  # snapshot every 30s
+
+    while True:
+        try:
+            syms = get_symbols()
+            for sym in syms:
+                try:
+                    phase_result = await classify_market_phase(symbol=sym)
+                    regime_result = await compute_market_regime(symbol=sym)
+                    phase = phase_result.get("phase", "unknown")
+                    confidence = phase_result.get("confidence", 0.0)
+                    signals = phase_result.get("signals", {})
+                    composite = regime_result.get("composite_score") if isinstance(regime_result, dict) else None
+                    await insert_phase_snapshot(
+                        symbol=sym,
+                        phase=phase,
+                        confidence=confidence,
+                        signals=signals,
+                        composite_score=composite,
+                    )
+                except Exception as e:
+                    logger.warning(f"Phase snapshot failed for {sym}: {e}")
+            await asyncio.sleep(SNAP_INTERVAL)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Phase snapshot loop error: {e}")
+            await asyncio.sleep(60)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Initializing DB...")
@@ -110,6 +144,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(poller_loop(), name="pollers"),
         asyncio.create_task(cleanup_loop(), name="cleanup"),
         asyncio.create_task(pattern_detection_loop(), name="pattern_detector"),
+        asyncio.create_task(phase_snapshot_loop(), name="phase_snapshots"),
     ]
 
     logger.info("All background tasks started")

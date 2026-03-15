@@ -1,6 +1,7 @@
 """SQLite storage layer using aiosqlite — multi-symbol."""
 import aiosqlite
 import asyncio
+import json
 import os
 import time
 from typing import Any, Dict, List, Optional
@@ -681,3 +682,73 @@ async def get_whale_trades(limit: int = 100, since: float = None, symbol: str = 
         async with db.execute(q, params) as cur:
             rows = await cur.fetchall()
             return [dict(r) for r in rows]
+
+
+async def insert_phase_snapshot(symbol: str, phase: str, confidence: float, signals: dict, composite_score: float = None):
+    """Store a periodic market phase snapshot for historical replay."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """CREATE TABLE IF NOT EXISTS phase_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts REAL NOT NULL,
+                symbol TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                confidence REAL,
+                composite_score REAL,
+                signals TEXT
+            )"""
+        )
+        await db.execute(
+            "INSERT INTO phase_snapshots (ts, symbol, phase, confidence, composite_score, signals) VALUES (?,?,?,?,?,?)",
+            (time.time(), symbol, phase, confidence, composite_score,
+             json.dumps(signals) if signals else None)
+        )
+        await db.commit()
+
+
+async def get_phase_snapshots(
+    symbol: str = None,
+    since: float = None,
+    until: float = None,
+    limit: int = 200,
+) -> list:
+    """Fetch phase snapshots for historical replay."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Ensure table exists
+        await db.execute(
+            """CREATE TABLE IF NOT EXISTS phase_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts REAL NOT NULL,
+                symbol TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                confidence REAL,
+                composite_score REAL,
+                signals TEXT
+            )"""
+        )
+        params = []
+        q = "SELECT * FROM phase_snapshots WHERE 1=1"
+        if symbol:
+            q += " AND symbol = ?"
+            params.append(symbol)
+        if since:
+            q += " AND ts >= ?"
+            params.append(since)
+        if until:
+            q += " AND ts <= ?"
+            params.append(until)
+        q += " ORDER BY ts ASC LIMIT ?"
+        params.append(limit)
+        db.row_factory = aiosqlite.Row
+        async with db.execute(q, params) as cur:
+            rows = await cur.fetchall()
+            result = []
+            for r in rows:
+                d = dict(r)
+                if d.get("signals"):
+                    try:
+                        d["signals"] = json.loads(d["signals"])
+                    except Exception:
+                        pass
+                result.append(d)
+            return result

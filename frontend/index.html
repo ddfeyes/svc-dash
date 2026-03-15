@@ -765,6 +765,25 @@
     <div id="pattern-history" style="max-height:200px;overflow-y:auto;font-size:11px;"></div>
   </div>
 
+  <!-- Phase History Timeline -->
+  <div class="card" id="card-phase-timeline">
+    <h2><span class="card-icon">🕐</span>Phase Timeline (1h replay)
+      <span id="phase-timeline-ts" style="margin-left:auto;font-size:9px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;"></span>
+    </h2>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+      <label style="font-size:10px;color:var(--muted);">Window:</label>
+      <select id="phase-timeline-window" style="background:var(--bg2);color:var(--fg);border:1px solid var(--border);border-radius:4px;font-size:10px;padding:2px 6px;">
+        <option value="1">1h</option>
+        <option value="3">3h</option>
+        <option value="6">6h</option>
+        <option value="24">24h</option>
+      </select>
+      <button onclick="loadPhaseTimeline()" style="background:var(--bg3);color:var(--accent);border:1px solid var(--border);border-radius:4px;font-size:10px;padding:2px 8px;cursor:pointer;">Refresh</button>
+    </div>
+    <div id="phase-timeline-list" style="max-height:220px;overflow-y:auto;font-size:11px;font-family:'Menlo','Monaco','Consolas',monospace;"></div>
+    <div id="phase-timeline-empty" style="font-size:11px;color:var(--muted);display:none;">No phase data yet — collecting snapshots every 30s...</div>
+  </div>
+
   <!-- Correlation Matrix + Momentum -->
   <div class="card" id="card-correlations">
     <h2><span class="card-icon">🔗</span>Price Correlations (1h)
@@ -1915,6 +1934,7 @@ function selectSymbol(sym) {
   refreshCvdMomentum();
   refreshMarketRegime();
   refreshAtr();
+  loadPhaseTimeline();
   initTape();
 }
 
@@ -3552,6 +3572,71 @@ async function refreshAlertHistory() {
   }
 }
 
+// ── Phase Timeline ───────────────────────────────────────────────────────────
+const PHASE_COLORS = {
+  'accumulation':  'var(--green)',
+  'distribution':  'var(--red)',
+  'trending_up':   '#42a5f5',
+  'trending_down': '#ef5350',
+  'choppy':        'var(--muted)',
+  'breakout':      '#ab7df8',
+  'squeeze':       '#f0c040',
+  'unknown':       'var(--muted)',
+};
+
+async function loadPhaseTimeline() {
+  const sym = activeSymbol;
+  if (!sym) return;
+  const windowHours = parseFloat(document.getElementById('phase-timeline-window')?.value || '1');
+  const enc = encodeURIComponent(sym);
+  const data = await fetchJSON(`/api/phase-history?symbol=${enc}&window_hours=${windowHours}&limit=500`);
+  const listEl = document.getElementById('phase-timeline-list');
+  const emptyEl = document.getElementById('phase-timeline-empty');
+  const tsEl = document.getElementById('phase-timeline-ts');
+  if (!data || !data.data) return;
+
+  const rows = data.data;
+  if (!rows.length) {
+    listEl.innerHTML = '';
+    emptyEl.style.display = '';
+    return;
+  }
+  emptyEl.style.display = 'none';
+
+  // Build phase segments (run-length encode)
+  const segments = [];
+  let cur = null;
+  for (const row of rows) {
+    if (!cur || cur.phase !== row.phase) {
+      cur = { phase: row.phase, from: row.ts, to: row.ts, conf: row.confidence, count: 1 };
+      segments.push(cur);
+    } else {
+      cur.to = row.ts;
+      cur.conf = (cur.conf + row.confidence) / 2;
+      cur.count++;
+    }
+  }
+
+  // Render newest first
+  const reversed = [...segments].reverse();
+  listEl.innerHTML = reversed.map(seg => {
+    const color = PHASE_COLORS[seg.phase] || 'var(--muted)';
+    const fromStr = new Date(seg.from * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+    const toStr   = new Date(seg.to   * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+    const dur = Math.round((seg.to - seg.from) / 60);
+    const durStr = dur < 1 ? '<1m' : `${dur}m`;
+    const confPct = Math.round((seg.conf || 0) * 100);
+    return `<div style="display:flex;align-items:center;gap:8px;padding:3px 0;border-bottom:1px solid var(--border);">
+      <span style="color:${color};font-weight:700;min-width:120px;">${seg.phase.toUpperCase()}</span>
+      <span style="color:var(--muted);min-width:80px;">${fromStr} – ${toStr}</span>
+      <span style="color:var(--muted);">${durStr}</span>
+      <span style="color:var(--muted);">conf: ${confPct}%</span>
+    </div>`;
+  }).join('');
+
+  if (tsEl) tsEl.textContent = `updated ${new Date().toLocaleTimeString()}`;
+}
+
 // ── Price Alert (localStorage) ───────────────────────────────────────────────
 const PRICE_ALERT_KEY = 'bananas31_price_alerts';
 let _priceAlertFiredAbove = false;
@@ -4086,6 +4171,8 @@ async function refreshSignalsScanner() {
   setInterval(refreshSignalsScanner, 15000);
   refreshMarketRegime();
   setInterval(refreshMarketRegime, 15000);
+  loadPhaseTimeline();
+  setInterval(loadPhaseTimeline, 60000);
 
   // Keyboard shortcuts: 1-9 switch symbols, S toggle sound, M mute
   window.addEventListener('keydown', (e) => {

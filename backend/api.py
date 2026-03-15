@@ -21,6 +21,7 @@ from storage import (
     get_whale_trades,
     insert_pattern,
     get_pattern_history,
+    get_phase_snapshots,
 )
 from metrics import (
     compute_cvd,
@@ -1008,6 +1009,27 @@ async def pattern_history_endpoint(
     """Return persisted pattern detection history."""
     data = await get_pattern_history(limit=limit, since=since, symbol=symbol, pattern_type=pattern_type)
     return {"status": "ok", "data": data, "count": len(data)}
+
+
+@router.get("/phase-history")
+async def phase_history_endpoint(
+    symbol: Optional[str] = None,
+    since: Optional[float] = None,
+    until: Optional[float] = None,
+    limit: int = Query(default=200, le=1000),
+    window_hours: float = Query(default=1.0, le=24.0),
+):
+    """
+    Return historical phase snapshots for timeline replay.
+    If since is not provided, defaults to last window_hours.
+    """
+    import time as _time
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    if since is None:
+        since = _time.time() - window_hours * 3600
+    data = await get_phase_snapshots(symbol=target, since=since, until=until, limit=limit)
+    return {"status": "ok", "symbol": target, "data": data, "count": len(data)}
 
 
 @router.get("/stats")
