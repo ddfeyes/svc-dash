@@ -761,6 +761,12 @@
     <div id="alert-history-list" style="max-height:300px;overflow-y:auto;font-size:11px;font-family:'Menlo','Monaco','Consolas',monospace;"></div>
   </div>
 
+  <!-- Trade Size Distribution -->
+  <div class="card" id="card-trade-dist">
+    <h2><span class="card-icon">📊</span>Trade Size Distribution (1h)</h2>
+    <div id="trade-dist-bars" style="display:flex;flex-direction:column;gap:5px;"></div>
+  </div>
+
   <!-- Market Microstructure -->
   <div class="card" id="card-micro">
     <h2><span class="card-icon">🔬</span>Microstructure (5min)
@@ -1637,6 +1643,7 @@ function selectSymbol(sym) {
   refreshMultiOverview();
   refreshSession();
   refreshMicrostructure();
+  refreshTradeDist();
   initTape();
 }
 
@@ -3044,6 +3051,37 @@ async function refreshMomentum() {
   el.innerHTML = html;
 }
 
+async function refreshTradeDist() {
+  if (!activeSymbol) return;
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await fetchJSON(`/api/trade-size-dist?symbol=${sym}&window=3600`);
+  if (!data?.buckets?.length) return;
+
+  const el = document.getElementById('trade-dist-bars');
+  if (!el) return;
+
+  const maxUsd = Math.max(...data.buckets.map(b => b.total_usd), 1);
+
+  el.innerHTML = data.buckets.map(b => {
+    const buyPct  = b.total_usd > 0 ? b.buy_usd  / b.total_usd * 100 : 50;
+    const sellPct = 100 - buyPct;
+    const barPct  = (b.total_usd / maxUsd * 100).toFixed(1);
+    const dominance = buyPct > 55 ? 'var(--green)' : buyPct < 45 ? 'var(--red)' : 'var(--muted)';
+
+    return `<div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:2px;font-size:10px;">
+        <span style="color:var(--muted);min-width:80px;">${b.label}</span>
+        <span style="color:var(--text);font-variant-numeric:tabular-nums;">$${fmtK(b.total_usd)}</span>
+        <span style="color:${dominance};font-variant-numeric:tabular-nums;">${buyPct.toFixed(0)}% buy</span>
+        <span style="color:var(--muted);">${b.total_count} trades</span>
+      </div>
+      <div style="height:8px;background:var(--bg3);border-radius:3px;overflow:hidden;margin-bottom:1px;">
+        <div style="height:100%;width:${barPct}%;background:linear-gradient(90deg, rgba(102,187,106,${(buyPct/100).toFixed(2)}) 0%, rgba(239,83,80,${(sellPct/100).toFixed(2)}) 100%);border-radius:3px;"></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
 async function refreshMicrostructure() {
   if (!activeSymbol) return;
   const sym = encodeURIComponent(activeSymbol);
@@ -3266,6 +3304,8 @@ function checkPriceAlerts(price) {
   setInterval(refreshSession, 30000);
   refreshMicrostructure();
   setInterval(refreshMicrostructure, 10000);
+  refreshTradeDist();
+  setInterval(refreshTradeDist, 30000);
   window.addEventListener('resize', () => { renderHeatmap(); renderTradeFlowHeatmap(); });
   refreshHealthBar();
   setInterval(refreshHealthBar, 60000);

@@ -892,6 +892,53 @@ async def symbol_stats(symbol: Optional[str] = None):
     }
 
 
+@router.get("/trade-size-dist")
+async def trade_size_distribution(
+    symbol: Optional[str] = None,
+    window: int = Query(default=3600, le=86400),
+):
+    """
+    Trade size distribution by USD bucket: <$100, $100-$1k, $1k-$10k, $10k-$100k, >$100k.
+    Returns buy/sell breakdown per bucket.
+    """
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    since = time.time() - window
+
+    trades = await get_recent_trades(limit=100000, since=since, symbol=target)
+    if not trades:
+        return {"status": "ok", "symbol": target, "buckets": []}
+
+    buckets = [
+        {"label": "<$100",     "min": 0,       "max": 100,    "buy_count": 0, "sell_count": 0, "buy_usd": 0, "sell_usd": 0},
+        {"label": "$100-1k",   "min": 100,     "max": 1000,   "buy_count": 0, "sell_count": 0, "buy_usd": 0, "sell_usd": 0},
+        {"label": "$1k-10k",   "min": 1000,    "max": 10000,  "buy_count": 0, "sell_count": 0, "buy_usd": 0, "sell_usd": 0},
+        {"label": "$10k-100k", "min": 10000,   "max": 100000, "buy_count": 0, "sell_count": 0, "buy_usd": 0, "sell_usd": 0},
+        {"label": ">$100k",    "min": 100000,  "max": 1e18,   "buy_count": 0, "sell_count": 0, "buy_usd": 0, "sell_usd": 0},
+    ]
+
+    for t in trades:
+        val = t["price"] * t["qty"]
+        is_buy = t["side"] in ("buy", "Buy")
+        for b in buckets:
+            if b["min"] <= val < b["max"]:
+                if is_buy:
+                    b["buy_count"] += 1
+                    b["buy_usd"] += val
+                else:
+                    b["sell_count"] += 1
+                    b["sell_usd"] += val
+                break
+
+    for b in buckets:
+        b["buy_usd"]  = round(b["buy_usd"], 2)
+        b["sell_usd"] = round(b["sell_usd"], 2)
+        b["total_usd"] = round(b["buy_usd"] + b["sell_usd"], 2)
+        b["total_count"] = b["buy_count"] + b["sell_count"]
+
+    return {"status": "ok", "symbol": target, "window": window, "buckets": buckets}
+
+
 @router.get("/support-resistance")
 async def support_resistance(
     symbol: Optional[str] = None,
