@@ -49,6 +49,7 @@ from metrics import (
     fetch_oi_mcap_ratio,
     predict_liquidation_cascade,
     detect_funding_divergence,
+    compute_oi_concentration,
 )
 
 router = APIRouter(prefix="/api")
@@ -449,6 +450,20 @@ async def funding_arb_endpoint(
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
     data = await detect_funding_arbitrage(symbol=target, threshold_bps=threshold_bps)
+    return {"status": "ok", "symbol": target, **data}
+
+
+@router.get("/oi-concentration")
+async def oi_concentration_endpoint(
+    symbol: Optional[str] = None,
+    window: int = Query(default=3600, ge=300, le=86400),
+    buckets: int = Query(default=10, ge=5, le=50),
+):
+    """OI concentration: % of OI change in densest price range bucket."""
+    from collectors import get_symbols
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await compute_oi_concentration(symbol=target, window_seconds=window, n_buckets=buckets)
     return {"status": "ok", "symbol": target, **data}
 
 

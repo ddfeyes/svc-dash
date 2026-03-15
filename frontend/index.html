@@ -879,6 +879,20 @@
       <div id="cascade-pred-factors" style="font-size:10px;margin-top:3px;color:var(--muted);"></div>
     </div>
 
+    <div id="alert-oi-concentration" class="alert-box">
+      <div class="alert-label">🎯 OI CONCENTRATION</div>
+      <div id="oi-conc-text" style="color:var(--muted)">Loading...</div>
+      <div id="oi-conc-bar-wrap" style="margin-top:6px;">
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-bottom:3px;">
+          <span id="oi-conc-range-label">price range</span>
+          <span id="oi-conc-pct-label">—</span>
+        </div>
+        <div style="height:6px;background:var(--bg3);border-radius:3px;overflow:hidden;">
+          <div id="oi-conc-bar-fill" style="height:100%;width:0%;background:var(--muted);border-radius:3px;transition:width 0.4s,background 0.4s;"></div>
+        </div>
+      </div>
+    </div>
+
     <div id="alert-oi-mcap" class="alert-box">
       <div class="alert-label">📊 OI / MARKET CAP</div>
       <div id="oi-mcap-text" style="color:var(--muted)">Loading...</div>
@@ -2665,6 +2679,7 @@ function selectSymbol(sym) {
   refreshVolatilityRegime();
   refreshAtr();
   loadPhaseTimeline();
+  refreshOiConcentration();
   refreshOiMcap();
   refreshLiqPressure();
   refreshPriceVelocity();
@@ -4616,6 +4631,41 @@ async function refreshAlertHistory() {
   }
 }
 
+// ── OI Concentration ─────────────────────────────────────────────────────────
+async function refreshOiConcentration() {
+  const sym = activeSymbol || currentSymbol;
+  if (!sym) return;
+  const enc = encodeURIComponent(sym);
+  const data = await fetchJSON(`/api/oi-concentration?symbol=${enc}&window=3600&buckets=10`);
+  const box = document.getElementById('alert-oi-concentration');
+  const textEl = document.getElementById('oi-conc-text');
+  const barFill = document.getElementById('oi-conc-bar-fill');
+  const rangeLabel = document.getElementById('oi-conc-range-label');
+  const pctLabel = document.getElementById('oi-conc-pct-label');
+  if (!data || !textEl) return;
+
+  if (data.concentration_pct !== null && data.concentration_pct !== undefined) {
+    const pct = data.concentration_pct;
+    const color = pct >= 60 ? 'var(--red)' : pct >= 40 ? 'var(--accent)' : 'var(--green)';
+    textEl.style.color = color;
+    textEl.textContent = data.description || `${pct.toFixed(1)}%`;
+    box.className = pct >= 60 ? 'alert-box active' : 'alert-box';
+    barFill.style.width = Math.min(100, pct) + '%';
+    barFill.style.background = color;
+    pctLabel.textContent = pct.toFixed(1) + '%';
+    if (data.top_bucket_range) {
+      const [lo, hi] = data.top_bucket_range;
+      rangeLabel.textContent = `${lo.toFixed(4)} – ${hi.toFixed(4)}`;
+    }
+  } else {
+    textEl.style.color = 'var(--muted)';
+    textEl.textContent = data.description || 'No data';
+    box.className = 'alert-box';
+    barFill.style.width = '0%';
+    pctLabel.textContent = '—';
+  }
+}
+
 // ── OI / Market Cap Ratio ────────────────────────────────────────────────────
 async function refreshOiMcap() {
   const sym = activeSymbol;
@@ -5926,6 +5976,8 @@ async function refreshSignalsScanner() {
   setInterval(refreshMarketRegime, 15000);
   loadPhaseTimeline();
   setInterval(loadPhaseTimeline, 60000);
+  refreshOiConcentration();
+  setInterval(refreshOiConcentration, 30000);  // every 30s
   refreshOiMcap();
   setInterval(refreshOiMcap, 120000);  // 2min — CoinGecko free tier rate limit
   refreshLiqPressure();

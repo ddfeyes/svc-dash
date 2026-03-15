@@ -1598,3 +1598,146 @@ async def detect_funding_divergence(focus_symbol: str = "BANANAS31USDT", diverge
         "rates": {s: round(r * 100, 6) for s, r in sym_rates.items()},
         "threshold_multiplier": divergence_multiplier,
     }
+
+
+async def compute_oi_concentration(symbol: str = None, window_seconds: int = 3600, n_buckets: int = 10) -> Dict:
+    """
+    OI concentration metric: % of total OI change in the densest price range bucket.
+    
+    Method:
+    1. Get OI history + trade prices over window
+    2. Compute price range (min, max) over window
+    3. Divide range into n_buckets equal buckets
+    4. For each OI sample, assign it to the price bucket closest to that timestamp
+    5. Sum |OI delta| per bucket, find the bucket with highest concentration
+    6. Return concentration% = top_bucket / total * 100
+    """
+    import time
+    from storage import get_oi_history, get_recent_trades
+    now = time.time()
+    since = now - window_seconds
+
+    oi_rows, trade_rows = await asyncio.gather(
+        get_oi_history(limit=2000, since=since, symbol=symbol),
+        get_recent_trades(limit=5000, since=since, symbol=symbol),
+    )
+
+    if not oi_rows or len(oi_rows) < 2:
+        return {
+            "concentration_pct": None,
+            "top_bucket_range": None,
+            "n_buckets": n_buckets,
+            "description": "Insufficient OI data",
+            "window_seconds": window_seconds,
+        }
+
+    if not trade_rows:
+        return {
+            "concentration_pct": None,
+            "top_bucket_range": None,
+            "n_buckets": n_buckets,
+            "description": "No trade price data",
+            "window_seconds": window_seconds,
+        }
+
+    # Build price timeline
+    trade_rows.sort(key=lambda x: x["ts"])
+    prices_ts = [(r["ts"], r["price"]) for r in trade_rows if r.get("price")]
+    if not prices_ts:
+        return {"concentration_pct": None, "top_bucket_range": None, "n_buckets": n_buckets,
+                "description": "No price data", "window_seconds": window_seconds}
+
+    all_prices = [p for _, p in prices_ts]
+    price_min = min(all_prices)
+    price_max = max(all_prices)
+    price_range = price_max - price_min
+
+    if price_range < 1e-10:
+        return {
+            "concentration_pct": 100.0,
+            "top_bucket_range": [price_min, price_max],
+            "n_buckets": n_buckets,
+            "description": "Price range near zero — all OI in single bucket",
+            "window_seconds": window_seconds,
+        }
+
+    bucket_size = price_range / n_buckets
+
+    def get_bucket(price: float) -> int:
+        idx = int((price - price_min) / bucket_size)
+        return max(0, min(n_buckets - 1, idx))
+
+    # Build price interpolation for OI timestamps
+    def interp_price(ts: float) -> float:
+        """Return the nearest trade price for a given timestamp."""
+        lo, hi = 0, len(prices_ts) - 1
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if prices_ts[mid][0] < ts:
+                lo = mid + 1
+            else:
+                hi = mid
+        return prices_ts[lo][1]
+
+    # Compute |OI delta| per bucket
+    oi_rows.sort(key=lambda x: x["ts"])
+    bucket_oi = [0.0] * n_buckets
+
+    for i in range(1, len(oi_rows)):
+        prev = oi_rows[i - 1]
+        curr = oi_rows[i]
+        # Skip if different symbol/exchange
+        if prev.get("symbol") != curr.get("symbol"):
+            continue
+        delta = abs((curr.get("oi_value") or 0) - (prev.get("oi_value") or 0))
+        if delta < 1e-6:
+            continue
+        price_at_ts = interp_price(curr["ts"])
+        b = get_bucket(price_at_ts)
+        bucket_oi[b] += delta
+
+    total_oi = sum(bucket_oi)
+    if total_oi < 1e-6:
+        return {
+            "concentration_pct": None,
+            "top_bucket_range": None,
+            "n_buckets": n_buckets,
+            "description": "No OI changes in window",
+            "window_seconds": window_seconds,
+        }
+
+    top_bucket_idx = bucket_oi.index(max(bucket_oi))
+    top_bucket_oi = bucket_oi[top_bucket_idx]
+    concentration_pct = top_bucket_oi / total_oi * 100
+
+    bucket_low = price_min + top_bucket_idx * bucket_size
+    bucket_high = bucket_low + bucket_size
+
+    # Intensity rating
+    if concentration_pct >= 60:
+        intensity = "high"
+        label = "🔥"
+    elif concentration_pct >= 40:
+        intensity = "medium"
+        label = "⚡"
+    else:
+        intensity = "low"
+        label = "💧"
+
+    desc = (
+        f"{label} OI concentration {concentration_pct:.1f}% in price range "
+        f"{bucket_low:.4f}–{bucket_high:.4f} ({intensity})"
+    )
+
+    return {
+        "concentration_pct": round(concentration_pct, 2),
+        "top_bucket_range": [round(bucket_low, 8), round(bucket_high, 8)],
+        "top_bucket_idx": top_bucket_idx,
+        "n_buckets": n_buckets,
+        "intensity": intensity,
+        "description": desc,
+        "price_range": [round(price_min, 8), round(price_max, 8)],
+        "bucket_oi": [round(v, 2) for v in bucket_oi],
+        "total_oi_delta": round(total_oi, 2),
+        "window_seconds": window_seconds,
+    }
