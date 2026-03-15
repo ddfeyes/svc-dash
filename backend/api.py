@@ -92,6 +92,101 @@ async def data_freshness():
     return {"status": "ok", "freshness": data}
 
 
+@router.get("/stats/summary")
+async def stats_summary():
+    """24h aggregate stats for all symbols."""
+    import aiosqlite
+    from storage import DB_PATH
+    since_24h = time.time() - 86400
+    result = {}
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        # Trades aggregates
+        async with db.execute(
+            """SELECT symbol,
+                      COUNT(*) as trade_count,
+                      SUM(price * qty) as volume_usd,
+                      SUM(CASE WHEN side='buy' THEN price*qty ELSE 0 END) as buy_vol,
+                      SUM(CASE WHEN side='sell' THEN price*qty ELSE 0 END) as sell_vol,
+                      MIN(price) as price_low,
+                      MAX(price) as price_high,
+                      AVG(price) as price_avg
+               FROM trades WHERE ts >= ? GROUP BY symbol""",
+            (since_24h,)
+        ) as cur:
+            for r in await cur.fetchall():
+                sym = r["symbol"]
+                if sym not in result:
+                    result[sym] = {}
+                result[sym]["trades_24h"] = r["trade_count"]
+                result[sym]["volume_usd_24h"] = round(r["volume_usd"] or 0, 2)
+                result[sym]["buy_vol_24h"] = round(r["buy_vol"] or 0, 2)
+                result[sym]["sell_vol_24h"] = round(r["sell_vol"] or 0, 2)
+                result[sym]["price_low_24h"] = r["price_low"]
+                result[sym]["price_high_24h"] = r["price_high"]
+                result[sym]["price_avg_24h"] = round(r["price_avg"] or 0, 6)
+                bv = r["buy_vol"] or 0
+                sv = r["sell_vol"] or 0
+                total = bv + sv
+                result[sym]["cvd_ratio_24h"] = round((bv - sv) / total, 4) if total > 0 else 0
+        # Liquidations aggregates
+        async with db.execute(
+            """SELECT symbol,
+                      COUNT(*) as liq_count,
+                      SUM(value) as liq_value_usd,
+                      SUM(CASE WHEN side='buy' THEN value ELSE 0 END) as long_liqs,
+                      SUM(CASE WHEN side='sell' THEN value ELSE 0 END) as short_liqs
+               FROM liquidations WHERE ts >= ? GROUP BY symbol""",
+            (since_24h,)
+        ) as cur:
+            for r in await cur.fetchall():
+                sym = r["symbol"]
+                if sym not in result:
+                    result[sym] = {}
+                result[sym]["liqs_24h"] = r["liq_count"]
+                result[sym]["liq_usd_24h"] = round(r["liq_value_usd"] or 0, 2)
+                result[sym]["long_liqs_usd_24h"] = round(r["long_liqs"] or 0, 2)
+                result[sym]["short_liqs_usd_24h"] = round(r["short_liqs"] or 0, 2)
+        # Latest OI
+        async with db.execute(
+            """SELECT symbol, oi_value as oi_latest
+               FROM open_interest
+               WHERE ts = (SELECT MAX(ts) FROM open_interest o2 WHERE o2.symbol = open_interest.symbol)
+               GROUP BY symbol"""
+        ) as cur:
+            for r in await cur.fetchall():
+                sym = r["symbol"]
+                if sym not in result:
+                    result[sym] = {}
+                result[sym]["oi_latest"] = r["oi_latest"]
+        # Funding latest
+        async with db.execute(
+            """SELECT symbol, rate as funding_latest
+               FROM funding_rate
+               WHERE ts = (SELECT MAX(ts) FROM funding_rate f2 WHERE f2.symbol = funding_rate.symbol)
+               GROUP BY symbol"""
+        ) as cur:
+            for r in await cur.fetchall():
+                sym = r["symbol"]
+                if sym not in result:
+                    result[sym] = {}
+                result[sym]["funding_latest"] = r["funding_latest"]
+        # Whale count 24h
+        async with db.execute(
+            """SELECT symbol, COUNT(*) as whale_count, SUM(value_usd) as whale_vol
+               FROM whale_trades WHERE ts >= ? GROUP BY symbol""",
+            (since_24h,)
+        ) as cur:
+            for r in await cur.fetchall():
+                sym = r["symbol"]
+                if sym not in result:
+                    result[sym] = {}
+                result[sym]["whale_trades_24h"] = r["whale_count"]
+                result[sym]["whale_vol_usd_24h"] = round(r["whale_vol"] or 0, 2)
+
+    return {"status": "ok", "since": since_24h, "summary": result}
+
+
 @router.get("/orderbook/latest")
 async def orderbook_latest(
     exchange: Optional[str] = None,

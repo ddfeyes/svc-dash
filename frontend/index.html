@@ -1065,6 +1065,14 @@
     <div id="signals-scanner-content" style="font-size:11px;"></div>
   </div>
 
+  <!-- 24h Stats Summary -->
+  <div class="card wide" id="card-stats-summary">
+    <h2><span class="card-icon">📊</span>24h Stats Summary
+      <span id="stats-summary-ts" style="margin-left:auto;font-size:9px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;"></span>
+    </h2>
+    <div id="stats-summary-content" style="font-size:11px;overflow-x:auto;"></div>
+  </div>
+
 </div>
 
 <!-- Footer health bar -->
@@ -3768,6 +3776,53 @@ async function refreshOiMcap() {
   }
 }
 
+// ── 24h Stats Summary ─────────────────────────────────────────────────────────
+async function refreshStatsSummary() {
+  const el = document.getElementById('stats-summary-content');
+  const tsEl = document.getElementById('stats-summary-ts');
+  if (!el) return;
+  const data = await fetchJSON('/api/stats/summary');
+  if (!data || !data.summary) { el.textContent = 'unavailable'; return; }
+  if (tsEl) tsEl.textContent = new Date().toLocaleTimeString();
+  const syms = Object.keys(data.summary);
+  const cols = [
+    { key: 'symbol', label: 'Symbol' },
+    { key: 'trades_24h', label: 'Trades', fmt: v => v?.toLocaleString() },
+    { key: 'volume_usd_24h', label: 'Vol $', fmt: v => v ? '$' + (v/1e6).toFixed(2) + 'M' : '—' },
+    { key: 'cvd_ratio_24h', label: 'CVD Ratio', fmt: v => {
+      if (v == null) return '—';
+      const pct = (v * 100).toFixed(2) + '%';
+      return `<span style="color:${v > 0 ? 'var(--green)' : 'var(--red)'}">${v > 0 ? '+' : ''}${pct}</span>`;
+    }},
+    { key: 'price_low_24h', label: 'Low', fmt: v => v?.toPrecision(5) },
+    { key: 'price_high_24h', label: 'High', fmt: v => v?.toPrecision(5) },
+    { key: 'liqs_24h', label: 'Liqs', fmt: v => v?.toLocaleString() },
+    { key: 'liq_usd_24h', label: 'Liq $', fmt: v => v ? '$' + (v/1e3).toFixed(1) + 'K' : '—' },
+    { key: 'funding_latest', label: 'Funding', fmt: v => {
+      if (v == null) return '—';
+      const pct = (v * 100).toFixed(4) + '%';
+      return `<span style="color:${v > 0 ? 'var(--green)' : 'var(--red)'}">${v > 0 ? '+' : ''}${pct}</span>`;
+    }},
+    { key: 'whale_trades_24h', label: 'Whales', fmt: v => v?.toLocaleString() || '0' },
+    { key: 'whale_vol_usd_24h', label: 'Whale $', fmt: v => v ? '$' + (v/1e3).toFixed(1) + 'K' : '—' },
+  ];
+  let html = '<table style="width:100%;border-collapse:collapse;"><thead><tr>';
+  for (const c of cols) html += `<th style="padding:4px 8px;text-align:left;color:var(--muted);border-bottom:1px solid var(--border);white-space:nowrap;">${c.label}</th>`;
+  html += '</tr></thead><tbody>';
+  for (const sym of syms) {
+    const s = data.summary[sym];
+    html += '<tr>';
+    for (const c of cols) {
+      const val = c.key === 'symbol' ? sym.replace('USDT','') : s[c.key];
+      const rendered = c.fmt ? c.fmt(val) : (val ?? '—');
+      html += `<td style="padding:4px 8px;border-bottom:1px solid var(--border);white-space:nowrap;">${rendered}</td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
 // ── Data Freshness ────────────────────────────────────────────────────────────
 async function refreshFreshness() {
   const el = document.getElementById('freshness-content');
@@ -4398,6 +4453,8 @@ async function refreshSignalsScanner() {
   setInterval(refreshOiMcap, 120000);  // 2min — CoinGecko free tier rate limit
   refreshFreshness();
   setInterval(refreshFreshness, 15000);
+  refreshStatsSummary();
+  setInterval(refreshStatsSummary, 60000);
 
   // Keyboard shortcuts: 1-9 switch symbols, S toggle sound, M mute
   window.addEventListener('keydown', (e) => {
