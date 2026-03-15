@@ -1,8 +1,10 @@
 """FastAPI REST endpoints — multi-symbol."""
+import asyncio
+import json
 import time
-from typing import Optional
+from typing import Optional, Set
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
 from collectors import get_symbols
@@ -25,6 +27,36 @@ from metrics import (
 )
 
 router = APIRouter(prefix="/api")
+
+# ── WebSocket connection manager ─────────────────────────────────────────────
+
+class ConnectionManager:
+    def __init__(self):
+        self._connections: dict[str, Set[WebSocket]] = {}  # symbol -> set of ws
+
+    async def connect(self, ws: WebSocket, symbol: str):
+        await ws.accept()
+        if symbol not in self._connections:
+            self._connections[symbol] = set()
+        self._connections[symbol].add(ws)
+
+    def disconnect(self, ws: WebSocket, symbol: str):
+        if symbol in self._connections:
+            self._connections[symbol].discard(ws)
+
+    async def broadcast(self, symbol: str, data: dict):
+        conns = self._connections.get(symbol, set()).copy()
+        dead = set()
+        for ws in conns:
+            try:
+                await ws.send_text(json.dumps(data))
+            except Exception:
+                dead.add(ws)
+        for ws in dead:
+            self._connections.get(symbol, set()).discard(ws)
+
+
+manager = ConnectionManager()
 
 
 @router.get("/symbols")
@@ -143,6 +175,70 @@ async def large_trades(
     target = symbol if symbol and symbol in syms else syms[0]
     data = await detect_large_trades(window_seconds=window, min_usd=min_usd, symbol=target)
     return {"status": "ok", "symbol": target, **data}
+
+
+@router.websocket("/ws/{symbol}")
+async def websocket_endpoint(ws: WebSocket, symbol: str):
+    """
+    WebSocket: streams real-time summary every 1s for a given symbol.
+    Message format: {"type": "summary", "data": {...}}
+    """
+    syms = get_symbols()
+    if symbol not in syms:
+        symbol = syms[0] if syms else "BANANAS31USDT"
+
+    await manager.connect(ws, symbol)
+    try:
+        while True:
+            try:
+                phase_task = classify_market_phase(symbol=symbol)
+                vol_task = compute_volume_imbalance(window_seconds=60, symbol=symbol)
+                oi_task = compute_oi_momentum(window_seconds=300, symbol=symbol)
+
+                phase, vol_imb, oi_mom = await asyncio.gather(phase_task, vol_task, oi_task)
+
+                ob = await get_latest_orderbook(symbol=symbol, limit=1)
+                price = ob[0].get("mid_price") if ob else None
+                spread = ob[0].get("spread") if ob else None
+                imbalance = ob[0].get("imbalance") if ob else None
+
+                funding = await get_funding_history(limit=2, symbol=symbol)
+                latest_funding = {}
+                for row in funding:
+                    latest_funding[row["exchange"]] = row["rate"]
+
+                msg = {
+                    "type": "summary",
+                    "ts": time.time(),
+                    "symbol": symbol,
+                    "price": price,
+                    "spread": spread,
+                    "orderbook_imbalance": imbalance,
+                    "phase": phase,
+                    "volume_imbalance": vol_imb,
+                    "oi_momentum": oi_mom,
+                    "funding_rates": latest_funding,
+                }
+                await ws.send_text(json.dumps(msg))
+
+                # Also check for client pings (non-blocking)
+                try:
+                    data = await asyncio.wait_for(ws.receive_text(), timeout=0.01)
+                except asyncio.TimeoutError:
+                    pass
+
+                await asyncio.sleep(1.0)
+
+            except WebSocketDisconnect:
+                break
+            except Exception as e:
+                try:
+                    await ws.send_text(json.dumps({"type": "error", "message": str(e)}))
+                except Exception:
+                    break
+                await asyncio.sleep(2.0)
+    finally:
+        manager.disconnect(ws, symbol)
 
 
 @router.get("/metrics/summary")

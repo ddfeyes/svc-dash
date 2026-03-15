@@ -89,7 +89,7 @@
   <h1 id="header-title">🍌 Dashboard</h1>
   <div id="symbol-tabs"></div>
   <div id="price-display">—</div>
-  <div id="status"><span class="refresh-dot"></span>Auto-refresh 5s</div>
+  <div id="status"><span class="refresh-dot"></span>Connecting...</div>
 </header>
 
 <div class="grid">
@@ -195,6 +195,8 @@ const API = '';  // same origin
 // ── Symbol state ────────────────────────────────────────────────────────────
 let activeSymbol = null;
 let allSymbols = [];
+let activeWS = null;
+let wsReconnectTimer = null;
 
 // ── Chart helpers ────────────────────────────────────────────────────────────
 function mkChart(id, label, color, type='line') {
@@ -310,6 +312,88 @@ async function fetchJSON(url) {
   } catch { return null; }
 }
 
+// ── WebSocket for live summary ───────────────────────────────────────────────
+function connectWS(symbol) {
+  if (activeWS) {
+    activeWS.onclose = null;
+    activeWS.close();
+    activeWS = null;
+  }
+  if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/api/ws/${encodeURIComponent(symbol)}`);
+
+  ws.onmessage = (e) => {
+    try {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'summary' && msg.symbol === activeSymbol) {
+        updateSummary(msg);
+      }
+    } catch {}
+  };
+
+  ws.onopen = () => {
+    document.getElementById('status').innerHTML = '<span class="refresh-dot"></span>Live';
+  };
+
+  ws.onerror = () => {};
+
+  ws.onclose = () => {
+    document.getElementById('status').innerHTML = '<span class="refresh-dot" style="background:var(--red)"></span>Reconnecting...';
+    wsReconnectTimer = setTimeout(() => connectWS(symbol), 3000);
+  };
+
+  activeWS = ws;
+}
+
+function updateSummary(summary) {
+  if (summary.price) {
+    document.getElementById('price-display').textContent = '$' + fmt(summary.price, 4);
+  }
+  if (summary.phase) {
+    const ph = summary.phase;
+    const badge = document.getElementById('phase-badge');
+    badge.textContent = ph.phase || 'Unknown';
+    badge.className = 'phase-badge phase-' + (ph.phase || 'Unknown');
+    document.getElementById('phase-conf').textContent = 'confidence: ' + fmt(ph.confidence * 100, 1) + '%';
+    document.getElementById('phase-desc').textContent = ph.description || '';
+  }
+  if (summary) {
+    document.getElementById('m-spread').textContent = summary.spread != null ? fmt(summary.spread, 4) : '—';
+    const imb = summary.orderbook_imbalance;
+    const imbEl = document.getElementById('m-ob-imb');
+    imbEl.textContent = imb != null ? fmt(imb * 100, 2) + '%' : '—';
+    imbEl.className = 'val ' + (imb > 0 ? 'positive' : imb < 0 ? 'negative' : '');
+
+    const vi = summary.volume_imbalance;
+    if (vi) {
+      document.getElementById('m-buy-vol').textContent = fmtK(vi.buy_volume);
+      document.getElementById('m-sell-vol').textContent = fmtK(vi.sell_volume);
+    }
+
+    const oim = summary.oi_momentum?.exchanges || {};
+    const binOI = oim['binance'];
+    const bybOI = oim['bybit'];
+    if (binOI) {
+      const el = document.getElementById('m-oi-binance');
+      el.textContent = fmt(binOI.pct_change, 4) + '%';
+      el.className = 'val ' + (binOI.pct_change > 0 ? 'positive' : binOI.pct_change < 0 ? 'negative' : '');
+    }
+    if (bybOI) {
+      const el = document.getElementById('m-oi-bybit');
+      el.textContent = fmt(bybOI.pct_change, 4) + '%';
+      el.className = 'val ' + (bybOI.pct_change > 0 ? 'positive' : bybOI.pct_change < 0 ? 'negative' : '');
+    }
+
+    const fr = summary.funding_rates || {};
+    const frDiv = document.getElementById('funding-rates');
+    frDiv.innerHTML = Object.entries(fr).map(([ex, rate]) =>
+      `<div class="funding-row"><span>${ex}</span><span class="${rate > 0 ? 'positive' : 'negative'}">${fmt(rate * 100, 6)}%</span></div>`
+    ).join('');
+  }
+}
+
 // ── Symbol tabs ──────────────────────────────────────────────────────────────
 function renderSymbolTabs() {
   const container = document.getElementById('symbol-tabs');
@@ -336,9 +420,11 @@ function selectSymbol(sym) {
   document.getElementById('lt-buy').textContent = '—';
   document.getElementById('lt-sell').textContent = '—';
   document.getElementById('lt-list').innerHTML = '';
+  document.getElementById('price-display').textContent = '—';
   renderSymbolTabs();
   document.getElementById('header-title').textContent = '🍌 ' + sym;
   document.title = sym + ' Dashboard';
+  connectWS(sym);
   refreshAll();
 }
 
@@ -360,8 +446,8 @@ async function refreshAll() {
   if (!activeSymbol) return;
   const sym = encodeURIComponent(activeSymbol);
 
-  const [summary, cvd, oi, funding, liqs, vp, divg, ltrades, oisp] = await Promise.all([
-    fetchJSON(`/api/metrics/summary?symbol=${sym}`),
+  // summary comes via WebSocket (live); charts poll every 5s
+  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp] = await Promise.all([
     fetchJSON(`/api/cvd/history?window=3600&symbol=${sym}`),
     fetchJSON(`/api/oi/history?limit=300&symbol=${sym}`),
     fetchJSON(`/api/funding/history?limit=200&symbol=${sym}`),
@@ -570,6 +656,7 @@ async function syncSymbols() {
 // ── Boot ─────────────────────────────────────────────────────────────────────
 (async () => {
   await loadSymbols();
+  if (activeSymbol) connectWS(activeSymbol);
   await refreshAll();
   setInterval(refreshAll, 5000);
   setInterval(syncSymbols, 30000);  // check for new symbols every 30s
