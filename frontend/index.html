@@ -22,6 +22,37 @@
       --muted:   #606680;
       --dim:     #3d4460;
     }
+    [data-theme="light"] {
+      --bg:      #f4f5f7;
+      --bg2:     #ffffff;
+      --bg3:     #ebedf2;
+      --bg4:     #e0e3ea;
+      --border:  #d0d4de;
+      --border2: #b8bdd0;
+      --accent:  #c8941a;
+      --green:   #2e8b57;
+      --red:     #cc3333;
+      --blue:    #1a6faa;
+      --purple:  #7b4fd1;
+      --text:    #1a1d2e;
+      --muted:   #6b7090;
+      --dim:     #c5cad8;
+    }
+    #theme-toggle {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      color: var(--text);
+      cursor: pointer;
+      border-radius: 14px;
+      padding: 3px 10px;
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      transition: background 0.2s, color 0.2s;
+      white-space: nowrap;
+    }
+    #theme-toggle:hover { background: var(--bg4); }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       background: var(--bg);
@@ -456,6 +487,8 @@
     <a id="exp-cvd" href="#">cvd</a>
     <a id="exp-liqs" href="#">liqs</a>
   </div>
+
+  <button id="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light theme">🌙 Dark</button>
 
   <div id="status">
     <div class="status-indicator" id="status-dot"></div>
@@ -1036,6 +1069,24 @@
 
 <script>
 const API = '';  // same origin
+
+// ── Theme toggle ──────────────────────────────────────────────────────────────
+(function initTheme() {
+  const saved = localStorage.getItem('theme') || 'dark';
+  if (saved === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+    const btn = document.getElementById('theme-toggle');
+    if (btn) btn.innerHTML = '☀️ Light';
+  }
+})();
+function toggleTheme() {
+  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+  const next = isLight ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('theme', next);
+  const btn = document.getElementById('theme-toggle');
+  btn.innerHTML = next === 'light' ? '☀️ Light' : '🌙 Dark';
+}
 
 // ── Health bar ────────────────────────────────────────────────────────────────
 let _wsPingSent = 0;
