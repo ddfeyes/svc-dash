@@ -590,6 +590,8 @@
   <div class="card">
     <h2><span class="card-icon">📖</span>Order Book + Market Depth</h2>
     <canvas id="chart-depth" style="height:140px !important; margin-bottom:10px;"></canvas>
+    <div style="margin-bottom:6px;font-size:10px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;">DOM — Bid/Ask Walls</div>
+    <canvas id="chart-dom" style="height:160px !important; margin-bottom:10px;"></canvas>
     <div class="ob-grid">
       <div class="ob-col">
         <div class="ob-header"><span>Price</span><span>Qty</span></div>
@@ -1200,6 +1202,62 @@ function mkDepthChart(id) {
   });
 }
 
+function mkDomChart(id) {
+  const ctx = document.getElementById(id).getContext('2d');
+  return new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: [],
+      datasets: [
+        {
+          label: 'Bid',
+          data: [],
+          backgroundColor: 'rgba(102,187,106,0.7)',
+          borderColor: 'rgba(102,187,106,0.9)',
+          borderWidth: 0,
+          stack: 'dom',
+        },
+        {
+          label: 'Ask',
+          data: [],
+          backgroundColor: 'rgba(239,83,80,0.7)',
+          borderColor: 'rgba(239,83,80,0.9)',
+          borderWidth: 0,
+          stack: 'dom',
+        }
+      ]
+    },
+    options: chartDefaults({
+      indexAxis: 'y',
+      scales: {
+        x: {
+          stacked: false,
+          ticks: { color: TICK_COLOR, font: { size: 9 }, maxTicksLimit: 5 },
+          grid: { color: GRID_COLOR },
+        },
+        y: {
+          stacked: false,
+          ticks: { color: TICK_COLOR, font: { size: 9 }, maxTicksLimit: 10 },
+          grid: { display: false },
+        }
+      },
+      plugins: {
+        legend: {
+          display: true,
+          position: 'top',
+          align: 'end',
+          labels: { color: TICK_COLOR, font: { size: 9 }, boxWidth: 10, padding: 8 }
+        },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `${ctx.dataset.label}: ${ctx.raw !== null ? Math.abs(ctx.raw).toFixed(4) : '0'}`
+          }
+        }
+      }
+    })
+  });
+}
+
 function mkCvdChart(id) {
   const ctx = document.getElementById(id).getContext('2d');
   return new Chart(ctx, {
@@ -1265,6 +1323,7 @@ const charts = {
   liq:     mkBarChart('chart-liq'),
   vp:      mkVolumeProfileChart('chart-vp'),
   depth:   mkDepthChart('chart-depth'),
+  dom:     mkDomChart('chart-dom'),
 };
 
 let chartRsi = null;
@@ -1720,6 +1779,29 @@ function updateSummary(summary) {
     charts.depth.data.datasets[0].data = summary.depth_bids.map(([p, c]) => ({ x: p, y: c }));
     charts.depth.data.datasets[1].data = summary.depth_asks.map(([p, c]) => ({ x: p, y: c }));
     charts.depth.update();
+  }
+
+  // ── DOM imbalance chart ───────────────────────────────────────────────────
+  if (summary.ob_bids?.length && summary.ob_asks?.length) {
+    // Build a combined price level map: bids (positive) + asks (negative) for visual split
+    const domLevels = {};
+    for (const [p, q] of summary.ob_bids.slice(0, 10)) {
+      const key = parseFloat(p).toFixed(7);
+      domLevels[key] = { bid: parseFloat(q), ask: 0 };
+    }
+    for (const [p, q] of summary.ob_asks.slice(0, 10)) {
+      const key = parseFloat(p).toFixed(7);
+      if (!domLevels[key]) domLevels[key] = { bid: 0, ask: 0 };
+      domLevels[key].ask = parseFloat(q);
+    }
+    const sorted = Object.entries(domLevels).sort((a, b) => parseFloat(b[0]) - parseFloat(a[0]));
+    const labels = sorted.map(([p]) => parseFloat(p).toFixed(5));
+    const bidData = sorted.map(([, v]) => v.bid);
+    const askData = sorted.map(([, v]) => v.ask);
+    charts.dom.data.labels = labels;
+    charts.dom.data.datasets[0].data = bidData;
+    charts.dom.data.datasets[1].data = askData;
+    charts.dom.update('none');
   }
 
   if (summary.ob_bids?.length) {
