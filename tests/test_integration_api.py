@@ -368,7 +368,7 @@ class TestAnalyticalEndpoints:
 
     def test_cvd_divergence(self, base_url, symbol):
         data = get(base_url, "/cvd-divergence", {"symbol": symbol}, timeout=SLOW_TIMEOUT)
-        check_keys(data, "status", "symbol")
+        check_keys(data, "status", "symbols")
 
     def test_trade_bursts(self, base_url, symbol):
         data = get(base_url, "/trade-bursts", {"symbol": symbol})
