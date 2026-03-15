@@ -2003,6 +2003,27 @@ function initPriceCharts() {
           tension: 0.2,
           borderDash: [3, 3],
         },
+        {
+          label: 'BB Upper',
+          data: [],
+          borderColor: 'rgba(171,125,248,0.5)',
+          borderWidth: 1,
+          pointRadius: 0,
+          fill: false,
+          tension: 0.2,
+          borderDash: [2, 4],
+        },
+        {
+          label: 'BB Lower',
+          data: [],
+          borderColor: 'rgba(171,125,248,0.5)',
+          borderWidth: 1,
+          pointRadius: 0,
+          fill: '-1',
+          backgroundColor: 'rgba(171,125,248,0.04)',
+          tension: 0.2,
+          borderDash: [2, 4],
+        },
       ]
     },
     options: chartDefaults({
@@ -2093,6 +2114,27 @@ async function refreshPriceChart() {
   chartPrice.data.datasets[1].data = candles.map(c => c.high);
   chartPrice.data.datasets[2].data = candles.map(c => c.low);
   chartPrice.data.datasets[3].data = candles.map(c => c.vwap || null);
+
+  // Bollinger Bands (20-period, 2σ)
+  const BB_PERIOD = 20;
+  const closes = candles.map(c => c.close);
+  const bbUpper = [], bbLower = [];
+  for (let i = 0; i < closes.length; i++) {
+    if (i < BB_PERIOD - 1) {
+      bbUpper.push(null);
+      bbLower.push(null);
+    } else {
+      const slice = closes.slice(i - BB_PERIOD + 1, i + 1);
+      const mean = slice.reduce((a, b) => a + b, 0) / BB_PERIOD;
+      const variance = slice.reduce((s, v) => s + (v - mean) ** 2, 0) / BB_PERIOD;
+      const std = Math.sqrt(variance);
+      bbUpper.push(mean + 2 * std);
+      bbLower.push(mean - 2 * std);
+    }
+  }
+  chartPrice.data.datasets[4].data = bbUpper;
+  chartPrice.data.datasets[5].data = bbLower;
+
   chartPrice.update();
 
   chartVolume.data.labels = labels;
