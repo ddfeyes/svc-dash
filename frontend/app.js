@@ -4,11 +4,7 @@
 const API = window.location.protocol + '//' + window.location.hostname + ':8765/api';
 const WS  = 'ws://' + window.location.hostname + ':8765';
 
-<<<<<<< HEAD
-const REFRESH_MS   = 15000;   // poll interval
-=======
 const REFRESH_MS   = 15000;  // poll interval (15s to avoid backend overload)
->>>>>>> b7d5750 (fix: resolve empty and loading charts in dashboard)
 const TRADE_MAX    = 100;    // max rows in tape
 const ALERT_MAX    = 50;     // max rows in alerts feed
 const WHALE_USD    = 10000;  // highlight threshold
@@ -20,15 +16,11 @@ let priceChart   = null;   // TradingView Lightweight Charts instance
 let oiChart      = null;   // Chart.js
 let cvdChart     = null;   // Chart.js
 let fundingChart = null;   // Chart.js
-<<<<<<< HEAD
-let spreadChart     = null;   // Chart.js
-let adaptiveVpChart = null;   // Chart.js — adaptive volume profile
-=======
-let spreadChart        = null;   // Chart.js
-let aggressorChart     = null;   // Chart.js
-let volumeProfileChart = null;   // Chart.js
-let regimeTimelineChart = null;  // Chart.js
->>>>>>> b7d5750 (fix: resolve empty and loading charts in dashboard)
+let spreadChart         = null;   // Chart.js
+let adaptiveVpChart     = null;   // Chart.js — adaptive volume profile
+let aggressorChart      = null;   // Chart.js
+let volumeProfileChart  = null;   // Chart.js
+let regimeTimelineChart = null;   // Chart.js
 let wsAlerts     = null;
 let refreshTimer = null;
 let _lastPrice   = null;   // most recent close price (for OI USDT calc)
@@ -308,33 +300,14 @@ function initSpreadChart() {
   });
 }
 
-<<<<<<< HEAD
 function initAdaptiveVpChart() {
   const canvas = document.getElementById('adaptive-vp-canvas');
   if (!canvas || !window.Chart) return;
   adaptiveVpChart = new Chart(canvas, {
-=======
-function initAggressorChart() {
-  const canvas = document.getElementById('aggressor-ratio-canvas');
-  if (!canvas || !window.Chart) return;
-  const opts = _chartDefaults('#00e082');
-  opts.scales.x.stacked = true;
-  opts.scales.y = {
-    stacked: true,
-    min: 0, max: 100,
-    ticks: { color: '#6b7280', font: { size: 9 }, callback: v => v + '%' },
-    grid: { color: 'rgba(255,255,255,0.04)' },
-  };
-  opts.plugins.tooltip.callbacks = {
-    label: ctx => ` ${ctx.dataset.label}: ${ctx.raw.toFixed(1)}%`,
-  };
-  aggressorChart = new Chart(canvas, {
->>>>>>> b7d5750 (fix: resolve empty and loading charts in dashboard)
     type: 'bar',
     data: {
       labels: [],
       datasets: [
-<<<<<<< HEAD
         { label: 'Buy',  data: [], backgroundColor: [], borderWidth: 0, stack: 'vp' },
         { label: 'Sell', data: [], backgroundColor: [], borderWidth: 0, stack: 'vp' },
       ],
@@ -375,7 +348,34 @@ function initAggressorChart() {
   });
 }
 
-// ── Render: Adaptive Volume Profile ──────────────────────────────────────────
+function initAggressorChart() {
+  const canvas = document.getElementById('aggressor-ratio-canvas');
+  if (!canvas || !window.Chart) return;
+  const opts = _chartDefaults('#00e082');
+  opts.scales.x.stacked = true;
+  opts.scales.y = {
+    stacked: true,
+    min: 0, max: 100,
+    ticks: { color: '#6b7280', font: { size: 9 }, callback: v => v + '%' },
+    grid: { color: 'rgba(255,255,255,0.04)' },
+  };
+  opts.plugins.tooltip.callbacks = {
+    label: ctx => ` ${ctx.dataset.label}: ${ctx.raw.toFixed(1)}%`,
+  };
+  aggressorChart = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels: [],
+      datasets: [
+        { label: 'Buy%',  data: [], backgroundColor: 'rgba(0,224,130,0.6)', borderWidth: 0, stack: 'ratio' },
+        { label: 'Sell%', data: [], backgroundColor: 'rgba(255,77,79,0.6)',  borderWidth: 0, stack: 'ratio' },
+      ],
+    },
+    options: opts,
+  });
+}
+
+// ── Render: Adaptive Volume Profile ──────────────────────────────────────────────
 async function renderAdaptiveVolumeProfile() {
   const sym = encodeURIComponent(activeSymbol);
   const data = await apiFetch(`/volume-profile/adaptive?symbol=${sym}&bins=40`);
@@ -389,7 +389,7 @@ async function renderAdaptiveVolumeProfile() {
     return;
   }
 
-  // ── Metrics row ────────────────────────────────────────────────────────────
+  // ── Metrics row ──────────────────────────────────────────────────────────────────────────
   if (metricsEl) {
     const sessionMins = Math.round((data.window_seconds || 0) / 60);
     metricsEl.innerHTML = `
@@ -402,7 +402,7 @@ async function renderAdaptiveVolumeProfile() {
     `;
   }
 
-  // ── Badge (POC price) ──────────────────────────────────────────────────────
+  // ── Badge (POC price) ──────────────────────────────────────────────────────────────────────────────
   if (badge) {
     badge.textContent = 'POC ' + fmtPrice(data.poc);
     badge.style.display = 'inline-block';
@@ -435,13 +435,6 @@ async function renderAdaptiveVolumeProfile() {
   adaptiveVpChart.data.datasets[1].data                = sellVols;
   adaptiveVpChart.data.datasets[1].backgroundColor     = sellColors;
   adaptiveVpChart.update('none');
-=======
-        { label: 'Buy%',  data: [], backgroundColor: 'rgba(0,224,130,0.6)', borderWidth: 0, stack: 'ratio' },
-        { label: 'Sell%', data: [], backgroundColor: 'rgba(255,77,79,0.6)',  borderWidth: 0, stack: 'ratio' },
-      ],
-    },
-    options: opts,
-  });
 }
 
 function initVolumeProfileChart() {
@@ -497,7 +490,6 @@ function initRegimeTimelineChart() {
     },
     options: opts,
   });
->>>>>>> b7d5750 (fix: resolve empty and loading charts in dashboard)
 }
 
 function resetCharts() {
@@ -520,13 +512,10 @@ function resetCharts() {
   clearChart(cvdChart);
   clearChart(fundingChart);
   clearChart(spreadChart);
-<<<<<<< HEAD
   clearChart(adaptiveVpChart);
-=======
   clearChart(aggressorChart);
   clearChart(volumeProfileChart);
   clearChart(regimeTimelineChart);
->>>>>>> b7d5750 (fix: resolve empty and loading charts in dashboard)
 
   document.getElementById('trade-tape').innerHTML = '';
   document.getElementById('cvd-metrics').innerHTML = '';
@@ -534,15 +523,12 @@ function resetCharts() {
   document.getElementById('spread-metrics').innerHTML = '';
   document.getElementById('vol-imbalance-content').innerHTML = '';
   document.getElementById('oi-metrics').innerHTML = '';
-<<<<<<< HEAD
   const avpMetrics = document.getElementById('adaptive-vp-metrics');
   if (avpMetrics) avpMetrics.innerHTML = '';
-=======
   const vpMetrics = document.getElementById('volume-profile-metrics');
   if (vpMetrics) vpMetrics.innerHTML = '';
   const arMetrics = document.getElementById('aggressor-ratio-metrics');
   if (arMetrics) arMetrics.innerHTML = '';
->>>>>>> b7d5750 (fix: resolve empty and loading charts in dashboard)
 }
 
 // ── Render: Price Chart (OHLCV) ───────────────────────────────────────────────
@@ -1674,7 +1660,6 @@ async function refresh() {
     renderAggressorRatio(),
     renderVpin(),
     renderAdaptiveVolumeProfile(),
-    renderAggressorRatio(),
     renderTapeSpeed(),
     renderAggressorStreak(),
   ]);
@@ -1687,13 +1672,10 @@ async function init() {
   initCvdChart();
   initFundingChart();
   initSpreadChart();
-<<<<<<< HEAD
   initAdaptiveVpChart();
-=======
   initAggressorChart();
   initVolumeProfileChart();
   initRegimeTimelineChart();
->>>>>>> b7d5750 (fix: resolve empty and loading charts in dashboard)
   connectAlerts();
 
   // After 10s replace any still-Loading cards with "No data available"
@@ -1711,16 +1693,3 @@ async function init() {
 
 document.addEventListener('DOMContentLoaded', init);
 
-async function renderAggressorRatio() {
-  const sym = activeSymbol;
-  const data = await apiFetch(`/aggressor-ratio?symbol=${sym}&window=1800`);
-  const el = document.getElementById('aggressor-ratio-content');
-  if (!el) return;
-  if (!data?.series?.length) { el.innerHTML = '<div class="no-data">Collecting data...</div>'; return; }
-  const series = data.series;
-  const last = series[series.length - 1];
-  const badge = document.getElementById('aggressor-ratio-badge');
-  if (badge) { badge.style.display = ''; badge.textContent = last.buy_pct.toFixed(1) + '% buy'; badge.className = 'card-badge ' + (last.buy_pct > 60 ? 'badge-green' : last.buy_pct < 40 ? 'badge-red' : 'badge-neutral'); }
-  const rows = series.slice(-15).map(s => { const t = new Date(s.ts*1000); const time = t.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:false}); return '<div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#6b7280">'+time+'</span><span style="color:#00e082">▲'+s.buy_pct.toFixed(0)+'%</span><span style="color:#ff4d4f">▼'+s.sell_pct.toFixed(0)+'%</span><span style="color:#6b7280">('+s.total+')</span></div>'; }).join('');
-  el.innerHTML = rows + '<div style="font-size:10px;color:#6b7280;margin-top:4px">Signal: '+(data.signal||'n/a')+'</div>';
-}
