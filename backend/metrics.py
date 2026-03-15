@@ -3589,3 +3589,100 @@ def compute_price_ladder(snapshots, num_levels=20, bin_size=None, wall_sigma=1.5
         "snapshot_count": n_snaps,
         "bin_size":       bin_size,
     }
+
+
+def compute_market_microstructure_score(
+    spread_bps: float,
+    depth_usd: float,
+    trade_rate: float,
+    noise_ratio: float,
+    *,
+    min_spread_bps: float = 0.5,
+    max_spread_bps: float = 50.0,
+    min_depth_usd: float = 10_000.0,
+    max_depth_usd: float = 5_000_000.0,
+    min_trade_rate: float = 0.01,
+    max_trade_rate: float = 10.0,
+    weights: dict = None,
+) -> dict:
+    """Composite 0-100 market microstructure quality score.
+
+    Components (each 0-100, higher = better quality):
+    - spread:     bid-ask spread in bps (lower is better)  — linear
+    - depth:      total OB depth in USD (higher is better) — log-linear
+    - trade_rate: trades per second     (higher is better) — log-linear
+    - noise:      noise_ratio 0-1       (lower is better)  — linear, inverted
+
+    Default weights: spread=0.35, depth=0.30, trade_rate=0.20, noise=0.15
+
+    Grade bands: A≥80, B≥60, C≥40, D≥20, F<20
+    """
+    import math
+
+    if weights is None:
+        weights = {"spread": 0.35, "depth": 0.30, "trade_rate": 0.20, "noise": 0.15}
+
+    def _clamp(v: float) -> float:
+        return max(0.0, min(100.0, v))
+
+    # ── spread score (lower = better, linear) ─────────────────────────────────
+    spread_range = max_spread_bps - min_spread_bps
+    spread_score = _clamp(100.0 * (max_spread_bps - spread_bps) / spread_range)
+
+    # ── depth score (higher = better, log-linear) ─────────────────────────────
+    if depth_usd <= 0:
+        depth_score = 0.0
+    else:
+        log_range = math.log(max_depth_usd / min_depth_usd)
+        depth_score = _clamp(
+            100.0 * math.log(max(depth_usd, min_depth_usd) / min_depth_usd) / log_range
+        )
+
+    # ── trade rate score (higher = better, log-linear) ────────────────────────
+    if trade_rate <= 0:
+        trade_rate_score = 0.0
+    else:
+        log_range = math.log(max_trade_rate / min_trade_rate)
+        trade_rate_score = _clamp(
+            100.0 * math.log(max(trade_rate, min_trade_rate) / min_trade_rate) / log_range
+        )
+
+    # ── noise score (lower = better, linear inverted) ─────────────────────────
+    noise_score = _clamp(100.0 * (1.0 - noise_ratio))
+
+    # ── composite ─────────────────────────────────────────────────────────────
+    total_weight = sum(weights.values())
+    composite = (
+        weights["spread"]     * spread_score
+        + weights["depth"]    * depth_score
+        + weights["trade_rate"] * trade_rate_score
+        + weights["noise"]    * noise_score
+    ) / total_weight
+    composite = round(_clamp(composite), 2)
+
+    # ── grade / label ──────────────────────────────────────────────────────────
+    if composite >= 80:
+        grade, label = "A", "excellent"
+    elif composite >= 60:
+        grade, label = "B", "good"
+    elif composite >= 40:
+        grade, label = "C", "fair"
+    elif composite >= 20:
+        grade, label = "D", "poor"
+    else:
+        grade, label = "F", "very poor"
+
+    norm_weights = {k: v / total_weight for k, v in weights.items()}
+
+    return {
+        "score": composite,
+        "grade": grade,
+        "label": label,
+        "components": {
+            "spread":     {"score": round(spread_score,      2), "value": spread_bps,  "weight": norm_weights["spread"]},
+            "depth":      {"score": round(depth_score,       2), "value": depth_usd,   "weight": norm_weights["depth"]},
+            "trade_rate": {"score": round(trade_rate_score,  2), "value": trade_rate,  "weight": norm_weights["trade_rate"]},
+            "noise":      {"score": round(noise_score,       2), "value": noise_ratio, "weight": norm_weights["noise"]},
+        },
+        "weights": norm_weights,
+    }

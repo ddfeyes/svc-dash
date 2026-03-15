@@ -68,6 +68,7 @@ from metrics import (
     compute_tick_imbalance_bars,
     compute_volume_bars,
     compute_price_ladder,
+    compute_market_microstructure_score,
 )
 
 router = APIRouter(prefix="/api")
@@ -4424,3 +4425,66 @@ async def price_ladder_endpoint(
         "window_seconds": window,
         **result,
     }
+@router.get("/market-microstructure")
+async def market_microstructure_endpoint(
+    symbol: str = Query(...),
+    window: int = Query(300),
+):
+    """Composite 0-100 market microstructure quality score.
+
+    Aggregates spread, order book depth, trade rate, and price noise into
+    a single score with letter grade (A–F) and component breakdown.
+    """
+    spread_stats, ob_rows, trades, kalman = await asyncio.gather(
+        get_spread_stats(symbol, window=window),
+        get_latest_orderbook(symbol=symbol),
+        get_recent_trades(symbol=symbol, since=time.time() - window, limit=5000),
+        compute_kalman_price(symbol=symbol, window_seconds=window),
+    )
+
+    # ── spread ────────────────────────────────────────────────────────────────
+    spread_bps = float(spread_stats.get("current_bps") or 0.0)
+
+    # ── depth (bid+ask qty * mid_price → USD) ─────────────────────────────────
+    if ob_rows:
+        row = ob_rows[0]
+        bid_vol = float(row.get("bid_volume") or 0.0)
+        ask_vol = float(row.get("ask_volume") or 0.0)
+        mid = float(row.get("mid_price") or 1.0)
+        depth_usd = (bid_vol + ask_vol) * mid
+    else:
+        depth_usd = 0.0
+
+    # ── trade rate (trades/s over actual span) ────────────────────────────────
+    if len(trades) >= 2:
+        # get_recent_trades returns DESC order: trades[0] is most recent
+        span = max(float(trades[0]["ts"]) - float(trades[-1]["ts"]), 1.0)
+        trade_rate = len(trades) / span
+    elif len(trades) == 1:
+        trade_rate = 1.0 / window
+    else:
+        trade_rate = 0.0
+
+    # ── noise (Kalman deviation_pct → 0-1, cap at 1.0% = "terrible") ─────────
+    raw_noise_pct = abs(float(kalman.get("deviation_pct") or 0.0))
+    noise_ratio = min(1.0, raw_noise_pct / 1.0)
+
+    result = compute_market_microstructure_score(
+        spread_bps=spread_bps,
+        depth_usd=depth_usd,
+        trade_rate=trade_rate,
+        noise_ratio=noise_ratio,
+    )
+
+    return JSONResponse({
+        "status": "ok",
+        "symbol": symbol,
+        "window_seconds": window,
+        "inputs": {
+            "spread_bps": round(spread_bps, 4),
+            "depth_usd": round(depth_usd, 2),
+            "trade_rate": round(trade_rate, 4),
+            "noise_ratio": round(noise_ratio, 6),
+        },
+        **result,
+    })

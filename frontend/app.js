@@ -665,6 +665,73 @@ async function renderPhase() {
   }
 }
 
+// ── Render: Microstructure Score ──────────────────────────────────────────────
+function _compColor(score) {
+  if (score == null) return 'var(--muted)';
+  return score >= 80 ? 'var(--green)'
+       : score >= 60 ? '#64b4ff'
+       : score >= 40 ? 'var(--yellow)'
+       : 'var(--red)';
+}
+
+async function renderMicrostructure() {
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/market-microstructure?symbol=${sym}&window=300`);
+  if (!data) return;
+
+  const badge = document.getElementById('microstructure-badge');
+  if (badge) {
+    badge.textContent = data.grade + ' · ' + (data.label || '');
+    badge.className = 'card-badge '
+      + (data.grade === 'A' ? 'badge-green'
+       : data.grade === 'B' ? 'badge-blue'
+       : data.grade === 'C' ? 'badge-yellow'
+       : 'badge-red');
+    badge.style.display = 'inline-block';
+  }
+
+  const el = document.getElementById('microstructure-content');
+  if (!el) return;
+
+  const c   = data.components || {};
+  const scoreColor = _compColor(data.score);
+
+  const spreadVal    = c.spread?.value     != null ? c.spread.value.toFixed(1) + ' bps' : '—';
+  const depthVal     = c.depth?.value      != null ? '$' + fmtK(c.depth.value)          : '—';
+  const rateVal      = c.trade_rate?.value != null ? c.trade_rate.value.toFixed(2) + '/s' : '—';
+  const noiseVal     = c.noise?.value      != null ? (c.noise.value * 100).toFixed(2) + '%' : '—';
+
+  el.innerHTML = `
+    <div class="phase-metrics">
+      <div class="metric-box">
+        <div class="metric-label">Score</div>
+        <div class="metric-value" style="color:${scoreColor};font-size:22px">${data.score}</div>
+        <div class="metric-label" style="color:${scoreColor}">${data.label || ''}</div>
+      </div>
+      <div class="metric-box">
+        <div class="metric-label">Spread</div>
+        <div class="metric-value" style="color:${_compColor(c.spread?.score)}">${c.spread?.score ?? '—'}</div>
+        <div class="metric-label">${spreadVal}</div>
+      </div>
+      <div class="metric-box">
+        <div class="metric-label">Depth</div>
+        <div class="metric-value" style="color:${_compColor(c.depth?.score)}">${c.depth?.score ?? '—'}</div>
+        <div class="metric-label">${depthVal}</div>
+      </div>
+      <div class="metric-box">
+        <div class="metric-label">Trade Rate</div>
+        <div class="metric-value" style="color:${_compColor(c.trade_rate?.score)}">${c.trade_rate?.score ?? '—'}</div>
+        <div class="metric-label">${rateVal}</div>
+      </div>
+      <div class="metric-box">
+        <div class="metric-label">Noise</div>
+        <div class="metric-value" style="color:${_compColor(c.noise?.score)}">${c.noise?.score ?? '—'}</div>
+        <div class="metric-label">${noiseVal}</div>
+      </div>
+    </div>
+  `;
+}
+
 // ── WebSocket: Alerts ─────────────────────────────────────────────────────────
 function connectAlerts() {
   if (wsAlerts) {
@@ -755,6 +822,7 @@ async function refresh() {
     renderTradeTape(),
     renderVolumeImbalance(),
     renderPhase(),
+    renderMicrostructure(),
   ]);
 }
 
