@@ -1574,53 +1574,56 @@ async function renderAggressorStreak() {
 // ── Main Refresh Loop ─────────────────────────────────────────────────────────
 async function refresh() {
   if (!activeSymbol) return;
+  const safe = fn => fn().catch(e => console.warn('[refresh]', fn.name, e.message));
 
+  // Batch 1: core charts
   await Promise.all([
-    renderPriceChart(),
-    renderOiChart(),
-    renderCvdChart(),
-    renderFunding(),
-    renderSpread(),
-    renderTradeTape(),
-    renderVolumeImbalance(),
-    renderPhase(),
-    renderOiDivergence(),
-    renderMicrostructure(),
-    renderWhaleClustering(),
-    renderVwapDeviation(),
-    renderMarketRegime(),
-    renderMomentum(),
-    renderRegimeTimeline(),
-    renderCorrelations(),
-    renderVolumeProfile(),
-    renderAggressorRatio(),
-    renderVpin(),
-    renderAdaptiveVolumeProfile(),
-    renderAggressorRatio(),
-    renderTapeSpeed(),
-    renderAggressorStreak(),
+    safe(renderPriceChart),
+    safe(renderOiChart),
+    safe(renderCvdChart),
+    safe(renderFunding),
+    safe(renderSpread),
+  ]);
+  // Batch 2: trade data
+  await Promise.all([
+    safe(renderTradeTape),
+    safe(renderVolumeImbalance),
+    safe(renderPhase),
+    safe(renderOiDivergence),
+    safe(renderMicrostructure),
+  ]);
+  // Batch 3: advanced
+  await Promise.all([
+    safe(renderWhaleClustering),
+    safe(renderVwapDeviation),
+    safe(renderMarketRegime),
+    safe(renderMomentum),
+    safe(renderRegimeTimeline),
+  ]);
+  // Batch 4: secondary
+  await Promise.all([
+    safe(renderCorrelations),
+    safe(renderVolumeProfile),
+    safe(renderAggressorRatio),
+    safe(renderVpin),
+    safe(renderAdaptiveVolumeProfile),
+    safe(renderTapeSpeed),
+    safe(renderAggressorStreak),
   ]);
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 async function init() {
-initPriceChart();
-  initOiChart();
-  initCvdChart();
-  initFundingChart();
-  initSpreadChart();
-
-  initAdaptiveVpChart();
   const safeInit = (fn) => { try { fn(); } catch(e) { console.warn('Chart init failed:', e.message); } };
   safeInit(initPriceChart);
   safeInit(initOiChart);
   safeInit(initCvdChart);
   safeInit(initFundingChart);
   safeInit(initSpreadChart);
-  safeInit(() => typeof initAggressorChart === 'function' && initAggressorChart());
-  safeInit(() => typeof initVolumeProfileChart === 'function' && initVolumeProfileChart());
-  safeInit(() => typeof initRegimeTimelineChart === 'function' && initRegimeTimelineChart());
-
+  safeInit(initAggressorChart);
+  safeInit(initVolumeProfileChart);
+  safeInit(initRegimeTimelineChart);
+  safeInit(initAdaptiveVpChart);
   connectAlerts();
 
   // After 10s replace any still-Loading cards with "No data available"
