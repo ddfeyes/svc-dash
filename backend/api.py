@@ -767,7 +767,7 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                         _ask = ob[0]["best_ask"]
                         _mid = ob[0]["mid_price"]
                         _spread_pct = (_ask - _bid) / _mid * 100 if _mid > 0 else 0
-                        SPREAD_ALERT_THRESHOLD = 0.5  # %
+                        SPREAD_ALERT_THRESHOLD = 0.1  # %
                         if _spread_pct > SPREAD_ALERT_THRESHOLD:
                             fired_alerts.append((
                                 "spread_alert",
@@ -1398,7 +1398,7 @@ async def spread_tracker(
     symbol: Optional[str] = Query(default=None),
     window: int = Query(default=1800, ge=300, le=7200, description="History window in seconds (default 30min)"),
     exchange: Optional[str] = Query(default=None),
-    threshold_pct: float = Query(default=0.5, description="Alert threshold for spread % (default 0.5%)"),
+    threshold_pct: float = Query(default=0.1, description="Alert threshold for spread % (default 0.1%)"),
 ):
     """
     Bid-ask spread tracker: current spread + historical series + alert status.
@@ -1423,7 +1423,7 @@ async def spread_tracker(
             alert = {
                 "level": "high",
                 "reason": "spread_pct_threshold",
-                "message": f"Spread {current_pct:.4f}% exceeds {threshold_pct}% threshold",
+                "message": f"⚠️ Spread {current_pct:.4f}% exceeds {threshold_pct}% threshold",
                 "current_pct": round(current_pct, 4),
                 "current_bps": round(current_bps, 2) if current_bps else None,
             }

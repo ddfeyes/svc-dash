@@ -248,10 +248,10 @@ async def get_spread_stats(symbol: str, window: int = 1800, exchange: str = None
     min_bps = min(bps_vals)
     p95_bps = sorted(bps_vals)[int(len(bps_vals) * 0.95)]
     alert = None
-    # Alert: current > 0.5% spread OR > 2x avg
-    if current_pct is not None and current_pct > 0.5:
+    # Alert: current > 0.1% spread OR > 2x avg
+    if current_pct is not None and current_pct > 0.1:
         alert = {"level": "high", "reason": "spread_pct_threshold",
-                 "message": f"Spread {current_pct:.4f}% exceeds 0.5% threshold",
+                 "message": f"Spread {current_pct:.4f}% exceeds 0.1% threshold",
                  "current_pct": round(current_pct, 4), "current_bps": round(current_bps, 2)}
     elif avg_bps > 0 and current_bps > avg_bps * 2:
         alert = {"level": "medium", "reason": "spread_widening",

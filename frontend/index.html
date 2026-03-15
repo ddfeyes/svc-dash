@@ -633,8 +633,8 @@
         <div style="position:relative;height:8px;background:var(--bg3);border-radius:4px;overflow:visible;">
           <div id="spread-gauge-bar" style="height:100%;border-radius:4px;transition:width 0.4s,background 0.4s;background:var(--green);width:0%;"></div>
           <!-- Threshold markers -->
-          <div style="position:absolute;top:-4px;height:16px;width:1px;background:var(--accent);opacity:0.7;" title="warn 0.3%" id="spread-mark-warn"></div>
-          <div style="position:absolute;top:-4px;height:16px;width:1px;background:var(--red);opacity:0.7;" title="alert 0.5%" id="spread-mark-high"></div>
+          <div style="position:absolute;top:-4px;height:16px;width:1px;background:var(--accent);opacity:0.7;" title="warn 0.05%" id="spread-mark-warn"></div>
+          <div style="position:absolute;top:-4px;height:16px;width:1px;background:var(--red);opacity:0.7;" title="alert 0.1%" id="spread-mark-high"></div>
         </div>
         <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted);margin-top:3px;">
           <span>0</span>
@@ -2521,7 +2521,7 @@ function updateSummary(summary) {
       const _spreadPct = (summary.spread / summary.price) * 100;
       const mSpr = document.getElementById('m-spread');
       mSpr.textContent = _spreadPct.toFixed(4) + '%';
-      mSpr.style.color = _spreadPct > 0.5 ? 'var(--red)' : _spreadPct > 0.3 ? 'var(--accent)' : 'var(--text)';
+      mSpr.style.color = _spreadPct > 0.1 ? 'var(--red)' : _spreadPct > 0.05 ? 'var(--accent)' : 'var(--text)';
     } else {
       document.getElementById('m-spread').textContent = summary.spread != null ? fmt(summary.spread, 4) : '—';
     }
@@ -3112,8 +3112,8 @@ async function refreshAll() {
     chartSpread.data.datasets[0].data = bpsVals;
     chartSpread.update('none');
 
-    const SPREAD_WARN_PCT = 0.3;
-    const SPREAD_HIGH_PCT = 0.5;
+    const SPREAD_WARN_PCT = 0.05;
+    const SPREAD_HIGH_PCT = 0.1;
 
     // Header info: current bps + % + avg
     const infoEl = document.getElementById('spread-info');
@@ -3133,7 +3133,7 @@ async function refreshAll() {
     if (bpsVals.length > 0) {
       const curBps = bpsVals[bpsVals.length - 1];
       const curPct = pctVals[pctVals.length - 1] ?? (curBps / 100);
-      const maxScale = Math.max(0.8, curPct * 1.5);  // scale to at least 0.8%
+      const maxScale = Math.max(0.2, curPct * 1.5);  // scale to at least 0.2%
       const GAUGE_MAX_PCT = maxScale;
 
       const gVal  = document.getElementById('spread-gauge-val');
@@ -3192,7 +3192,7 @@ async function refreshAll() {
     if (mSpread && pctVals.length > 0) {
       const curPct = pctVals[pctVals.length - 1];
       mSpread.textContent = curPct != null ? curPct.toFixed(4) + '%' : '—';
-      mSpread.style.color = curPct > 0.5 ? 'var(--red)' : curPct > 0.3 ? 'var(--accent)' : 'var(--text)';
+      mSpread.style.color = curPct > 0.1 ? 'var(--red)' : curPct > 0.05 ? 'var(--accent)' : 'var(--text)';
     }
   }
 
