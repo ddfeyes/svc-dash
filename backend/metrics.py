@@ -2772,3 +2772,93 @@ def compute_ob_recovery_speed(
         "alert":                slow_count > 0,
         "event_count":          len(events),
     }
+
+
+def compute_tod_volatility(
+    candles: List[dict],
+    elevation_threshold: float = 1.5,
+) -> dict:
+    """Compare current hour's volatility to historical same-hour average.
+
+    Per-candle volatility = (high - low) / close * 100  (hl_pct).
+
+    current_hour_start = floor(latest_ts / 3600) * 3600
+    current_hour_candles  = candles where ts >= current_hour_start
+    historical_candles    = candles where hour_of_day == current_hour
+                                      AND ts < current_hour_start
+
+    current_vol    = mean hl_pct of current_hour_candles    (0.0 if none)
+    historical_avg = mean hl_pct of historical_candles      (0.0 if none)
+    ratio          = current_vol / historical_avg            (0.0 if historical=0)
+    elevated       = ratio >= elevation_threshold
+
+    hours profile: for each hour_of_day present in ANY candle:
+        {hour, avg_vol, sample_count}  using ALL candles at that hour
+    """
+    if not candles:
+        return {
+            "current_hour":   None,
+            "current_vol":    0.0,
+            "historical_avg": 0.0,
+            "ratio":          0.0,
+            "elevated":       False,
+            "hours":          [],
+        }
+
+    sorted_c = sorted(candles, key=lambda x: float(x["ts"]))
+    latest_ts = float(sorted_c[-1]["ts"])
+
+    # Current 1h window boundaries
+    current_hour_start = int(latest_ts // 3600) * 3600
+    current_hour = int(current_hour_start % 86400 // 3600)
+
+    def _hl_pct(c) -> float:
+        h = float(c["high"])
+        l = float(c["low"])
+        cl = float(c["close"])
+        return (h - l) / cl * 100.0 if cl != 0 else 0.0
+
+    # Split into current vs historical
+    current_vals: List[float] = []
+    historical_vals: List[float] = []
+
+    for c in sorted_c:
+        ts = float(c["ts"])
+        hour_of_day = int(ts % 86400 // 3600)
+        pct = _hl_pct(c)
+        if ts >= current_hour_start:
+            current_vals.append(pct)
+        elif hour_of_day == current_hour:
+            historical_vals.append(pct)
+
+    current_vol    = sum(current_vals)    / len(current_vals)    if current_vals    else 0.0
+    historical_avg = sum(historical_vals) / len(historical_vals) if historical_vals else 0.0
+
+    ratio    = (current_vol / historical_avg) if historical_avg > 0 else 0.0
+    elevated = ratio >= elevation_threshold
+
+    # Build per-hour profile using ALL candles
+    hour_buckets: dict = {}
+    for c in sorted_c:
+        h = int(float(c["ts"]) % 86400 // 3600)
+        if h not in hour_buckets:
+            hour_buckets[h] = []
+        hour_buckets[h].append(_hl_pct(c))
+
+    hours = [
+        {
+            "hour":         h,
+            "avg_vol":      round(sum(vals) / len(vals), 6),
+            "sample_count": len(vals),
+        }
+        for h, vals in sorted(hour_buckets.items())
+    ]
+
+    return {
+        "current_hour":   current_hour,
+        "current_vol":    round(current_vol,    6),
+        "historical_avg": round(historical_avg, 6),
+        "ratio":          round(ratio,          6),
+        "elevated":       elevated,
+        "hours":          hours,
+    }

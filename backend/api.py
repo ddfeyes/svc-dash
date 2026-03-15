@@ -60,6 +60,7 @@ from metrics import (
     compute_ob_pressure_gradient,
     compute_smart_money_divergence,
     compute_ob_recovery_speed,
+    compute_tod_volatility,
 )
 
 router = APIRouter(prefix="/api")
@@ -3425,4 +3426,74 @@ async def ob_recovery_speed_endpoint(
         "window_seconds": window,
         "threshold_usd": threshold_usd,
         **result,
+    }
+
+
+@router.get("/tod-volatility")
+async def tod_volatility_endpoint(
+    symbol: str = Query(..., description="Symbol e.g. BTCUSDT"),
+    window: int = Query(default=604800, ge=86400, le=2592000,
+                        description="Lookback in seconds (default 7 days)"),
+    interval: int = Query(default=3600, ge=60, le=86400,
+                          description="Candle interval in seconds (default 1h)"),
+    elevation_threshold: float = Query(default=1.5, ge=1.0, le=10.0,
+                                       description="Ratio threshold to flag as elevated"),
+):
+    """
+    Time-of-day volatility pattern.
+
+    Compares the current hour's realized volatility (hl_pct) to the historical
+    average for that same UTC hour across the lookback window.
+
+    Returns:
+      current_hour, current_vol, historical_avg, ratio, elevated,
+      hours: [{hour, avg_vol, sample_count}]
+    """
+    candles = await get_ohlcv(interval_seconds=interval, window_seconds=window,
+                               symbol=symbol)
+    result = compute_tod_volatility(candles, elevation_threshold=elevation_threshold)
+    return {
+        "status": "ok",
+        "symbol": symbol,
+        "window_seconds": window,
+        "interval_seconds": interval,
+        **result,
+    }
+
+
+@router.get("/tod-volatility/all")
+async def tod_volatility_all_endpoint(
+    window: int = Query(default=604800, ge=86400, le=2592000,
+                        description="Lookback in seconds (default 7 days)"),
+    interval: int = Query(default=3600, ge=60, le=86400,
+                          description="Candle interval in seconds (default 1h)"),
+    elevation_threshold: float = Query(default=1.5, ge=1.0, le=10.0,
+                                       description="Ratio threshold to flag as elevated"),
+):
+    """
+    Time-of-day volatility for ALL tracked symbols in parallel.
+
+    Returns list of per-symbol results sorted by ratio descending.
+    """
+    symbols = get_symbols()
+    if not symbols:
+        return {"error": "No symbols configured"}
+
+    candle_lists = await asyncio.gather(*[
+        get_ohlcv(interval_seconds=interval, window_seconds=window, symbol=sym)
+        for sym in symbols
+    ])
+
+    results = []
+    for sym, candles in zip(symbols, candle_lists):
+        r = compute_tod_volatility(candles, elevation_threshold=elevation_threshold)
+        results.append({"symbol": sym, **r})
+
+    results.sort(key=lambda x: x["ratio"], reverse=True)
+
+    return {
+        "status": "ok",
+        "window_seconds": window,
+        "interval_seconds": interval,
+        "symbols": results,
     }
