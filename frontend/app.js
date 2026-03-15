@@ -6,7 +6,7 @@ const WS  = 'ws://' + window.location.hostname + ':8765';
 
 const REFRESH_MS   = 15000;  // poll interval (15s to avoid backend overload)
 const TRADE_MAX    = 100;    // max rows in tape
-const REFRESH_MS   = 15000;  // poll interval (15s to avoid backend overload)const TRADE_MAX    = 100;    // max rows in tape
+
 
 const ALERT_MAX    = 50;     // max rows in alerts feed
 const WHALE_USD    = 10000;  // highlight threshold
@@ -23,10 +23,6 @@ let aggressorChart     = null;   // Chart.js
 let volumeProfileChart = null;   // Chart.js
 let regimeTimelineChart = null;  // Chart.js
 let wsAlerts     = null;
-let spreadChart        = null;   // Chart.js
-let aggressorChart     = null;   // Chart.js
-let volumeProfileChart = null;   // Chart.js
-let regimeTimelineChart = null;  // Chart.jslet wsAlerts     = null;
 
 let refreshTimer = null;
 let _lastPrice   = null;   // most recent close price (for OI USDT calc)
@@ -472,10 +468,6 @@ const vpMetrics = document.getElementById('volume-profile-metrics');
   const arMetrics = document.getElementById('aggressor-ratio-metrics');
   if (arMetrics) arMetrics.innerHTML = '';
 }
-  const vpMetrics = document.getElementById('volume-profile-metrics');
-  if (vpMetrics) vpMetrics.innerHTML = '';
-  const arMetrics = document.getElementById('aggressor-ratio-metrics');
-  if (arMetrics) arMetrics.innerHTML = '';}
 
 
 // ── Render: Price Chart (OHLCV) ───────────────────────────────────────────────
