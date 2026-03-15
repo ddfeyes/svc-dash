@@ -9,6 +9,7 @@ from storage import (
     get_oi_history,
     get_latest_orderbook,
     get_funding_history,
+    get_recent_trades,
 )
 
 
@@ -1109,4 +1110,78 @@ async def detect_funding_arbitrage(
         "threshold_bps": threshold_bps,
         "signal": signal,
         "description": description,
+    }
+
+
+async def compute_vwap_deviation(window_seconds: int = 3600, symbol: str = None) -> Dict:
+    """
+    Compute VWAP for the given window and return deviation of current price from VWAP.
+    VWAP deviation = (price - vwap) / vwap * 100 (%)
+    Also classifies signal: above/below, strength (weak/moderate/strong).
+    """
+    since = time.time() - window_seconds
+    trades = await get_recent_trades(since=since, symbol=symbol)
+
+    if not trades:
+        return {
+            "vwap": None,
+            "price": None,
+            "deviation_pct": None,
+            "signal": "no_data",
+            "strength": None,
+            "description": "No trade data",
+        }
+
+    # Compute VWAP: sum(price * qty) / sum(qty)
+    cum_pv = 0.0
+    cum_v = 0.0
+    latest_price = None
+    for t in trades:
+        p = float(t.get("price", 0) or 0)
+        q = float(t.get("qty", 0) or 0)
+        if p > 0 and q > 0:
+            cum_pv += p * q
+            cum_v += q
+            latest_price = p
+
+    if cum_v == 0 or latest_price is None:
+        return {
+            "vwap": None,
+            "price": None,
+            "deviation_pct": None,
+            "signal": "insufficient_data",
+            "strength": None,
+            "description": "Insufficient trade data",
+        }
+
+    vwap = cum_pv / cum_v
+    deviation_pct = (latest_price - vwap) / vwap * 100
+
+    # Classify
+    abs_dev = abs(deviation_pct)
+    if abs_dev < 0.1:
+        strength = "flat"
+    elif abs_dev < 0.3:
+        strength = "weak"
+    elif abs_dev < 0.8:
+        strength = "moderate"
+    else:
+        strength = "strong"
+
+    signal = "above_vwap" if deviation_pct > 0 else "below_vwap"
+
+    if deviation_pct > 0:
+        desc = f"Price {deviation_pct:+.3f}% above VWAP ({vwap:.6f}) — {strength}"
+    else:
+        desc = f"Price {deviation_pct:+.3f}% below VWAP ({vwap:.6f}) — {strength}"
+
+    return {
+        "vwap": round(vwap, 8),
+        "price": round(latest_price, 8),
+        "deviation_pct": round(deviation_pct, 4),
+        "signal": signal,
+        "strength": strength,
+        "description": desc,
+        "window_seconds": window_seconds,
+        "trade_count": len(trades),
     }

@@ -40,6 +40,7 @@ from metrics import (
     detect_accumulation_distribution_pattern,
     detect_cross_symbol_oi_spike,
     detect_funding_arbitrage,
+    compute_vwap_deviation,
 )
 
 router = APIRouter(prefix="/api")
@@ -242,6 +243,18 @@ async def funding_extreme(
     return {"status": "ok", "symbol": target, **data}
 
 
+@router.get("/vwap-deviation")
+async def vwap_deviation_endpoint(
+    symbol: Optional[str] = None,
+    window: int = Query(default=3600, le=86400),
+):
+    """VWAP deviation signal: how far current price is from VWAP (%)."""
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await compute_vwap_deviation(window_seconds=window, symbol=target)
+    return {"status": "ok", "symbol": target, **data}
+
+
 @router.get("/funding-arb")
 async def funding_arb_endpoint(
     symbol: Optional[str] = None,
@@ -409,9 +422,10 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                     detect_volume_spike(window_seconds=30, baseline_seconds=300, symbol=symbol),
                     detect_funding_extreme(symbol=symbol, threshold_pct=0.1),
                     detect_funding_arbitrage(symbol=symbol, threshold_bps=5.0),
+                    compute_vwap_deviation(window_seconds=3600, symbol=symbol),
                     return_exceptions=True,
                 )
-                div_result, oi_result, liq_result, vol_result, funding_ex_result, funding_arb_result = alert_tasks
+                div_result, oi_result, liq_result, vol_result, funding_ex_result, funding_arb_result, vwap_dev_result = alert_tasks
 
                 fired_alerts = []
                 if isinstance(div_result, dict) and div_result.get("divergence") not in ("none", None):
@@ -427,6 +441,9 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                     fired_alerts.append(("funding_extreme", "high", funding_ex_result.get("description", ""), funding_ex_result))
                 if isinstance(funding_arb_result, dict) and funding_arb_result.get("arb"):
                     fired_alerts.append(("funding_arb", "medium", funding_arb_result.get("description", ""), funding_arb_result))
+                # VWAP deviation: alert only on strong deviation
+                if isinstance(vwap_dev_result, dict) and vwap_dev_result.get("strength") == "strong":
+                    fired_alerts.append(("vwap_deviation", "medium", vwap_dev_result.get("description", ""), vwap_dev_result))
 
                 # Cross-symbol correlated OI spike (only check from BANANAS31 WS to avoid duplicate)
                 cross_sym_result = None
@@ -466,7 +483,7 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
 
                 # Deduplicate: only save if no same-type alert in last 60s
                 # funding_extreme uses 300s cooldown (fires constantly otherwise)
-                cooldowns = {"funding_extreme": 300, "phase_change": 120, "funding_arb": 180}
+                cooldowns = {"funding_extreme": 300, "phase_change": 120, "funding_arb": 180, "vwap_deviation": 120}
                 for a_type, sev, desc, data in fired_alerts:
                     if not hasattr(ws, "_last_alert_ts"):
                         ws._last_alert_ts = {}
@@ -502,6 +519,7 @@ async def websocket_endpoint(ws: WebSocket, symbol: str):
                     "delta_divergence": div_result if isinstance(div_result, dict) else None,
                     "cross_symbol_oi_spike": cross_sym_result if isinstance(cross_sym_result, dict) else None,
                     "funding_arb": funding_arb_result if isinstance(funding_arb_result, dict) else None,
+                    "vwap_deviation": vwap_dev_result if isinstance(vwap_dev_result, dict) else None,
                     "market_regime": _cached_regime,
                 }
                 await ws.send_text(json.dumps(msg))

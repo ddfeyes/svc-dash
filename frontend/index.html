@@ -696,6 +696,14 @@
       <div id="funding-arb-detail" style="font-size:11px;margin-top:4px;color:var(--muted);"></div>
     </div>
 
+    <div id="alert-vwap-deviation" class="alert-box">
+      <div class="alert-label">📐 VWAP DEVIATION (1h)</div>
+      <div id="vwap-dev-text" style="color:var(--muted)">Loading...</div>
+      <div id="vwap-dev-bar" style="margin-top:5px;height:4px;border-radius:2px;background:var(--bg3);overflow:hidden;">
+        <div id="vwap-dev-bar-fill" style="height:100%;width:50%;background:var(--muted);transition:width 0.3s,background 0.3s;"></div>
+      </div>
+    </div>
+
     <div id="alert-phase-change" class="alert-box">
       <div class="alert-label">PHASE CHANGE</div>
       <div id="phase-change-text" style="color:var(--muted)">No recent changes</div>
@@ -808,6 +816,7 @@
       <button class="ah-filter-btn" data-type="volume_spike" onclick="setAlertHistoryFilter('volume_spike',this)">Vol Spike</button>
       <button class="ah-filter-btn" data-type="funding_extreme" onclick="setAlertHistoryFilter('funding_extreme',this)">Funding Extreme</button>
       <button class="ah-filter-btn" data-type="funding_arb" onclick="setAlertHistoryFilter('funding_arb',this)">Funding Arb</button>
+      <button class="ah-filter-btn" data-type="vwap_deviation" onclick="setAlertHistoryFilter('vwap_deviation',this)">VWAP Dev</button>
       <button class="ah-filter-btn" data-type="phase_change" onclick="setAlertHistoryFilter('phase_change',this)">Phase Change</button>
       <button class="ah-filter-btn" data-type="cross_symbol_oi_spike" onclick="setAlertHistoryFilter('cross_symbol_oi_spike',this)">Cross-Symbol OI</button>
     </div>
@@ -1650,6 +1659,31 @@ function updateSummary(summary) {
       feText.style.color = 'var(--muted)';
       feText.textContent = fe.description || 'Normal';
       feBox.className = 'alert-box';
+    }
+  }
+
+  // ── VWAP deviation signal ─────────────────────────────────────────────────
+  if (summary.vwap_deviation) {
+    const vd = summary.vwap_deviation;
+    const vdBox  = document.getElementById('alert-vwap-deviation');
+    const vdText = document.getElementById('vwap-dev-text');
+    const vdFill = document.getElementById('vwap-dev-bar-fill');
+    if (vd.deviation_pct !== null && vd.deviation_pct !== undefined) {
+      const isAbove = vd.deviation_pct >= 0;
+      const color = isAbove ? 'var(--green)' : 'var(--red)';
+      vdText.style.color = color;
+      vdText.textContent = vd.description || `${vd.deviation_pct >= 0 ? '+' : ''}${vd.deviation_pct.toFixed(3)}%`;
+      // Bar: centered at 50%, fill proportional to deviation (cap at ±2%)
+      const maxDev = 2.0;
+      const fillPct = 50 + Math.min(Math.max(vd.deviation_pct / maxDev * 50, -50), 50);
+      vdFill.style.width = Math.abs(50 - fillPct) + '%';
+      vdFill.style.background = color;
+      vdFill.style.marginLeft = isAbove ? '50%' : `${fillPct}%`;
+      vdBox.className = vd.strength === 'strong' ? 'alert-box active' : 'alert-box';
+    } else {
+      vdText.style.color = 'var(--muted)';
+      vdText.textContent = 'No data';
+      vdBox.className = 'alert-box';
     }
   }
 
