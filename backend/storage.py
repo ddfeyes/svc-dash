@@ -332,6 +332,32 @@ async def get_trades_for_volume_profile(since: float, symbol: str = None, tick_s
             return [dict(r) for r in rows], tick_size
 
 
+async def get_orderbook_history(
+    limit: int = 60,
+    symbol: str = None,
+    exchange: str = None,
+) -> List[Dict]:
+    """Get recent orderbook snapshots for heatmap."""
+    params = []
+    q = "SELECT ts, bids, asks, mid_price FROM orderbook_snapshots"
+    where = []
+    if symbol:
+        where.append("symbol = ?")
+        params.append(symbol)
+    if exchange:
+        where.append("exchange = ?")
+        params.append(exchange)
+    if where:
+        q += " WHERE " + " AND ".join(where)
+    q += " ORDER BY ts DESC LIMIT ?"
+    params.append(limit)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(q, params) as cur:
+            rows = await cur.fetchall()
+            return [dict(r) for r in reversed(rows)]  # chronological
+
+
 async def get_trades_for_cvd(since: float, symbol: str = None) -> List[Dict]:
     params: list = [since]
     q = "SELECT ts, price, qty, side FROM trades WHERE ts > ?"
