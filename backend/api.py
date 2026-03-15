@@ -4149,12 +4149,21 @@ async def ob_recovery_speed_endpoint(
 @router.get("/tod-volatility")
 async def tod_volatility_endpoint(
     symbol: str = Query(..., description="Symbol e.g. BTCUSDT"),
-    window: int = Query(default=604800, ge=86400, le=2592000,
-                        description="Lookback in seconds (default 7 days)"),
-    interval: int = Query(default=3600, ge=60, le=86400,
-                          description="Candle interval in seconds (default 1h)"),
-    elevation_threshold: float = Query(default=1.5, ge=1.0, le=10.0,
-                                       description="Ratio threshold to flag as elevated"),
+    window: int = Query(
+        default=604800,
+        ge=86400,
+        le=2592000,
+        description="Lookback in seconds (default 7 days)",
+    ),
+    interval: int = Query(
+        default=3600,
+        ge=60,
+        le=86400,
+        description="Candle interval in seconds (default 1h)",
+    ),
+    elevation_threshold: float = Query(
+        default=1.5, ge=1.0, le=10.0, description="Ratio threshold to flag as elevated"
+    ),
 ):
     """
     Time-of-day volatility pattern.
@@ -4166,9 +4175,12 @@ async def tod_volatility_endpoint(
       current_hour, current_vol, historical_avg, ratio, elevated,
       hours: [{hour, avg_vol, sample_count}]
     """
-    candles = await get_ohlcv(interval_seconds=interval, window_seconds=window,
-                               symbol=symbol)
+    candles = await get_ohlcv(
+        interval_seconds=interval, window_seconds=window, symbol=symbol
+    )
     result = compute_tod_volatility(candles, elevation_threshold=elevation_threshold)
+
+
 @router.get("/net-taker-delta")
 async def net_taker_delta_endpoint(
     symbol: str = Query(..., description="Symbol e.g. BANANAS31USDT"),
@@ -4203,12 +4215,21 @@ async def net_taker_delta_endpoint(
 
 @router.get("/tod-volatility/all")
 async def tod_volatility_all_endpoint(
-    window: int = Query(default=604800, ge=86400, le=2592000,
-                        description="Lookback in seconds (default 7 days)"),
-    interval: int = Query(default=3600, ge=60, le=86400,
-                          description="Candle interval in seconds (default 1h)"),
-    elevation_threshold: float = Query(default=1.5, ge=1.0, le=10.0,
-                                       description="Ratio threshold to flag as elevated"),
+    window: int = Query(
+        default=604800,
+        ge=86400,
+        le=2592000,
+        description="Lookback in seconds (default 7 days)",
+    ),
+    interval: int = Query(
+        default=3600,
+        ge=60,
+        le=86400,
+        description="Candle interval in seconds (default 1h)",
+    ),
+    elevation_threshold: float = Query(
+        default=1.5, ge=1.0, le=10.0, description="Ratio threshold to flag as elevated"
+    ),
 ):
     """
     Time-of-day volatility for ALL tracked symbols in parallel.
@@ -4219,10 +4240,12 @@ async def tod_volatility_all_endpoint(
     if not symbols:
         return {"error": "No symbols configured"}
 
-    candle_lists = await asyncio.gather(*[
-        get_ohlcv(interval_seconds=interval, window_seconds=window, symbol=sym)
-        for sym in symbols
-    ])
+    candle_lists = await asyncio.gather(
+        *[
+            get_ohlcv(interval_seconds=interval, window_seconds=window, symbol=sym)
+            for sym in symbols
+        ]
+    )
 
     results = []
     for sym, candles in zip(symbols, candle_lists):
@@ -4237,6 +4260,8 @@ async def tod_volatility_all_endpoint(
         "interval_seconds": interval,
         "symbols": results,
     }
+
+
 @router.get("/squeeze-setup")
 async def squeeze_setup_endpoint(
     symbol: str = Query(..., description="Symbol e.g. BANANAS31USDT"),
@@ -4287,13 +4312,17 @@ async def squeeze_setup_endpoint(
         price_drop_pct=price_drop_pct,
         funding_extreme=funding_extreme,
     )
+
+
 @router.get("/tick-imbalance")
 async def tick_imbalance_endpoint(
     symbol: str = Query(..., description="Symbol e.g. BTCUSDT"),
-    window: int = Query(default=300, ge=30, le=3600,
-                        description="Lookback in seconds (default 5m)"),
-    threshold: int = Query(default=20, ge=1, le=500,
-                           description="Tick imbalance required to close a bar"),
+    window: int = Query(
+        default=300, ge=30, le=3600, description="Lookback in seconds (default 5m)"
+    ),
+    threshold: int = Query(
+        default=20, ge=1, le=500, description="Tick imbalance required to close a bar"
+    ),
 ):
     """
     Tick imbalance bar detector.
@@ -4322,8 +4351,16 @@ async def tick_imbalance_endpoint(
 @router.get("/session-stats")
 async def session_stats_endpoint(
     symbol: str = Query(..., description="Symbol e.g. BTCUSDT"),
-    window: int = Query(default=86400, ge=300, le=604800, description="Max lookback in seconds (default 24h)"),
-    session_start: float = Query(default=None, description="Session start Unix timestamp; auto = start of UTC day if omitted"),
+    window: int = Query(
+        default=86400,
+        ge=300,
+        le=604800,
+        description="Max lookback in seconds (default 24h)",
+    ),
+    session_start: float = Query(
+        default=None,
+        description="Session start Unix timestamp; auto = start of UTC day if omitted",
+    ),
 ):
     """
     Session statistics: total traded volume USD, avg trade size, max single trade,
@@ -4373,12 +4410,15 @@ async def squeeze_setup_all_endpoint(
     return {"status": "ok", "results": results}
 
 
-
 @router.get("/volume-clock")
 async def volume_clock_endpoint(
     symbol: str = Query(..., description="Symbol e.g. BTCUSDT"),
-    window: int = Query(default=3600, ge=60, le=86400, description="Lookback in seconds (default 1h)"),
-    volume_threshold: float = Query(default=10.0, ge=0.001, description="Volume (qty) to close each bar"),
+    window: int = Query(
+        default=3600, ge=60, le=86400, description="Lookback in seconds (default 1h)"
+    ),
+    volume_threshold: float = Query(
+        default=10.0, ge=0.001, description="Volume (qty) to close each bar"
+    ),
 ):
     """
     Volume-based OHLCV bars: each bar closes when accumulated qty >= volume_threshold.
@@ -4403,10 +4443,19 @@ async def volume_clock_endpoint(
 @router.get("/price-ladder")
 async def price_ladder_endpoint(
     symbol: str = Query(..., description="Symbol e.g. BTCUSDT"),
-    window: int = Query(default=300, ge=30, le=1800, description="Lookback in seconds (default 5m)"),
-    num_levels: int = Query(default=20, ge=5, le=50, description="Price levels on each side of mid"),
-    bin_size: float = Query(default=None, description="Price bin width; auto-computed from spread if omitted"),
-    wall_sigma: float = Query(default=1.5, ge=0.5, le=5.0, description="Std-dev multiplier for wall detection"),
+    window: int = Query(
+        default=300, ge=30, le=1800, description="Lookback in seconds (default 5m)"
+    ),
+    num_levels: int = Query(
+        default=20, ge=5, le=50, description="Price levels on each side of mid"
+    ),
+    bin_size: float = Query(
+        default=None,
+        description="Price bin width; auto-computed from spread if omitted",
+    ),
+    wall_sigma: float = Query(
+        default=1.5, ge=0.5, le=5.0, description="Std-dev multiplier for wall detection"
+    ),
 ):
     """
     Price ladder heatmap: order book density at each price level accumulated over window.
@@ -4415,6 +4464,7 @@ async def price_ladder_endpoint(
     and best bid/ask for real-time DOM visualisation.
     """
     import json as _json
+
     since = time.time() - window
     snapshots_raw = await get_orderbook_snapshots_for_heatmap(
         symbol=symbol, since=since, sample_interval=5
@@ -4429,12 +4479,14 @@ async def price_ladder_endpoint(
         except Exception:
             continue
         if snap.get("mid_price"):
-            snapshots.append({
-                "ts":        snap["ts"],
-                "bids":      bids,
-                "asks":      asks,
-                "mid_price": float(snap["mid_price"]),
-            })
+            snapshots.append(
+                {
+                    "ts": snap["ts"],
+                    "bids": bids,
+                    "asks": asks,
+                    "mid_price": float(snap["mid_price"]),
+                }
+            )
 
     result = compute_price_ladder(
         snapshots,
@@ -4449,6 +4501,8 @@ async def price_ladder_endpoint(
         "window_seconds": window,
         **result,
     }
+
+
 @router.get("/market-microstructure")
 async def market_microstructure_endpoint(
     symbol: str = Query(...),
@@ -4500,18 +4554,20 @@ async def market_microstructure_endpoint(
         noise_ratio=noise_ratio,
     )
 
-    return JSONResponse({
-        "status": "ok",
-        "symbol": symbol,
-        "window_seconds": window,
-        "inputs": {
-            "spread_bps": round(spread_bps, 4),
-            "depth_usd": round(depth_usd, 2),
-            "trade_rate": round(trade_rate, 4),
-            "noise_ratio": round(noise_ratio, 6),
-        },
-        **result,
-    })
+    return JSONResponse(
+        {
+            "status": "ok",
+            "symbol": symbol,
+            "window_seconds": window,
+            "inputs": {
+                "spread_bps": round(spread_bps, 4),
+                "depth_usd": round(depth_usd, 2),
+                "trade_rate": round(trade_rate, 4),
+                "noise_ratio": round(noise_ratio, 6),
+            },
+            **result,
+        }
+    )
 
 
 @router.get("/oi-divergence")
@@ -4537,10 +4593,12 @@ async def oi_divergence_endpoint(
     for row in all_oi:
         ex = (row.get("exchange") or "").lower()
         if ex in exchange_list:
-            oi_by_exchange.setdefault(ex, []).append({
-                "ts":       float(row["ts"]),
-                "oi_value": float(row["oi_value"]),
-            })
+            oi_by_exchange.setdefault(ex, []).append(
+                {
+                    "ts": float(row["ts"]),
+                    "oi_value": float(row["oi_value"]),
+                }
+            )
 
     # Ensure ascending time order per exchange
     for ex in oi_by_exchange:
@@ -4559,12 +4617,15 @@ async def oi_divergence_endpoint(
             severity=result["severity"],
             description=result["description"],
             data={
-                "divergence_pct":     result["divergence_pct"],
+                "divergence_pct": result["divergence_pct"],
                 "diverging_exchange": result["diverging_exchange"],
-                "mean_pct_change":    result["mean_pct_change"],
-                "opposing":           result["opposing"],
+                "mean_pct_change": result["mean_pct_change"],
+                "opposing": result["opposing"],
             },
         )
+
+    return JSONResponse({"status": "ok", "symbol": symbol, **result})
+
 
 @router.get("/whale-clustering")
 async def whale_clustering_endpoint(
@@ -4577,13 +4638,15 @@ async def whale_clustering_endpoint(
 ):
     """Group whale trades by price level and detect high-volume concentration zones."""
     since = time.time() - window
-    raw_trades = await get_whale_trades(symbol=symbol, since=since, min_value_usd=min_whale_usd)
+    raw_trades = await get_whale_trades(
+        symbol=symbol, since=since, min_usd=min_whale_usd
+    )
 
     trades = [
         {
-            "price":     float(t["price"]),
-            "qty":       float(t["qty"]),
-            "side":      str(t.get("side", "buy")).lower(),
+            "price": float(t["price"]),
+            "qty": float(t["qty"]),
+            "side": str(t.get("side", "buy")).lower(),
             "value_usd": float(t["value_usd"]),
         }
         for t in raw_trades
@@ -4596,11 +4659,12 @@ async def whale_clustering_endpoint(
         zone_sigma=zone_sigma,
     )
 
-    return JSONResponse({
-        "status": "ok",
-        "symbol": symbol,
-        "window_seconds": window,
-        "exchanges_queried": exchange_list,
-        "min_whale_usd": min_whale_usd,
-        **result,
-    })
+    return JSONResponse(
+        {
+            "status": "ok",
+            "symbol": symbol,
+            "window_seconds": window,
+            "min_whale_usd": min_whale_usd,
+            **result,
+        }
+    )

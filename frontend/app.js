@@ -806,7 +806,7 @@ function connectAlerts() {
     wsAlerts = null;
   }
 
-  const url = WS + '/ws/alerts';
+  const url = WS + '/api/ws/alerts';
   try {
     wsAlerts = new WebSocket(url);
   } catch (e) {
@@ -885,7 +885,7 @@ async function renderWhaleClustering() {
   const sym = activeSymbol;
   let data;
   try {
-    const res = await fetch(`/api/whale-clustering?symbol=${sym}&window=1800`);
+    const res = await fetch(`${API}/whale-clustering?symbol=${sym}&window=1800`);
     data = await res.json();
   } catch {
     el.innerHTML = '<div class="text-muted" style="font-size:11px;">Unavailable</div>';
