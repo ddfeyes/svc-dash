@@ -617,6 +617,14 @@
     </div>
   </div>
 
+  <!-- Trade Count Rate Chart -->
+  <div class="card">
+    <h2><span class="card-icon">🔢</span>Trade Rate (trades/min)
+      <span id="trade-rate-info" style="margin-left:auto;font-size:10px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;"></span>
+    </h2>
+    <canvas id="chart-trade-rate" style="height:140px !important;"></canvas>
+  </div>
+
   <!-- OI Delta Histogram -->
   <div class="card">
     <h2><span class="card-icon">📊</span>OI Delta per Candle
@@ -1635,6 +1643,44 @@ const charts = {
   dom:     mkDomChart('chart-dom'),
 };
 
+// Trade Count Rate area chart
+let chartTradeRate = null;
+(function initTradeRateChart() {
+  const ctx = document.getElementById('chart-trade-rate');
+  if (!ctx) return;
+  chartTradeRate = new Chart(ctx, {
+    type: 'line',
+    data: { labels: [], datasets: [{
+      label: 'Trades/min',
+      data: [],
+      borderColor: 'rgba(130,200,255,0.9)',
+      backgroundColor: 'rgba(130,200,255,0.15)',
+      borderWidth: 1.5,
+      pointRadius: 0,
+      fill: true,
+      tension: 0.35,
+    }]},
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => `${ctx.parsed.y.toFixed(1)} trades/min`,
+          }
+        }
+      },
+      scales: {
+        x: { ticks: { color: TICK_COLOR, font: { size: 8 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 12 }, grid: { color: GRID_COLOR } },
+        y: { ticks: { color: TICK_COLOR, font: { size: 8 } }, grid: { color: GRID_COLOR }, min: 0 }
+      }
+    }
+  });
+})();
+
 // OI Delta histogram chart
 let chartOiDelta = null;
 (function initOiDeltaChart() {
@@ -2406,7 +2452,7 @@ async function refreshAll() {
   if (!activeSymbol) return;
   const sym = encodeURIComponent(activeSymbol);
 
-  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas, volspike, whales, patternLive, patternHist, oiDelta] = await Promise.all([
+  const [cvd, oi, funding, liqs, vp, divg, ltrades, oisp, liqcas, volspike, whales, patternLive, patternHist, oiDelta, tradeRate] = await Promise.all([
     fetchJSON(`/api/cvd/history?window=3600&symbol=${sym}`),
     fetchJSON(`/api/oi/history?limit=300&symbol=${sym}`),
     fetchJSON(`/api/funding/history?limit=200&symbol=${sym}`),
@@ -2421,6 +2467,7 @@ async function refreshAll() {
     fetchJSON(`/api/pattern?symbol=${sym}`),
     fetchJSON(`/api/pattern-history?symbol=${sym}&limit=20&since=${Math.floor(Date.now()/1000)-7200}`),
     fetchJSON(`/api/oi-delta?interval=300&window=3600&symbol=${sym}`),
+    fetchJSON(`/api/trade-count-rate?interval=60&window=1800&symbol=${sym}`),
   ]);
 
   // CVD + Price dual-axis chart
@@ -2460,6 +2507,23 @@ async function refreshAll() {
     if (infoEl) {
       infoEl.textContent = `net 1h: ${netOi > 0 ? '+' : ''}${fmtK(netOi)}`;
       infoEl.style.color = netOi > 0 ? 'var(--green)' : netOi < 0 ? 'var(--red)' : 'var(--muted)';
+    }
+  }
+
+  // Trade count rate area chart
+  if (chartTradeRate && tradeRate?.buckets?.length) {
+    const buckets = tradeRate.buckets;
+    const labels = buckets.map(b => fmtTs(b.ts));
+    const values = buckets.map(b => b.trades_per_min);
+    chartTradeRate.data.labels = labels;
+    chartTradeRate.data.datasets[0].data = values;
+    chartTradeRate.update('none');
+    // Show current (last bucket) rate in header
+    const infoEl = document.getElementById('trade-rate-info');
+    if (infoEl && buckets.length > 0) {
+      const last = buckets[buckets.length - 1];
+      const avg = values.reduce((a, b) => a + b, 0) / values.length;
+      infoEl.textContent = `now: ${last.trades_per_min.toFixed(1)} t/m · avg30m: ${avg.toFixed(1)}`;
     }
   }
 

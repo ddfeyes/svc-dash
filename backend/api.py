@@ -3,11 +3,13 @@ import asyncio
 import json
 import time
 from typing import Optional, Set
+import aiosqlite
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
 from collectors import get_symbols
+import storage
 from storage import (
     get_latest_orderbook,
     get_recent_trades,
@@ -1139,6 +1141,48 @@ async def oi_delta_candles(
         result.append({"ts": bucket, "oi_change": round(oi_change, 2), "oi_end": round(vals[-1], 2)})
 
     return {"status": "ok", "symbol": target, "interval": interval, "candles": result}
+
+
+@router.get("/trade-count-rate")
+async def trade_count_rate(
+    interval: int = Query(default=60, ge=10, le=300),
+    window: int = Query(default=1800, le=7200),
+    symbol: Optional[str] = None,
+):
+    """Trades per minute bucketed by interval over the last `window` seconds.
+    Returns list of {ts, trades_count, trades_per_min} for area chart rendering."""
+    target = symbol or get_symbols()[0]
+    since = time.time() - window
+    # fetch raw trades
+    db_path = storage.DB_PATH
+    q = "SELECT ts FROM trades WHERE ts > ? AND symbol = ? ORDER BY ts ASC"
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(q, (since, target)) as cur:
+            rows = await cur.fetchall()
+
+    if not rows:
+        return {"status": "ok", "symbol": target, "interval": interval, "buckets": []}
+
+    # Bucket into intervals
+    buckets: dict[int, int] = {}
+    for r in rows:
+        ts = r["ts"]
+        bucket = int(ts // interval) * interval
+        buckets[bucket] = buckets.get(bucket, 0) + 1
+
+    # Fill gaps and compute trades_per_min
+    now_bucket = int(time.time() // interval) * interval
+    start_bucket = int(since // interval) * interval
+    result = []
+    b = start_bucket
+    while b <= now_bucket:
+        count = buckets.get(b, 0)
+        tpm = round(count * (60 / interval), 2)
+        result.append({"ts": b, "trades_count": count, "trades_per_min": tpm})
+        b += interval
+
+    return {"status": "ok", "symbol": target, "interval": interval, "window": window, "buckets": result}
 
 
 @router.get("/momentum")
