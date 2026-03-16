@@ -7606,6 +7606,8 @@ async def compute_btc_dominance() -> dict:
             "interpretation":       interp,
         },
         "sparkline": sparkline,
+    }
+
 # ╔══════════════════════════════════════════════════════════════════════════╗
 # ║  LEVERAGE RATIO HEATMAP                                                 ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
@@ -8352,3 +8354,5 @@ async def compute_holder_distribution_card() -> dict:
         "zscore": round(float(zscore), 3),
         "description": desc,
     }
+
+
