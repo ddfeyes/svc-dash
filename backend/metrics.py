@@ -4828,700 +4828,12 @@ async def detect_ob_walls(
     }
 
 
-# ── Session Volume Profile ─────────────────────────────────────────────────────
+# ── Cross-Asset Correlation ───────────────────────────────────────────────────
 
-# UTC session windows: (name, display_hours, start_hour, end_hour)
-_SESSION_DEFS = [
-    ("asia", "Asia", "00-08 UTC",  0,  8),
-    ("eu",   "EU",   "07-16 UTC",  7, 16),
-    ("us",   "US",   "13-22 UTC", 13, 22),
-]
+_CAC_BENCHMARKS = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT")
 
 
-async def compute_session_volume_profile(
-    symbol: str,
-    bins: int = 30,
-    value_area_pct: float = 0.70,
-) -> dict:
-    """
-    Volume profile broken down by trading session (Asia / EU / US).
-
-    For each session the most-recent occurrence of that session window is used.
-    Returns per-session POC, VAH, VAL, total_volume and annotated bins.
-    """
-    import datetime
-    import math
-
-    now = time.time()
-    now_dt = datetime.datetime.fromtimestamp(now, tz=datetime.timezone.utc)
-    utc_hour = now_dt.hour
-
-    # Determine which sessions are currently active
-    def _active(start_h: int, end_h: int) -> bool:
-        return start_h <= utc_hour < end_h
-
-    # Build (start_ts, end_ts) for most recent occurrence of each session
-    def _session_window(start_h: int, end_h: int) -> tuple:
-        day_start = now_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-        s_ts = day_start.timestamp() + start_h * 3600
-        e_ts = day_start.timestamp() + end_h   * 3600
-        if s_ts > now:
-            s_ts -= 86400
-            e_ts -= 86400
-        return s_ts, min(e_ts, now)
-
-    sessions_out = {}
-    active_sessions = []
-
-    for key, name, hours_label, start_h, end_h in _SESSION_DEFS:
-        s_ts, e_ts = _session_window(start_h, end_h)
-        is_active = _active(start_h, end_h)
-        if is_active:
-            active_sessions.append(key)
-
-        rows, tick_size = await get_trades_for_volume_profile(since=s_ts, symbol=symbol)
-
-        # Filter to within session window (end boundary)
-        rows = [r for r in rows if r.get("ts", 0) <= e_ts] if rows else rows
-
-        if not rows:
-            sessions_out[key] = {
-                "name": name,
-                "hours": hours_label,
-                "poc": None,
-                "vah": None,
-                "val": None,
-                "total_volume": 0.0,
-                "bins": [],
-                "active": is_active,
-            }
-            continue
-
-        decimals = (
-            max(0, -int(math.floor(math.log10(tick_size)))) + 1
-            if tick_size and tick_size > 0 else 6
-        )
-
-        raw_profile = [
-            {
-                "price":    r["price_level"],
-                "volume":   r["volume"],
-                "buy_vol":  r.get("buy_vol", 0) or 0,
-                "sell_vol": r.get("sell_vol", 0) or 0,
-            }
-            for r in rows
-        ]
-
-        # Downsample to bin count
-        if len(raw_profile) > bins > 0:
-            p_low  = raw_profile[0]["price"]
-            p_high = raw_profile[-1]["price"]
-            p_rng  = p_high - p_low
-            bin_sz = p_rng / bins if p_rng > 0 else 1.0
-            bin_map: dict = {}
-            for entry in raw_profile:
-                b_idx  = min(bins - 1, int((entry["price"] - p_low) / bin_sz))
-                center = round(p_low + (b_idx + 0.5) * bin_sz, decimals)
-                if center not in bin_map:
-                    bin_map[center] = {"price": center, "volume": 0.0,
-                                       "buy_vol": 0.0, "sell_vol": 0.0}
-                bin_map[center]["volume"]   += entry["volume"]
-                bin_map[center]["buy_vol"]  += entry["buy_vol"]
-                bin_map[center]["sell_vol"] += entry["sell_vol"]
-            profile = sorted(bin_map.values(), key=lambda x: x["price"])
-        else:
-            profile = raw_profile
-
-        total = sum(p["volume"] for p in profile)
-        if total <= 0:
-            sessions_out[key] = {
-                "name": name, "hours": hours_label,
-                "poc": None, "vah": None, "val": None,
-                "total_volume": 0.0, "bins": [], "active": is_active,
-            }
-            continue
-
-        poc_entry = max(profile, key=lambda x: x["volume"])
-        poc_price = poc_entry["price"]
-        poc_vol   = poc_entry["volume"]
-        poc_idx   = next(i for i, p in enumerate(profile) if p["price"] == poc_price)
-
-        target = total * value_area_pct
-        lo, hi = poc_idx, poc_idx
-        accumulated = poc_vol
-        while accumulated < target:
-            can_up   = hi + 1 < len(profile)
-            can_down = lo - 1 >= 0
-            if not can_up and not can_down:
-                break
-            vol_up   = profile[hi + 1]["volume"] if can_up   else -1
-            vol_down = profile[lo - 1]["volume"] if can_down else -1
-            if vol_up >= vol_down:
-                hi += 1; accumulated += vol_up
-            else:
-                lo -= 1; accumulated += vol_down
-
-        vah = profile[hi]["price"]
-        val = profile[lo]["price"]
-
-        annotated = []
-        for p in profile:
-            pct = max(0, min(100, round(p["volume"] / poc_vol * 100))) if poc_vol > 0 else 0
-            in_va = val <= p["price"] <= vah
-            annotated.append({
-                "price":        round(p["price"],    decimals),
-                "volume":       round(p["volume"],   6),
-                "buy_vol":      round(p["buy_vol"],  6),
-                "sell_vol":     round(p["sell_vol"], 6),
-                "pct_of_max":   pct,
-                "in_value_area": in_va,
-                "is_poc":       p["price"] == poc_price,
-            })
-
-        sessions_out[key] = {
-            "name":         name,
-            "hours":        hours_label,
-            "poc":          round(poc_price, decimals),
-            "poc_volume":   round(poc_vol, 6),
-            "vah":          round(vah, decimals),
-            "val":          round(val, decimals),
-            "total_volume": round(total, 6),
-            "bins":         annotated,
-            "active":       is_active,
-        }
-
-    # Determine current_session label
-    if len(active_sessions) > 1:
-        current_session = "overlap"
-    elif len(active_sessions) == 1:
-        current_session = active_sessions[0]
-    else:
-        current_session = "none"
-
-    return {
-        "sessions":        sessions_out,
-        "current_session": current_session,
-        "ts":              now,
-    }
-
-
-# ── Order Flow Toxicity (OFT) ──────────────────────────────────────────────────
-
-def _pearson_r(xs: list, ys: list):
-    """Pearson r between two lists. Returns None when variance is zero."""
-    n = len(xs)
-    if n < 3:
-        return None
-    mx = sum(xs) / n
-    my = sum(ys) / n
-    num   = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
-    var_x = sum((x - mx) ** 2 for x in xs)
-    var_y = sum((y - my) ** 2 for y in ys)
-    if var_x <= 0 or var_y <= 0:
-        return None
-    import math
-    return num / math.sqrt(var_x * var_y)
-
-
-def _encode_direction(trade: dict) -> int:
-    """+1 buy-aggressor, -1 sell-aggressor."""
-    iba = trade.get("is_buyer_aggressor")
-    if iba is not None:
-        return 1 if bool(iba) else -1
-    return 1 if (trade.get("side") or "").lower() == "buy" else -1
-
-
-def _oft_for_trades(trades: list, lookahead_s: float) -> dict:
-    """
-    Compute OFT score for a sorted trade list with the given price-change lookahead.
-    Returns {"score": float|None, "r": float|None, "n_pairs": int}.
-    """
-    if len(trades) < 5:
-        return {"score": None, "r": None, "n_pairs": 0}
-
-    directions: list = []
-    price_changes: list = []
-
-    for i, t in enumerate(trades):
-        p0 = float(t.get("price") or 0)
-        if not p0:
-            continue
-        cutoff = t["ts"] + lookahead_s
-        # Find last trade within lookahead window
-        future_prices = [
-            float(ft.get("price") or 0)
-            for ft in trades[i + 1:]
-            if ft["ts"] <= cutoff and ft.get("price")
-        ]
-        if not future_prices:
-            continue
-        p1 = future_prices[-1]
-        directions.append(_encode_direction(t))
-        price_changes.append((p1 - p0) / p0)
-
-    n = len(directions)
-    r = _pearson_r(directions, price_changes)
-    score = round(abs(r) * 100, 2) if r is not None else None
-    return {"score": score, "r": round(r, 6) if r is not None else None, "n_pairs": n}
-
-
-def _classify_oft(score: float | None) -> str:
-    if score is None:
-        return "insufficient_data"
-    if score >= 75:
-        return "extreme"
-    if score >= 50:
-        return "high"
-    if score >= 25:
-        return "medium"
-    return "low"
-
-
-async def compute_order_flow_toxicity(
-    symbol: str = None,
-    window_seconds: int = 3600,
-    sparkline_bucket_s: int = 300,
-) -> dict:
-    """
-    Order Flow Toxicity: Pearson correlation between trade direction
-    (buy=+1 / sell=-1) and subsequent price movement over rolling lookahead windows.
-
-    Multi-window analysis: 5m (300s), 15m (900s), 1h (3600s) lookaheads.
-    Composite score = weighted average of the three window scores.
-    Sparkline: OFT score per sparkline_bucket_s interval over the window.
-
-    Score 0–100: higher = more informed/toxic flow (adverse selection risk).
-    """
-    from storage import get_recent_trades
-
-    since = time.time() - window_seconds
-    trades = await get_recent_trades(symbol=symbol, since=since, limit=50000)
-
-    if not trades or len(trades) < 10:
-        return {
-            "score": None,
-            "severity": "insufficient_data",
-            "windows": {},
-            "sparkline": [],
-            "description": "Insufficient trade data for OFT computation",
-            "window_seconds": window_seconds,
-            "n_trades": len(trades) if trades else 0,
-        }
-
-    trades.sort(key=lambda t: t["ts"])
-    n_trades = len(trades)
-
-    # Multi-window OFT
-    WINDOWS = {"5m": 300.0, "15m": 900.0, "1h": 3600.0}
-    WEIGHTS  = {"5m": 0.5,  "15m": 0.3,   "1h": 0.2}
-
-    windows_out = {}
-    for label, la_s in WINDOWS.items():
-        result = _oft_for_trades(trades, la_s)
-        windows_out[label] = {**result, "severity": _classify_oft(result["score"])}
-
-    # Composite score: weighted average (skip None windows)
-    weighted_sum = 0.0
-    weight_total = 0.0
-    for label, wv in windows_out.items():
-        if wv["score"] is not None:
-            weighted_sum += wv["score"] * WEIGHTS[label]
-            weight_total += WEIGHTS[label]
-
-    composite = round(weighted_sum / weight_total, 2) if weight_total > 0 else None
-    severity  = _classify_oft(composite)
-
-    # Sparkline: one OFT score per bucket (5m lookahead for responsiveness)
-    t_min = trades[0]["ts"]
-    t_max = trades[-1]["ts"]
-    sparkline = []
-    t = t_min
-    while t <= t_max:
-        bucket_trades = [tr for tr in trades if t <= tr["ts"] < t + sparkline_bucket_s]
-        if len(bucket_trades) >= 5:
-            r = _oft_for_trades(bucket_trades, lookahead_s=min(sparkline_bucket_s, 300.0))
-            sparkline.append({"ts": round(t), "score": r["score"]})
-        else:
-            sparkline.append({"ts": round(t), "score": None})
-        t += sparkline_bucket_s
-
-    # Description
-    desc_map = {
-        "extreme": "Extreme toxicity — heavily informed flow, high adverse selection",
-        "high":    "High toxicity — elevated informed trading detected",
-        "medium":  "Medium toxicity — mixed informed and noise flow",
-        "low":     "Low toxicity — noise-dominated, minimal adverse selection",
-        "insufficient_data": "Insufficient data",
-    }
-
-    return {
-        "score":          composite,
-        "severity":       severity,
-        "windows":        windows_out,
-        "sparkline":      sparkline,
-        "description":    desc_map.get(severity, ""),
-        "window_seconds": window_seconds,
-        "n_trades":       n_trades,
-    }
-
-
-async def compute_momentum_divergence(
-    symbol: str = None,
-    window_seconds: int = 3600,
-    bucket_seconds: int = 300,
-    threshold: float = 0.1,
-) -> Dict:
-    """
-    Price vs OI (Open Interest) momentum divergence detector.
-
-    Per bucket:
-      price_mom = (close - open) / open * 100
-      oi_mom    = (oi_end - oi_start) / oi_start * 100
-
-    Bullish divergence: price_mom < -threshold AND oi_mom > threshold
-      (price falling while OI rises → short build-up, squeeze fuel)
-    Bearish divergence: price_mom > threshold AND oi_mom < -threshold
-      (price rising while OI falls → weak rally, reversal risk)
-
-    Score 0–100: fraction × 60 + min(avg_spread, 10) × 4
-    Severity: low (<30) | medium (<60) | high (≥60)
-    """
-    now = time.time()
-    since = now - window_seconds
-
-    candles, oi_rows = await asyncio.gather(
-        get_ohlcv(interval_seconds=bucket_seconds, window_seconds=window_seconds, symbol=symbol),
-        get_oi_history(limit=2000, since=since, symbol=symbol),
-    )
-
-    _empty: Dict = {
-        "status": "ok",
-        "symbol": symbol,
-        "divergence_type": "none",
-        "severity": "low",
-        "score": 0.0,
-        "price_momentum": None,
-        "oi_momentum": None,
-        "events": [],
-        "series": [],
-        "description": "Insufficient data",
-        "window_seconds": window_seconds,
-        "bucket_seconds": bucket_seconds,
-        "n_events": 0,
-    }
-
-    if not candles or not oi_rows:
-        return _empty
-
-    # Build price series: [{ts, price_mom}]
-    price_series = []
-    for c in candles:
-        o = float(c.get("open") or 0)
-        cl = float(c.get("close") or 0)
-        if o <= 0:
-            continue
-        pm = round((cl - o) / o * 100, 4)
-        price_series.append({"ts": float(c["ts"]), "price_mom": pm})
-
-    if not price_series:
-        return _empty
-
-    # Build OI series: [{ts, oi_mom}] — bucket OI rows into bucket_seconds intervals
-    # For each bucket, use first OI value as oi_start and last as oi_end
-    oi_buckets: Dict[int, Dict] = {}
-    for row in oi_rows:
-        ts = float(row.get("ts") or 0)
-        oi = float(row.get("oi") or row.get("open_interest") or 0)
-        if oi <= 0:
-            continue
-        key = int(ts // bucket_seconds) * bucket_seconds
-        if key not in oi_buckets:
-            oi_buckets[key] = {"oi_start": oi, "oi_end": oi}
-        else:
-            oi_buckets[key]["oi_end"] = oi
-
-    oi_series = []
-    for key, vals in sorted(oi_buckets.items()):
-        oi_start = vals["oi_start"]
-        oi_end = vals["oi_end"]
-        if oi_start <= 0:
-            continue
-        om = round((oi_end - oi_start) / oi_start * 100, 4)
-        oi_series.append({"ts": float(key), "oi_mom": om})
-
-    if not oi_series:
-        return _empty
-
-    # Align price and OI series by bucket timestamp
-    oi_map = {round(r["ts"] / bucket_seconds) * bucket_seconds: r["oi_mom"] for r in oi_series}
-    aligned = []
-    for p in price_series:
-        key = round(p["ts"] / bucket_seconds) * bucket_seconds
-        if key in oi_map:
-            aligned.append({
-                "ts": key,
-                "price_mom": p["price_mom"],
-                "oi_mom": oi_map[key],
-            })
-
-    if not aligned:
-        return _empty
-
-    # Classify each aligned bucket
-    series_out = []
-    events = []
-    for pt in aligned:
-        pm = pt["price_mom"]
-        om = pt["oi_mom"]
-        if pm < -threshold and om > threshold:
-            div = "bullish"
-            events.append({
-                "ts": pt["ts"],
-                "type": "bullish",
-                "price_mom": pm,
-                "oi_mom": om,
-                "description": (
-                    f"Price fell {pm:.1f}% while OI rose +{om:.1f}%"
-                ),
-            })
-        elif pm > threshold and om < -threshold:
-            div = "bearish"
-            events.append({
-                "ts": pt["ts"],
-                "type": "bearish",
-                "price_mom": pm,
-                "oi_mom": om,
-                "description": (
-                    f"Price rose +{pm:.1f}% while OI fell {om:.1f}%"
-                ),
-            })
-        else:
-            div = "none"
-        series_out.append({
-            "ts": pt["ts"],
-            "price_mom": pm,
-            "oi_mom": om,
-            "divergence": div,
-        })
-
-    total_buckets = len(aligned)
-
-    # Score
-    frac = len(events) / total_buckets if total_buckets > 0 else 0.0
-    spreads = [abs((e["price_mom"] or 0) - (e["oi_mom"] or 0)) for e in events]
-    avg_spread = sum(spreads) / len(spreads) if spreads else 0.0
-    score = round(min(100.0, frac * 60 + min(avg_spread, 10.0) * 4), 2)
-
-    # Severity
-    if score >= 60:
-        severity = "high"
-    elif score >= 30:
-        severity = "medium"
-    else:
-        severity = "low"
-
-    # Overall divergence type: majority vote among events
-    bull_count = sum(1 for e in events if e["type"] == "bullish")
-    bear_count = sum(1 for e in events if e["type"] == "bearish")
-    if bull_count > bear_count:
-        divergence_type = "bullish"
-    elif bear_count > bull_count:
-        divergence_type = "bearish"
-    elif events:
-        divergence_type = events[-1]["type"]
-    else:
-        divergence_type = "none"
-
-    # Recent (last bucket) momentum values
-    last = aligned[-1]
-    price_momentum = last["price_mom"]
-    oi_momentum = last["oi_mom"]
-
-    # Description
-    if divergence_type == "bullish":
-        description = "Bullish divergence: price falling while OI rises — potential squeeze"
-    elif divergence_type == "bearish":
-        description = "Bearish divergence: price rising while OI falls — weak rally"
-    else:
-        description = "No significant momentum divergence detected"
-
-    return {
-        "status": "ok",
-        "symbol": symbol,
-        "divergence_type": divergence_type,
-        "severity": severity,
-        "score": score,
-        "price_momentum": price_momentum,
-        "oi_momentum": oi_momentum,
-        "events": events,
-        "series": series_out,
-        "description": description,
-        "window_seconds": window_seconds,
-        "bucket_seconds": bucket_seconds,
-        "n_events": len(events),
-    }
-
-async def compute_spread_analysis(
-    symbol: str = None,
-    window_seconds: int = 300,
-) -> Dict:
-    """
-    Bid-ask spread estimator + effective spread using tick data (Roll model).
-
-    Roll (1984) model:
-      - Compute first-order serial covariance of consecutive trade price changes.
-      - If cov < 0:  roll_spread = 2 * sqrt(-cov)  (price units)
-      - Else:        roll_spread = 0
-
-    Effective spread:
-      - For each trade: 2 * |trade_price - mid_price|
-      - Averaged across all trades in window
-
-    Quoted spread ratio:
-      - effective_spread_bps / quoted_spread_bps
-
-    Quality:
-      tight   < 5 bps roll spread
-      normal  < 20 bps
-      wide    >= 20 bps
-    """
-    import math as _math
-    from storage import get_spread_stats
-
-    now = time.time()
-    since = now - window_seconds
-
-    trades, spread_stats, ob_rows = await asyncio.gather(
-        get_recent_trades(limit=10000, since=since, symbol=symbol),
-        get_spread_stats(symbol or "", window=window_seconds),
-        get_latest_orderbook(symbol=symbol, limit=1),
-    )
-
-    _empty: Dict = {
-        "status": "ok",
-        "symbol": symbol,
-        "window_seconds": window_seconds,
-        "roll_spread": None,
-        "roll_spread_bps": None,
-        "effective_spread": None,
-        "effective_spread_bps": None,
-        "quoted_spread_bps": None,
-        "effective_ratio": None,
-        "mid_price": None,
-        "n_trades": 0,
-        "n_changes": 0,
-        "quality": "unknown",
-        "description": "Insufficient data",
-    }
-
-    if not trades:
-        return _empty
-
-    # Sort ascending by ts
-    trades_sorted = sorted(trades, key=lambda t: float(t.get("ts") or 0))
-    prices = [float(t.get("price") or 0) for t in trades_sorted if float(t.get("price") or 0) > 0]
-
-    if len(prices) < 3:
-        return {**_empty, "n_trades": len(prices)}
-
-    # ── mid price ─────────────────────────────────────────────────────────────
-    mid_price = None
-    if ob_rows:
-        mid_price = float(ob_rows[0].get("mid_price") or 0) or None
-    if not mid_price:
-        # Fallback: use bid/ask from spread_stats
-        bid = spread_stats.get("bid")
-        ask = spread_stats.get("ask")
-        if bid and ask:
-            mid_price = (float(bid) + float(ask)) / 2.0
-    if not mid_price:
-        # Last fallback: median of traded prices
-        mid_price = sorted(prices)[len(prices) // 2]
-
-    # ── Roll model ────────────────────────────────────────────────────────────
-    changes = [prices[i] - prices[i - 1] for i in range(1, len(prices))]
-    n_ch = len(changes)
-
-    pairs = [(changes[i], changes[i - 1]) for i in range(1, n_ch)]
-    if pairs:
-        mean_a = sum(p[0] for p in pairs) / len(pairs)
-        mean_b = sum(p[1] for p in pairs) / len(pairs)
-        cov = sum((a - mean_a) * (b - mean_b) for a, b in pairs) / len(pairs)
-        roll_spread_price = 2.0 * _math.sqrt(-cov) if cov < 0 else 0.0
-    else:
-        roll_spread_price = 0.0
-
-    # ── Effective spread ──────────────────────────────────────────────────────
-    eff_values = [2.0 * abs(p - mid_price) for p in prices]
-    eff_spread_price = sum(eff_values) / len(eff_values)
-
-    # ── bps conversions ───────────────────────────────────────────────────────
-    def _to_bps(spread_p: float) -> float | None:
-        if mid_price and mid_price > 0 and spread_p >= 0:
-            return round(spread_p / mid_price * 10_000, 4)
-        return None
-
-    roll_bps = _to_bps(roll_spread_price)
-    eff_bps = _to_bps(eff_spread_price)
-    quoted_bps = float(spread_stats.get("current_bps") or 0) or None
-
-    # ── Effective ratio ───────────────────────────────────────────────────────
-    eff_ratio: float | None = None
-    if eff_bps is not None and quoted_bps and quoted_bps > 0:
-        eff_ratio = round(eff_bps / quoted_bps, 4)
-
-    # ── Quality label ─────────────────────────────────────────────────────────
-    if roll_bps is None:
-        quality = "unknown"
-    elif roll_bps < 5:
-        quality = "tight"
-    elif roll_bps < 20:
-        quality = "normal"
-    else:
-        quality = "wide"
-
-    # ── Description ───────────────────────────────────────────────────────────
-    if roll_bps is not None and eff_bps is not None:
-        ratio_str = f"{int(eff_ratio * 100)}%" if eff_ratio is not None else "n/a"
-        description = (
-            f"Effective spread {ratio_str} of quoted spread — {quality} market"
-        )
-    else:
-        description = f"Roll spread: {quality}"
-
-    return {
-        "status": "ok",
-        "symbol": symbol,
-        "window_seconds": window_seconds,
-        "roll_spread": round(roll_spread_price, 10),
-        "roll_spread_bps": roll_bps,
-        "effective_spread": round(eff_spread_price, 10),
-        "effective_spread_bps": eff_bps,
-        "quoted_spread_bps": round(quoted_bps, 4) if quoted_bps else None,
-        "effective_ratio": eff_ratio,
-        "mid_price": round(mid_price, 10) if mid_price else None,
-        "n_trades": len(prices),
-        "n_changes": n_ch,
-        "quality": quality,
-        "description": description,
-    }
-
-
-# ── Options Skew (synthetic from return distribution moments) ─────────────────
-
-_SKEW_WINDOWS = (
-    ("5m",  300),
-    ("15m", 900),
-    ("1h",  3600),
-    ("4h",  14400),
-)
-_SKEW_RR_SCALE       = 0.1
-_SKEW_FLY_SCALE      = 0.05
-_SKEW_HISTORY_WINDOW = 86400
-_SKEW_THRESHOLD      = 0.0005
-
-
-def _skew_log_returns(prices: List[float]) -> List[float]:
+def _cac_log_returns(prices: List[float]) -> List[float]:
     import math as _m
     rets = []
     for i in range(1, len(prices)):
@@ -5532,389 +4844,202 @@ def _skew_log_returns(prices: List[float]) -> List[float]:
     return rets
 
 
-def _skew_moments(returns: List[float]) -> dict:
+def _cac_pearson(x: List[float], y: List[float]) -> Optional[float]:
     import math as _m
-    n = len(returns)
-    if n < 4:
-        return {"mean": 0.0, "variance": 0.0, "std": 0.0,
-                "skewness": 0.0, "excess_kurtosis": 0.0, "n": n}
-    mean = sum(returns) / n
-    devs = [r - mean for r in returns]
-    variance = sum(d ** 2 for d in devs) / (n - 1)
-    std = _m.sqrt(variance) if variance > 0 else 0.0
-    if std == 0:
-        return {"mean": mean, "variance": 0.0, "std": 0.0,
-                "skewness": 0.0, "excess_kurtosis": 0.0, "n": n}
-    skewness = (
-        (n / ((n - 1) * (n - 2)))
-        * sum(d ** 3 for d in devs)
-        / (std ** 3)
-    )
-    excess_kurtosis = (
-        (n * (n + 1) / ((n - 1) * (n - 2) * (n - 3)))
-        * sum(d ** 4 for d in devs)
-        / (std ** 4)
-        - 3 * (n - 1) ** 2 / ((n - 2) * (n - 3))
-    )
-    return {
-        "mean": round(mean, 8),
-        "variance": round(variance, 10),
-        "std": round(std, 8),
-        "skewness": round(skewness, 6),
-        "excess_kurtosis": round(excess_kurtosis, 6),
-        "n": n,
-    }
+    n = min(len(x), len(y))
+    if n < 2:
+        return None
+    x, y = x[:n], y[:n]
+    mx = sum(x) / n
+    my = sum(y) / n
+    num = sum((xi - mx) * (yi - my) for xi, yi in zip(x, y))
+    dx = _m.sqrt(sum((xi - mx) ** 2 for xi in x))
+    dy = _m.sqrt(sum((yi - my) ** 2 for yi in y))
+    if dx == 0 or dy == 0:
+        return None
+    return round(max(-1.0, min(1.0, num / (dx * dy))), 6)
 
 
-def _skew_rr(skewness: float, std: float) -> float:
-    return round(skewness * std * _SKEW_RR_SCALE, 8)
+def _cac_rolling_corr(
+    x: List[float], y: List[float], window: int
+) -> List[Optional[float]]:
+    n = min(len(x), len(y))
+    result: List[Optional[float]] = []
+    for i in range(n):
+        if i < window - 1:
+            result.append(None)
+        else:
+            result.append(
+                _cac_pearson(
+                    x[i - window + 1 : i + 1],
+                    y[i - window + 1 : i + 1],
+                )
+            )
+    return result
 
 
-def _skew_fly(excess_kurtosis: float, variance: float) -> float:
-    return round(max(0.0, excess_kurtosis * variance * _SKEW_FLY_SCALE), 8)
-
-
-def _skew_direction(rr: float) -> str:
-    if rr < -_SKEW_THRESHOLD:
-        return "put_heavy"
-    if rr > _SKEW_THRESHOLD:
-        return "call_heavy"
-    return "neutral"
-
-
-def _skew_percentile(value: float, history: List[float]) -> float:
-    if not history:
-        return 50.0
-    n = len(history)
-    below = sum(1 for h in history if h < value)
-    return round(below / n * 100, 2)
-
-
-def _skew_term_slope(rr_values: List[float]) -> str:
-    if len(rr_values) < 2:
-        return "flat"
-    diff = rr_values[-1] - rr_values[0]
-    if diff > 0.0005:
-        return "normal"
-    if diff < -0.0005:
-        return "inverted"
-    return "flat"
-
-
-async def compute_options_skew(
+async def compute_cross_asset_corr(
     symbol: str,
-    history_window: int = _SKEW_HISTORY_WINDOW,
+    window_seconds: int = 3600,
+    bucket_seconds: int = 60,
+    rolling_window: int = 12,
 ) -> dict:
     """
-    Synthetic options skew from return-distribution moments.
+    Cross-asset correlation: tracked alt symbols vs major crypto benchmarks
+    (BTC/ETH/SOL/BNB) using bucketed price-return Pearson correlation.
 
-    For each window (5m / 15m / 1h / 4h):
-      - ATM IV  ≈ realised vol (annualised log-return std)
-      - RR_25d  ≈ skewness * std * scale   (negative → put-heavy)
-      - Fly_25d ≈ max(0, excess_kurtosis * variance * scale)
-
-    Historical percentile for RR and Fly derived from 24h bucket history.
+    Distinct from /correlations (symbol-to-symbol) — this always computes
+    correlations against the major-crypto reference axis.
     """
-    import math as _m
+    import aiohttp
+    from collectors import get_symbols
     from storage import get_recent_trades
 
     now = time.time()
+    since = now - window_seconds
+    all_syms = get_symbols()
 
-    async def _window_moments(label: str, secs: int) -> dict:
-        trades = await get_recent_trades(
-            limit=10000, since=now - secs, symbol=symbol
+    # ── fetch local symbol price buckets ─────────────────────────────────────
+    async def _sym_buckets(sym: str) -> Dict[int, float]:
+        trades = await get_recent_trades(limit=20000, since=since, symbol=sym)
+        buckets: Dict[int, List[float]] = {}
+        for t in trades:
+            b = int(t["ts"] // bucket_seconds) * bucket_seconds
+            p = float(t.get("price", 0))
+            if p > 0:
+                buckets.setdefault(b, []).append(p)
+        return {b: sum(ps) / len(ps) for b, ps in sorted(buckets.items())}
+
+    sym_price_maps: Dict[str, Dict[int, float]] = {}
+    results = await asyncio.gather(
+        *[_sym_buckets(s) for s in all_syms], return_exceptions=True
+    )
+    for s, r in zip(all_syms, results):
+        if isinstance(r, dict):
+            sym_price_maps[s] = r
+
+    # ── fetch benchmark klines from Binance ───────────────────────────────────
+    interval_map = {60: "1m", 300: "5m", 900: "15m", 3600: "1h"}
+    kline_interval = interval_map.get(bucket_seconds, "1m")
+    limit = min(500, window_seconds // bucket_seconds + 5)
+
+    async def _fetch_klines(ticker: str) -> Dict[int, float]:
+        url = (
+            f"https://api.binance.com/api/v3/klines"
+            f"?symbol={ticker}&interval={kline_interval}&limit={limit}"
         )
-        prices = sorted(
-            [float(t.get("price", 0)) for t in trades if t.get("price", 0) > 0]
-        )
-        if not prices:
-            return {"window": label, "rr": 0.0, "fly": 0.0, "atm_iv": 0.0,
-                    "skewness": 0.0, "excess_kurtosis": 0.0}
-        rets = _skew_log_returns(prices)
-        m = _skew_moments(rets)
-        rr  = _skew_rr(m["skewness"], m["std"])
-        fly = _skew_fly(m["excess_kurtosis"], m["variance"])
-        n_minutes = max(1, secs // 60)
-        ann_factor = _m.sqrt(525600 / max(1, len(rets) / n_minutes))
-        atm_iv = round(m["std"] * ann_factor, 6)
-        return {
-            "window": label, "rr": rr, "fly": fly, "atm_iv": atm_iv,
-            "skewness": m["skewness"], "excess_kurtosis": m["excess_kurtosis"],
-        }
+        try:
+            timeout = aiohttp.ClientTimeout(total=5)
+            async with aiohttp.ClientSession(timeout=timeout) as sess:
+                async with sess.get(url) as resp:
+                    if resp.status != 200:
+                        return {}
+                    data = await resp.json()
+                    return {
+                        int(row[0] // 1000): float(row[4])
+                        for row in data
+                    }
+        except Exception:
+            return {}
 
-    window_results = await asyncio.gather(
-        *[_window_moments(lbl, secs) for lbl, secs in _SKEW_WINDOWS],
-        return_exceptions=True,
+    bench_results = await asyncio.gather(
+        *[_fetch_klines(b) for b in _CAC_BENCHMARKS], return_exceptions=True
     )
-    moments: List[dict] = [r for r in window_results if isinstance(r, dict)]
+    bench_price_maps: Dict[str, Dict[int, float]] = {}
+    for b, r in zip(_CAC_BENCHMARKS, bench_results):
+        if isinstance(r, dict) and r:
+            bench_price_maps[b] = r
 
-    if not moments:
-        return {
-            "status": "ok", "symbol": symbol,
-            "windows": [w for w, _ in _SKEW_WINDOWS],
-            "rr_25d": {}, "fly_25d": {}, "atm_iv": {},
-            "skewness": {}, "excess_kurtosis": {},
-            "rr_percentile": 50.0, "fly_percentile": 50.0,
-            "skew_direction": "neutral",
-            "term_structure": [], "term_slope": "flat",
-            "description": "No data",
-        }
+    # ── align on common timestamps and compute returns ────────────────────────
+    def _aligned_returns(
+        pm_a: Dict[int, float], pm_b: Dict[int, float]
+    ) -> tuple:
+        common = sorted(set(pm_a.keys()) & set(pm_b.keys()))
+        pa = [pm_a[t] for t in common]
+        pb = [pm_b[t] for t in common]
+        return _cac_log_returns(pa), _cac_log_returns(pb)
 
-    rr_25d:        Dict[str, float] = {}
-    fly_25d:       Dict[str, float] = {}
-    atm_iv_d:      Dict[str, float] = {}
-    skewness_d:    Dict[str, float] = {}
-    excess_kurt_d: Dict[str, float] = {}
-    term_structure = []
+    # ── correlation matrix: {symbol: {benchmark: corr}} ──────────────────────
+    matrix: Dict[str, Dict[str, Optional[float]]] = {}
+    for sym in all_syms:
+        pm_sym = sym_price_maps.get(sym, {})
+        matrix[sym] = {}
+        for bench in _CAC_BENCHMARKS:
+            pm_bench = bench_price_maps.get(bench, {})
+            if not pm_sym or not pm_bench:
+                matrix[sym][bench] = None
+                continue
+            rx, rb = _aligned_returns(pm_sym, pm_bench)
+            matrix[sym][bench] = _cac_pearson(rx, rb)
 
-    for m in moments:
-        lbl = m["window"]
-        rr_25d[lbl]        = m["rr"]
-        fly_25d[lbl]       = m["fly"]
-        atm_iv_d[lbl]      = m["atm_iv"]
-        skewness_d[lbl]    = m["skewness"]
-        excess_kurt_d[lbl] = m["excess_kurtosis"]
-        term_structure.append({"window": lbl, "rr": m["rr"],
-                                "fly": m["fly"], "atm_iv": m["atm_iv"]})
+    # ── rolling correlation for active symbol vs each benchmark ──────────────
+    rolling: Dict[str, List[dict]] = {}
+    pm_active = sym_price_maps.get(symbol, {})
+    if pm_active:
+        all_ts = sorted(pm_active.keys())
+        active_rets = _cac_log_returns([pm_active[t] for t in all_ts])
 
-    rr_now  = rr_25d.get("1h",  moments[0]["rr"])
-    fly_now = fly_25d.get("1h", moments[0]["fly"])
+        for bench in _CAC_BENCHMARKS:
+            pm_bench = bench_price_maps.get(bench, {})
+            if not pm_bench:
+                continue
+            bench_prices_aligned = [pm_bench.get(t) for t in all_ts]
+            filled: List[float] = []
+            last = None
+            for v in bench_prices_aligned:
+                if v is not None:
+                    last = v
+                if last is not None:
+                    filled.append(last)
+            if len(filled) < 2:
+                continue
+            bench_rets = _cac_log_returns(filled)
+            n = min(len(active_rets), len(bench_rets))
+            rc = _cac_rolling_corr(active_rets[:n], bench_rets[:n], rolling_window)
+            pts: List[dict] = []
+            for i, corr_val in enumerate(rc):
+                if corr_val is not None:
+                    ts_idx = i + 1
+                    if ts_idx < len(all_ts):
+                        pts.append(
+                            {"ts": float(all_ts[ts_idx]), "corr": round(corr_val, 4)}
+                        )
+            if pts:
+                rolling[bench] = pts
 
-    # History for percentile ranking
-    hist_trades = await get_recent_trades(
-        limit=20000, since=now - history_window, symbol=symbol
-    )
-    hist_prices = sorted(
-        [float(t.get("price", 0)) for t in hist_trades if t.get("price", 0) > 0]
-    )
-    rr_history:  List[float] = []
-    fly_history: List[float] = []
-    bucket_size = 3600
-    n_buckets   = max(1, history_window // bucket_size)
-    chunk       = max(2, len(hist_prices) // n_buckets)
-    for i in range(0, len(hist_prices) - chunk + 1, chunk):
-        cp = hist_prices[i : i + chunk]
-        m2 = _skew_moments(_skew_log_returns(cp))
-        rr_history.append(_skew_rr(m2["skewness"], m2["std"]))
-        fly_history.append(_skew_fly(m2["excess_kurtosis"], m2["variance"]))
-
-    rr_pct  = _skew_percentile(rr_now,  rr_history)
-    fly_pct = _skew_percentile(fly_now, fly_history)
-
-    direction = _skew_direction(rr_now)
-    slope     = _skew_term_slope([m["rr"] for m in moments])
+    # ── strongest / weakest pairs ─────────────────────────────────────────────
+    all_pairs = [
+        (sym, bench, v)
+        for sym, row in matrix.items()
+        for bench, v in row.items()
+        if v is not None
+    ]
+    strongest_pair: dict = {}
+    weakest_pair: dict = {}
+    if all_pairs:
+        sp = max(all_pairs, key=lambda t: t[2])
+        wp = min(all_pairs, key=lambda t: t[2])
+        strongest_pair = {"symbol": sp[0], "benchmark": sp[1], "corr": round(sp[2], 4)}
+        weakest_pair   = {"symbol": wp[0], "benchmark": wp[1], "corr": round(wp[2], 4)}
 
     desc = (
-        f"{direction.replace('_', ' ').title()} skew: "
-        f"RR at {rr_pct:.1f}th pct, Fly at {fly_pct:.1f}th pct"
+        f"{strongest_pair['symbol']} shows strongest correlation "
+        f"with {strongest_pair['benchmark']} "
+        f"({strongest_pair['corr']:+.2f})"
+        if strongest_pair
+        else "Insufficient data for cross-asset correlation"
     )
 
     return {
         "status": "ok",
         "symbol": symbol,
-        "windows": [m["window"] for m in moments],
-        "rr_25d":          rr_25d,
-        "fly_25d":         fly_25d,
-        "atm_iv":          atm_iv_d,
-        "skewness":        skewness_d,
-        "excess_kurtosis": excess_kurt_d,
-        "rr_percentile":   rr_pct,
-        "fly_percentile":  fly_pct,
-        "skew_direction":  direction,
-        "term_structure":  term_structure,
-        "term_slope":      slope,
-        "description":     desc,
-    }
-
-
-# ── Market Depth Imbalance ────────────────────────────────────────────────────
-
-_DEPTH_THRESHOLDS = (0.1, 0.5, 1.0)   # % from mid price
-_DEPTH_LEVEL_LIMIT = 20                # max levels per side for computation
-
-
-def _di_imbalance_ratio(bid_depth: float, ask_depth: float) -> float:
-    total = bid_depth + ask_depth
-    if total <= 0:
-        return 0.0
-    return round((bid_depth - ask_depth) / total, 6)
-
-
-def _di_weighted_imbalance(
-    bid_levels: List[dict],
-    ask_levels: List[dict],
-    mid_price: float,
-) -> float:
-    def _wsum(levels: List[dict]) -> float:
-        total = 0.0
-        for lv in levels:
-            dist = max(abs(lv["price"] - mid_price), 1e-10)
-            total += lv["size"] / dist
-        return total
-    return _di_imbalance_ratio(_wsum(bid_levels), _wsum(ask_levels))
-
-
-def _di_depth_at(
-    bid_levels: List[dict],
-    ask_levels: List[dict],
-    mid_price: float,
-    threshold_pct: float,
-) -> dict:
-    pct = threshold_pct / 100.0
-    lo  = mid_price * (1 - pct)
-    hi  = mid_price * (1 + pct)
-    bid_sum = sum(lv["size"] for lv in bid_levels if lo <= lv["price"] <= mid_price)
-    ask_sum = sum(lv["size"] for lv in ask_levels if mid_price <= lv["price"] <= hi)
-    return {
-        "bid":       round(bid_sum, 4),
-        "ask":       round(ask_sum, 4),
-        "imbalance": _di_imbalance_ratio(bid_sum, ask_sum),
-    }
-
-
-async def compute_depth_imbalance(
-    symbol: str,
-    level_limit: int = _DEPTH_LEVEL_LIMIT,
-) -> dict:
-    """
-    Market depth imbalance from the latest orderbook snapshot.
-
-    Returns:
-      - imbalance_ratio: (bid - ask) / (bid + ask) across top N levels
-      - weighted_imbalance: proximity-weighted variant
-      - pressure: bullish / bearish / neutral
-      - pressure_score: 0-100 intensity
-      - bid/ask depth in USD and size
-      - per-level breakdown for heatmap
-      - depth_at thresholds (0.1% / 0.5% / 1% from mid)
-    """
-    import json
-    from storage import get_latest_orderbook
-
-    now = time.time()
-    snapshots = await get_latest_orderbook(symbol=symbol, limit=1)
-
-    if not snapshots:
-        return {
-            "status": "ok", "symbol": symbol, "ts": now,
-            "mid_price": None,
-            "imbalance_ratio": 0.0, "imbalance_pct": 50.0,
-            "weighted_imbalance": 0.0,
-            "pressure": "neutral", "pressure_score": 0.0,
-            "bid_depth_usd": 0.0, "ask_depth_usd": 0.0,
-            "levels": [],
-            "depth_at": {
-                f"{t}pct": {"bid": 0.0, "ask": 0.0, "imbalance": 0.0}
-                for t in _DEPTH_THRESHOLDS
-            },
-            "description": "No orderbook data",
-        }
-
-    snap = snapshots[0]
-    snap_ts = float(snap.get("ts", now))
-
-    # Parse bids and asks — stored as JSON [[price, size], ...]
-    try:
-        raw_bids = json.loads(snap.get("bids", "[]"))
-        raw_asks = json.loads(snap.get("asks", "[]"))
-    except (json.JSONDecodeError, TypeError):
-        raw_bids, raw_asks = [], []
-
-    bid_levels = [
-        {"price": float(b[0]), "size": float(b[1])}
-        for b in raw_bids[:level_limit]
-        if len(b) >= 2
-    ]
-    ask_levels = [
-        {"price": float(a[0]), "size": float(a[1])}
-        for a in raw_asks[:level_limit]
-        if len(a) >= 2
-    ]
-
-    # Mid price from best bid / best ask
-    best_bid_p = bid_levels[0]["price"] if bid_levels else None
-    best_ask_p = ask_levels[0]["price"] if ask_levels else None
-    if best_bid_p and best_ask_p:
-        mid_price = (best_bid_p + best_ask_p) / 2
-    elif best_bid_p:
-        mid_price = best_bid_p
-    elif best_ask_p:
-        mid_price = best_ask_p
-    else:
-        mid_price = float(snap.get("best_bid") or snap.get("best_ask") or 0)
-
-    bid_size_total = sum(lv["size"] for lv in bid_levels)
-    ask_size_total = sum(lv["size"] for lv in ask_levels)
-
-    bid_depth_usd = sum(lv["price"] * lv["size"] for lv in bid_levels)
-    ask_depth_usd = sum(lv["price"] * lv["size"] for lv in ask_levels)
-    total_usd     = bid_depth_usd + ask_depth_usd
-
-    imb_ratio = _di_imbalance_ratio(bid_size_total, ask_size_total)
-    w_imb     = _di_weighted_imbalance(bid_levels, ask_levels, mid_price) if mid_price else imb_ratio
-    imb_pct   = round((bid_size_total / (bid_size_total + ask_size_total) * 100)
-                      if (bid_size_total + ask_size_total) > 0 else 50.0, 2)
-    p_score   = round(abs(imb_ratio) * 100, 2)
-
-    if imb_ratio > 0.1:
-        pressure = "bullish"
-    elif imb_ratio < -0.1:
-        pressure = "bearish"
-    else:
-        pressure = "neutral"
-
-    # Per-level list (interleaved bid/ask, sorted by proximity to mid)
-    levels_out: List[dict] = []
-    for lv in bid_levels:
-        usd = round(lv["price"] * lv["size"], 4)
-        levels_out.append({
-            "side":         "bid",
-            "price":        lv["price"],
-            "size":         lv["size"],
-            "usd":          usd,
-            "pct_of_total": round(usd / total_usd * 100, 2) if total_usd > 0 else 0.0,
-        })
-    for lv in ask_levels:
-        usd = round(lv["price"] * lv["size"], 4)
-        levels_out.append({
-            "side":         "ask",
-            "price":        lv["price"],
-            "size":         lv["size"],
-            "usd":          usd,
-            "pct_of_total": round(usd / total_usd * 100, 2) if total_usd > 0 else 0.0,
-        })
-    levels_out.sort(key=lambda x: abs(x["price"] - mid_price) if mid_price else x["price"])
-
-    # Depth at thresholds
-    depth_at: dict = {}
-    if mid_price:
-        for t in _DEPTH_THRESHOLDS:
-            depth_at[f"{t}pct"] = _di_depth_at(bid_levels, ask_levels, mid_price, t)
-    else:
-        for t in _DEPTH_THRESHOLDS:
-            depth_at[f"{t}pct"] = {"bid": 0.0, "ask": 0.0, "imbalance": 0.0}
-
-    direction_word = {"bullish": "Bullish", "bearish": "Bearish", "neutral": "Balanced"}[pressure]
-    desc = (
-        f"{direction_word} pressure: bids dominate by "
-        f"{imb_ratio * 100:+.0f}% (score {p_score:.0f})"
-        if pressure != "neutral"
-        else f"Balanced order book (imbalance {imb_ratio * 100:+.1f}%)"
-    )
-
-    return {
-        "status":             "ok",
-        "symbol":             symbol,
-        "ts":                 snap_ts,
-        "mid_price":          round(mid_price, 10) if mid_price else None,
-        "imbalance_ratio":    imb_ratio,
-        "imbalance_pct":      imb_pct,
-        "weighted_imbalance": round(w_imb, 6),
-        "pressure":           pressure,
-        "pressure_score":     p_score,
-        "bid_depth_usd":      round(bid_depth_usd, 4),
-        "ask_depth_usd":      round(ask_depth_usd, 4),
-        "levels":             levels_out,
-        "depth_at":           depth_at,
-        "description":        desc,
+        "window_seconds": window_seconds,
+        "bucket_seconds": bucket_seconds,
+        "symbols": list(all_syms),
+        "benchmarks": list(_CAC_BENCHMARKS),
+        "matrix": matrix,
+        "rolling": rolling,
+        "strongest_pair": strongest_pair,
+        "weakest_pair": weakest_pair,
+        "description": desc,
     }
