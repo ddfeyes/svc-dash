@@ -77,6 +77,7 @@ from metrics import (
     compute_oi_weighted_price,
     compute_realized_volatility_bands,
     detect_ob_walls,
+    compute_session_volume_profile,
 )
 
 router = APIRouter(prefix="/api")
@@ -404,6 +405,26 @@ async def volume_profile_adaptive(
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
     data = await compute_volume_profile_adaptive(
+        symbol=target, bins=bins, value_area_pct=value_area_pct
+    )
+    return {"status": "ok", "symbol": target, **data}
+
+
+@router.get("/session-volume-profile")
+async def session_volume_profile_endpoint(
+    symbol: Optional[str] = None,
+    bins: int = Query(default=30, ge=5, le=100, description="Bins per session profile"),
+    value_area_pct: float = Query(default=0.70, ge=0.5, le=0.95),
+):
+    """
+    Volume profile broken down by trading session (Asia 00-08 / EU 07-16 / US 13-22 UTC).
+
+    Each session returns: POC (Volume Point of Control), VAH, VAL (Value Area High/Low),
+    total_volume, and annotated bins with pct_of_max and in_value_area flags.
+    """
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await compute_session_volume_profile(
         symbol=target, bins=bins, value_area_pct=value_area_pct
     )
     return {"status": "ok", "symbol": target, **data}

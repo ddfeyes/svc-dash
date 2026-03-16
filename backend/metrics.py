@@ -4826,3 +4826,180 @@ async def detect_ob_walls(
         "median_size": round(median_size, 6),
         "description": f"{len(walls_output)} wall(s) detected",
     }
+
+
+# ── Session Volume Profile ─────────────────────────────────────────────────────
+
+# UTC session windows: (name, display_hours, start_hour, end_hour)
+_SESSION_DEFS = [
+    ("asia", "Asia", "00-08 UTC",  0,  8),
+    ("eu",   "EU",   "07-16 UTC",  7, 16),
+    ("us",   "US",   "13-22 UTC", 13, 22),
+]
+
+
+async def compute_session_volume_profile(
+    symbol: str,
+    bins: int = 30,
+    value_area_pct: float = 0.70,
+) -> dict:
+    """
+    Volume profile broken down by trading session (Asia / EU / US).
+
+    For each session the most-recent occurrence of that session window is used.
+    Returns per-session POC, VAH, VAL, total_volume and annotated bins.
+    """
+    import datetime
+    import math
+
+    now = time.time()
+    now_dt = datetime.datetime.fromtimestamp(now, tz=datetime.timezone.utc)
+    utc_hour = now_dt.hour
+
+    # Determine which sessions are currently active
+    def _active(start_h: int, end_h: int) -> bool:
+        return start_h <= utc_hour < end_h
+
+    # Build (start_ts, end_ts) for most recent occurrence of each session
+    def _session_window(start_h: int, end_h: int) -> tuple:
+        day_start = now_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        s_ts = day_start.timestamp() + start_h * 3600
+        e_ts = day_start.timestamp() + end_h   * 3600
+        if s_ts > now:
+            s_ts -= 86400
+            e_ts -= 86400
+        return s_ts, min(e_ts, now)
+
+    sessions_out = {}
+    active_sessions = []
+
+    for key, name, hours_label, start_h, end_h in _SESSION_DEFS:
+        s_ts, e_ts = _session_window(start_h, end_h)
+        is_active = _active(start_h, end_h)
+        if is_active:
+            active_sessions.append(key)
+
+        rows, tick_size = await get_trades_for_volume_profile(since=s_ts, symbol=symbol)
+
+        # Filter to within session window (end boundary)
+        rows = [r for r in rows if r.get("ts", 0) <= e_ts] if rows else rows
+
+        if not rows:
+            sessions_out[key] = {
+                "name": name,
+                "hours": hours_label,
+                "poc": None,
+                "vah": None,
+                "val": None,
+                "total_volume": 0.0,
+                "bins": [],
+                "active": is_active,
+            }
+            continue
+
+        decimals = (
+            max(0, -int(math.floor(math.log10(tick_size)))) + 1
+            if tick_size and tick_size > 0 else 6
+        )
+
+        raw_profile = [
+            {
+                "price":    r["price_level"],
+                "volume":   r["volume"],
+                "buy_vol":  r.get("buy_vol", 0) or 0,
+                "sell_vol": r.get("sell_vol", 0) or 0,
+            }
+            for r in rows
+        ]
+
+        # Downsample to bin count
+        if len(raw_profile) > bins > 0:
+            p_low  = raw_profile[0]["price"]
+            p_high = raw_profile[-1]["price"]
+            p_rng  = p_high - p_low
+            bin_sz = p_rng / bins if p_rng > 0 else 1.0
+            bin_map: dict = {}
+            for entry in raw_profile:
+                b_idx  = min(bins - 1, int((entry["price"] - p_low) / bin_sz))
+                center = round(p_low + (b_idx + 0.5) * bin_sz, decimals)
+                if center not in bin_map:
+                    bin_map[center] = {"price": center, "volume": 0.0,
+                                       "buy_vol": 0.0, "sell_vol": 0.0}
+                bin_map[center]["volume"]   += entry["volume"]
+                bin_map[center]["buy_vol"]  += entry["buy_vol"]
+                bin_map[center]["sell_vol"] += entry["sell_vol"]
+            profile = sorted(bin_map.values(), key=lambda x: x["price"])
+        else:
+            profile = raw_profile
+
+        total = sum(p["volume"] for p in profile)
+        if total <= 0:
+            sessions_out[key] = {
+                "name": name, "hours": hours_label,
+                "poc": None, "vah": None, "val": None,
+                "total_volume": 0.0, "bins": [], "active": is_active,
+            }
+            continue
+
+        poc_entry = max(profile, key=lambda x: x["volume"])
+        poc_price = poc_entry["price"]
+        poc_vol   = poc_entry["volume"]
+        poc_idx   = next(i for i, p in enumerate(profile) if p["price"] == poc_price)
+
+        target = total * value_area_pct
+        lo, hi = poc_idx, poc_idx
+        accumulated = poc_vol
+        while accumulated < target:
+            can_up   = hi + 1 < len(profile)
+            can_down = lo - 1 >= 0
+            if not can_up and not can_down:
+                break
+            vol_up   = profile[hi + 1]["volume"] if can_up   else -1
+            vol_down = profile[lo - 1]["volume"] if can_down else -1
+            if vol_up >= vol_down:
+                hi += 1; accumulated += vol_up
+            else:
+                lo -= 1; accumulated += vol_down
+
+        vah = profile[hi]["price"]
+        val = profile[lo]["price"]
+
+        annotated = []
+        for p in profile:
+            pct = max(0, min(100, round(p["volume"] / poc_vol * 100))) if poc_vol > 0 else 0
+            in_va = val <= p["price"] <= vah
+            annotated.append({
+                "price":        round(p["price"],    decimals),
+                "volume":       round(p["volume"],   6),
+                "buy_vol":      round(p["buy_vol"],  6),
+                "sell_vol":     round(p["sell_vol"], 6),
+                "pct_of_max":   pct,
+                "in_value_area": in_va,
+                "is_poc":       p["price"] == poc_price,
+            })
+
+        sessions_out[key] = {
+            "name":         name,
+            "hours":        hours_label,
+            "poc":          round(poc_price, decimals),
+            "poc_volume":   round(poc_vol, 6),
+            "vah":          round(vah, decimals),
+            "val":          round(val, decimals),
+            "total_volume": round(total, 6),
+            "bins":         annotated,
+            "active":       is_active,
+        }
+
+    # Determine current_session label
+    if len(active_sessions) > 1:
+        current_session = "overlap"
+    elif len(active_sessions) == 1:
+        current_session = active_sessions[0]
+    else:
+        current_session = "none"
+
+    return {
+        "sessions":        sessions_out,
+        "current_session": current_session,
+        "ts":              now,
+    }
