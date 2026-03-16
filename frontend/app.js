@@ -3004,15 +3004,7 @@ async function init() {
   // are Chart.js instances created inline in their render functions
   connectAlerts();
 
-  // After 60s replace any still-Loading cards with Error badge
-  setTimeout(() => {
-    document.querySelectorAll('[id$="-content"]').forEach(el => {
-      const txt = el.textContent.trim();
-      if (txt.startsWith('Loading') || txt === 'No data available') {
-        el.innerHTML = '<span class="card-badge badge-red" style="display:inline-block">Error</span>';
-      }
-    });
-  }, 60000);
+  // Error timeout removed — render functions handle their own errors
 
   await loadSymbols();
   await refresh();
