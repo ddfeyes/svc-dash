@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import time
+from collections import deque
 from typing import List
 
 import websockets
@@ -18,6 +19,45 @@ BINANCE_WS = "wss://fstream.binance.com/stream"
 BYBIT_WS = "wss://stream.bybit.com/v5/public/linear"
 
 RECONNECT_DELAY = 5  # seconds
+
+# ── WS message rate tracking ───────────────────────────────────────────────────
+# Rolling 60-second window: deque of (ts, symbol) tuples.
+# asyncio is single-threaded so no locking needed.
+_WS_WINDOW: float = 60.0
+_ws_events: deque = deque()
+
+
+def record_ws_msg(symbol: str) -> None:
+    """Record one WS message for rate tracking."""
+    _ws_events.append((time.time(), symbol))
+
+
+def get_ws_rate_stats() -> dict:
+    """Compute per-symbol and aggregate msgs/sec over the last 60 s."""
+    now = time.time()
+    cutoff = now - _WS_WINDOW
+
+    # Prune expired events from the left
+    while _ws_events and _ws_events[0][0] <= cutoff:
+        _ws_events.popleft()
+
+    per_symbol: dict = {}
+    for _, sym in _ws_events:
+        per_symbol[sym] = per_symbol.get(sym, 0) + 1
+
+    result = {
+        sym: {"msgs_60s": cnt, "rate": round(cnt / _WS_WINDOW, 2)}
+        for sym, cnt in per_symbol.items()
+    }
+    total = sum(d["msgs_60s"] for d in result.values())
+    return {
+        "status": "ok",
+        "symbols": result,
+        "aggregate_rate": round(total / _WS_WINDOW, 2),
+        "total_msgs_60s": total,
+        "window_s": _WS_WINDOW,
+        "ts": now,
+    }
 
 
 def get_symbols() -> List[str]:
@@ -49,6 +89,8 @@ async def binance_collector(symbol: str):
                         msg = json.loads(raw)
                         stream = msg.get("stream", "")
                         data = msg.get("data", {})
+
+                        record_ws_msg(symbol)
 
                         if "depth20" in stream:
                             await _handle_binance_orderbook(data, symbol)
@@ -140,6 +182,8 @@ async def bybit_collector(symbol: str):
                             msg = json.loads(raw)
                             topic = msg.get("topic", "")
                             data = msg.get("data", {})
+
+                            record_ws_msg(symbol)
 
                             if topic.startswith("orderbook"):
                                 await _handle_bybit_orderbook(data, msg.get("type", ""), symbol)

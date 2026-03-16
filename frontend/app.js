@@ -12,6 +12,31 @@ const TRADE_MAX    = 100;    // max rows in tape
 const ALERT_MAX    = 50;     // max rows in alerts feed
 const WHALE_USD    = 10000;  // highlight threshold
 
+// ── WS Stats ──────────────────────────────────────────────────────────────────
+async function renderWsStats() {
+  const data = await apiFetch('/ws-stats');
+  const el = document.getElementById('ws-rate');
+  if (!el) return;
+  if (!data) { el.textContent = '— msg/s'; return; }
+
+  const rate = data.aggregate_rate ?? 0;
+  let text;
+  if (rate >= 1000) text = (rate / 1000).toFixed(1) + 'k msg/s';
+  else if (rate > 0) text = rate.toFixed(1) + ' msg/s';
+  else text = '0 msg/s';
+
+  const col = rate >= 100 ? 'var(--green)' : rate >= 20 ? 'var(--yellow)' : rate > 0 ? 'var(--muted)' : 'var(--red)';
+  el.textContent = text;
+  el.style.color = col;
+
+  // Build tooltip with per-symbol breakdown
+  const syms = data.symbols || {};
+  const lines = Object.entries(syms)
+    .map(([s, d]) => `${s.replace('USDT','')}: ${d.rate} msg/s`)
+    .join('\n');
+  el.title = lines ? `Per symbol (60s):\n${lines}` : 'No WS messages in window';
+}
+
 // ── Theme ─────────────────────────────────────────────────────────────────────
 const THEME_KEY = 'theme';
 
@@ -1958,7 +1983,7 @@ async function refresh() {
   if (!activeSymbol) return;
   const safe = fn => fn().catch(e => console.warn('[refresh]', fn.name, e.message));
 
-  // Batch 1: core charts
+  // Batch 1: core charts + header stats
   await Promise.all([
     safe(renderPriceChart),
     safe(renderOiChart),
@@ -1966,6 +1991,7 @@ async function refresh() {
     safe(renderFunding),
     safe(renderFundingMomentum),
     safe(renderSpread),
+    safe(renderWsStats),
   ]);
   // Batch 2: trade data
   await Promise.all([

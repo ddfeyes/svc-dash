@@ -11,7 +11,7 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
 from cache import cache_result
-from collectors import get_symbols
+from collectors import get_symbols, get_ws_rate_stats
 import storage
 from storage import (
     get_latest_orderbook,
@@ -81,6 +81,17 @@ from metrics import (
 
 router = APIRouter(prefix="/api")
 
+# ── WebSocket stats tracking ──────────────────────────────────────────────────
+_ws_msg_count: int = 0
+_ws_start_time: float = time.time()
+
+
+def _ws_inc(n: int = 1) -> None:
+    """Increment the global WS message counter (asyncio single-threaded)."""
+    global _ws_msg_count
+    _ws_msg_count += n
+
+
 # ── WebSocket connection manager ─────────────────────────────────────────────
 
 
@@ -104,6 +115,7 @@ class ConnectionManager:
         for ws in conns:
             try:
                 await ws.send_text(json.dumps(data))
+                _ws_inc()
             except Exception:
                 dead.add(ws)
         for ws in dead:
@@ -131,6 +143,7 @@ class AlertManager:
         for ws in self._clients.copy():
             try:
                 await ws.send_text(json.dumps(alert))
+                _ws_inc()
             except Exception:
                 dead.add(ws)
         for ws in dead:
@@ -149,16 +162,36 @@ async def ws_alerts(ws: WebSocket):
         recent = await get_alert_history(limit=20)
         for a in recent:
             await ws.send_text(json.dumps({"type": "alert_history", **a}))
+            _ws_inc()
         # Keep alive
         while True:
             try:
                 await asyncio.wait_for(ws.receive_text(), timeout=30)
             except asyncio.TimeoutError:
                 await ws.send_text(json.dumps({"type": "ping"}))
+                _ws_inc()
     except WebSocketDisconnect:
         alert_manager.disconnect(ws)
     except Exception:
         alert_manager.disconnect(ws)
+
+
+@router.get("/ws-stats")
+async def ws_stats():
+    """Return WebSocket connection stats: connection count, message rate, uptime."""
+    connections = (
+        sum(len(v) for v in manager._connections.values())
+        + len(alert_manager._clients)
+    )
+    uptime_sec = time.time() - _ws_start_time
+    messages_per_sec = _ws_msg_count / uptime_sec if uptime_sec > 0 else 0.0
+    return {
+        "status": "ok",
+        "connections": connections,
+        "messages_per_sec": round(messages_per_sec, 4),
+        "uptime_sec": round(uptime_sec, 2),
+        "total_messages": _ws_msg_count,
+    }
 
 
 @router.get("/symbols")
@@ -5037,3 +5070,61 @@ async def top_movers_endpoint():
     movers.sort(key=lambda r: abs(r.get("change_1h") or 0.0), reverse=True)
 
     return JSONResponse({"status": "ok", "ts": now, "movers": movers})
+
+
+def _calc_percentile(sorted_vals: list, p: float) -> float:
+    """Linear interpolation percentile on a sorted list."""
+    n = len(sorted_vals)
+    if n == 0:
+        return 0.0
+    if n == 1:
+        return float(sorted_vals[0])
+    idx = (p / 100.0) * (n - 1)
+    lo = int(idx)
+    hi = min(lo + 1, n - 1)
+    frac = idx - lo
+    return sorted_vals[lo] + frac * (sorted_vals[hi] - sorted_vals[lo])
+
+
+@router.get("/trade-size-percentiles")
+async def trade_size_percentiles(symbol: Optional[str] = None):
+    """
+    Trade size percentile distribution from the last 1000 trades.
+
+    Returns p50/p75/p90/p95/p99 of trade quantities and median USD value.
+    """
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+
+    trades = await get_recent_trades(limit=1000, symbol=target)
+
+    if not trades:
+        return {
+            "status": "ok",
+            "symbol": target,
+            "sample_size": 0,
+            "p50": None,
+            "p75": None,
+            "p90": None,
+            "p95": None,
+            "p99": None,
+            "median_usd": None,
+        }
+
+    sizes = sorted(float(t["qty"]) for t in trades)
+    usd_sizes = sorted(
+        float(t["price"]) * float(t["qty"]) for t in trades
+    )
+    n = len(sizes)
+
+    return {
+        "status": "ok",
+        "symbol": target,
+        "sample_size": n,
+        "p50": round(_calc_percentile(sizes, 50), 8),
+        "p75": round(_calc_percentile(sizes, 75), 8),
+        "p90": round(_calc_percentile(sizes, 90), 8),
+        "p95": round(_calc_percentile(sizes, 95), 8),
+        "p99": round(_calc_percentile(sizes, 99), 8),
+        "median_usd": round(_calc_percentile(usd_sizes, 50), 2),
+    }
