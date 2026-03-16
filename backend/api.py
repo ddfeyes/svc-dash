@@ -71,6 +71,7 @@ from metrics import (
     compute_token_velocity_nvt,
     compute_layer2_metrics,
     compute_nft_market_pulse,
+    compute_dex_vs_cex_flow,
 )
 
 router = APIRouter(prefix="/api")
@@ -5318,4 +5319,11 @@ async def nft_market_pulse_endpoint():
 async def holder_distribution_endpoint():
     """Holder distribution: wallet bands, Gini, HHI, whale accumulation delta."""
     data = await compute_holder_distribution_card()
+    return JSONResponse(data)
+
+
+@router.get("/dex-vs-cex-flow")
+async def dex_vs_cex_flow_endpoint(symbol: Optional[str] = None, window_hours: int = 24):
+    """DEX vs CEX volume divergence: Uniswap/Curve/Balancer vs CEX spot, Z-score, price discovery."""
+    data = await compute_dex_vs_cex_flow(symbol=symbol, window_hours=window_hours)
     return JSONResponse(data)

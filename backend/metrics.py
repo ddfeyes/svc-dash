@@ -8356,3 +8356,144 @@ async def compute_holder_distribution_card() -> dict:
     }
 
 
+# ── DEX vs CEX Volume Divergence ─────────────────────────────────────────────
+
+def _dex_cex_seed(offset: int = 0) -> "random.Random":
+    import random
+    import time
+    return random.Random(int(time.time() / 300) + offset)
+
+
+def _dex_cex_dominance_history(n: int = 30) -> list:
+    """Return n historical DEX-dominance-ratio values (simulated)."""
+    import random
+    import time
+    base = int(time.time() / 300) - n
+    history = []
+    for i in range(n):
+        rng = random.Random(base + i)
+        h_dex = rng.uniform(12e6, 45e6)
+        h_cex = rng.uniform(40e6, 130e6)
+        history.append(h_dex / (h_dex + h_cex))
+    return history
+
+
+def _dex_cex_zscore(current: float, history: list) -> float:
+    import math
+    n = len(history)
+    if n == 0:
+        return 0.0
+    mean = sum(history) / n
+    variance = sum((x - mean) ** 2 for x in history) / n
+    std = math.sqrt(variance)
+    if std < 1e-10:
+        return 0.0
+    return round((current - mean) / std, 3)
+
+
+def _dex_cex_trend(history: list) -> tuple:
+    """Return (trend_label, trend_delta) from last 14 periods split 7/7."""
+    if len(history) < 14:
+        return "stable", 0.0
+    recent = history[-7:]
+    prior = history[-14:-7]
+    delta = sum(recent) / 7 - sum(prior) / 7
+    if delta > 0.005:
+        label = "rising"
+    elif delta < -0.005:
+        label = "falling"
+    else:
+        label = "stable"
+    return label, round(delta, 4)
+
+
+def _dex_price_discovery(zscore: float) -> tuple:
+    """Return (price_discovery_label, discovery_signal) from divergence Z-score."""
+    if zscore > 2.0:
+        return "dex_leading", "strong_buy"
+    if zscore > 1.0:
+        return "dex_elevated", "watch"
+    if zscore < -2.0:
+        return "cex_dominant", "strong_sell"
+    if zscore < -1.0:
+        return "cex_elevated", "watch"
+    return "balanced", "neutral"
+
+
+async def compute_dex_vs_cex_flow(
+    symbol: Optional[str] = None,
+    window_hours: int = 24,
+) -> dict:
+    """DEX vs CEX volume divergence: Uniswap/Curve/Balancer vs CEX spot.
+
+    Returns divergence Z-score, DEX dominance ratio trend, and early price
+    discovery signal. Uses simulated data seeded by 5-min time bucket so
+    values are stable within a refresh cycle.
+    """
+    import math
+    rng = _dex_cex_seed()
+
+    # ── Simulated DEX protocol volumes (USD) ──────────────────────────────────
+    dex_protocols: dict = {
+        "uniswap_v3": rng.uniform(8e6, 25e6),
+        "uniswap_v2": rng.uniform(2e6, 8e6),
+        "curve":      rng.uniform(5e6, 18e6),
+        "balancer":   rng.uniform(1e6, 6e6),
+    }
+    total_dex = sum(dex_protocols.values())
+
+    # ── Simulated CEX volume ──────────────────────────────────────────────────
+    cex_volume = rng.uniform(40e6, 120e6)
+
+    total_volume = total_dex + cex_volume
+    dominance_ratio = total_dex / total_volume if total_volume > 0 else 0.0
+
+    # ── Historical dominance for Z-score ──────────────────────────────────────
+    hist = _dex_cex_dominance_history(30)
+    mean_dom = sum(hist) / len(hist) if hist else 0.0
+    variance = sum((x - mean_dom) ** 2 for x in hist) / len(hist) if hist else 0.0
+    std_dom = math.sqrt(variance)
+    zscore = _dex_cex_zscore(dominance_ratio, hist)
+
+    # ── Trend ─────────────────────────────────────────────────────────────────
+    dom_trend, trend_delta = _dex_cex_trend(hist)
+
+    # ── Price discovery signal ────────────────────────────────────────────────
+    price_discovery, discovery_signal = _dex_price_discovery(zscore)
+
+    # ── Protocol breakdown (% of total DEX) ──────────────────────────────────
+    protocol_pct = {
+        k: round(v / total_dex * 100, 1) if total_dex > 0 else 0.0
+        for k, v in dex_protocols.items()
+    }
+
+    # ── Sparkline (last 24 of history) ────────────────────────────────────────
+    dom_series = [round(d, 4) for d in hist[-24:]]
+
+    description = (
+        f"DEX {dominance_ratio * 100:.1f}% of total volume; "
+        f"Z-score {zscore:.2f} — {price_discovery.replace('_', ' ')}"
+    )
+
+    return {
+        "symbol":               symbol or "global",
+        "window_hours":         window_hours,
+        "dex_volume_usd":       round(total_dex, 0),
+        "cex_volume_usd":       round(cex_volume, 0),
+        "total_volume_usd":     round(total_volume, 0),
+        "dex_dominance_ratio":  round(dominance_ratio, 4),
+        "dex_dominance_pct":    round(dominance_ratio * 100, 2),
+        "divergence_zscore":    zscore,
+        "dominance_trend":      dom_trend,
+        "trend_delta":          trend_delta,
+        "price_discovery":      price_discovery,
+        "discovery_signal":     discovery_signal,
+        "protocols":            {k: round(v, 0) for k, v in dex_protocols.items()},
+        "protocol_breakdown_pct": protocol_pct,
+        "dominance_history":    dom_series,
+        "mean_dominance":       round(mean_dom, 4),
+        "std_dominance":        round(std_dom, 4),
+        "description":          description,
+    }
+
+

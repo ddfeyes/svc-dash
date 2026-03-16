@@ -2514,6 +2514,8 @@ async function refresh() {
         // Batch 25: holder distribution card
         // Batch 26: cross-chain bridge monitor
     await Promise.all([safe(renderCrossChainBridge)]);
+    // Batch 27: DEX vs CEX flow
+    await Promise.all([safe(refreshDexVsCexFlow)]);
   } finally {
     _refreshRunning = false;
   }
@@ -2884,6 +2886,71 @@ async function renderTokenVelocityNvt() {
     </div>
     <div style="margin-top:4px">${sparkbars}</div>
     ${data.description ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${data.description}</div>` : ''}`;
+}
+
+// ── DEX vs CEX Volume Divergence ──────────────────────────────────────────────
+async function refreshDexVsCexFlow() {
+  const el = document.getElementById('dex-vs-cex-content');
+  if (!el) return;
+  const sym = activeSymbol ? `?symbol=${activeSymbol}` : '';
+  const data = await apiFetch(`/api/dex-vs-cex-flow${sym}`);
+  if (!data) { el.textContent = 'Unavailable'; return; }
+
+  const badge = document.getElementById('dex-vs-cex-badge');
+  const sig = data.discovery_signal ?? 'neutral';
+  const sigColor = {
+    strong_buy:  '#26a69a',
+    watch:       '#ffa726',
+    strong_sell: '#ef5350',
+    neutral:     '#607d8b',
+  }[sig] ?? '#607d8b';
+  if (badge) {
+    badge.textContent = sig.replace('_', ' ').toUpperCase();
+    badge.style.background = sigColor;
+    badge.style.display = 'inline-block';
+  }
+
+  const zscore  = data.divergence_zscore ?? 0;
+  const zColor  = zscore > 1.5 ? '#26a69a' : zscore < -1.5 ? '#ef5350' : '#aaa';
+  const domPct  = data.dex_dominance_pct ?? 0;
+  const trend   = data.dominance_trend ?? 'stable';
+  const trendArrow = trend === 'rising' ? '▲' : trend === 'falling' ? '▼' : '–';
+  const trendColor = trend === 'rising' ? '#26a69a' : trend === 'falling' ? '#ef5350' : '#aaa';
+
+  const fmtM = v => {
+    if (v >= 1e9) return (v / 1e9).toFixed(2) + 'B';
+    if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+    return v.toFixed(0);
+  };
+
+  const protocols = data.protocols ?? {};
+  const pctMap    = data.protocol_breakdown_pct ?? {};
+  const protoRows = Object.keys(protocols).map(k => {
+    const pct = pctMap[k] ?? 0;
+    return `<span style="color:#aaa">${k.replace('_', ' ')}: <b style="color:#e2e8f0">${fmtM(protocols[k])}</b> <span style="color:#555">(${pct}%)</span></span>`;
+  }).join(' · ');
+
+  const hist = data.dominance_history ?? [];
+  const sparkMax = Math.max(...hist, 0.01);
+  const sparkMin = Math.min(...hist, 0);
+  const sparkBars = hist.map(v => {
+    const h = Math.round(((v - sparkMin) / (sparkMax - sparkMin || 1)) * 20);
+    const c = v > data.mean_dominance ? '#26a69a' : '#ef5350';
+    return `<span style="display:inline-block;width:4px;height:${h + 2}px;background:${c};margin-right:1px;vertical-align:bottom"></span>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:10px;margin-bottom:5px">
+      <span style="color:#aaa">DEX vol: <b style="color:#e2e8f0">$${fmtM(data.dex_volume_usd ?? 0)}</b></span>
+      <span style="color:#aaa">CEX vol: <b style="color:#e2e8f0">$${fmtM(data.cex_volume_usd ?? 0)}</b></span>
+      <span style="color:#aaa">DEX dom: <b style="color:#e2e8f0">${domPct.toFixed(1)}%</b> <span style="color:${trendColor}">${trendArrow}</span></span>
+      <span style="color:#aaa">Z-score: <b style="color:${zColor}">${zscore.toFixed(2)}</b></span>
+    </div>
+    <div style="font-size:10px;color:#aaa;margin-bottom:4px">${protoRows}</div>
+    <div style="margin:4px 0;line-height:22px">${sparkBars}</div>
+    <div style="font-size:10px;color:#aaa">price discovery: <b style="color:${sigColor}">${(data.price_discovery ?? '').replace(/_/g, ' ')}</b></div>
+    ${data.description ? `<div style="font-size:10px;color:#555;margin-top:3px">${data.description}</div>` : ''}
+  `;
 }
 
 // ── Derivatives Heatmap ───────────────────────────────────────────────────────
