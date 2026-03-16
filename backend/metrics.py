@@ -6031,8 +6031,6 @@ def _l2_rank_chains(chains: dict) -> list:
 def _l2_tvl_change_pct(current: float, previous: float) -> float:
     """Percentage change from previous to current TVL."""
 # ╔══════════════════════════════════════════════════════════════════════════╗
-# =====================================================# ╔══════════════════════════════════════════════════════════════════════════╗
-=======
 # ║  STAKING YIELD TRACKER                                                  ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
@@ -6100,6 +6098,26 @@ def _sy_yield_label(real_yield: float) -> str:
 
 def _sy_validator_growth(current: float, previous: float) -> float:
     """% growth in validator count from previous to current period."""
+=======
+# ║  PROTOCOL REVENUE CARD                                                  ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+
+def _pr_annualized_revenue(daily_revenue: float) -> float:
+    """Annualize a daily revenue figure (× 365)."""
+    return float(daily_revenue * 365.0)
+
+
+def _pr_pe_ratio(market_cap: float, annualized_revenue: float) -> float:
+    """P/E-style ratio: market cap divided by annualized revenue.
+    Returns 0.0 for zero or negative revenue.
+    """
+    if annualized_revenue <= 0:
+        return 0.0
+    return float(market_cap / annualized_revenue)
+
+
+def _pr_revenue_growth(current: float, previous: float) -> float:
+    """% revenue growth from previous period to current."""
 # ║  MACRO LIQUIDITY INDICATOR                                              ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
@@ -7188,8 +7206,185 @@ async def compute_layer2_metrics() -> dict:
     }
 
 
-# BTC Dominance Tracker helpers  (_bd_)
-# ============================================================
+=======
+def _pr_momentum_score(
+    d1_growth: float,
+    d7_growth: float,
+    d30_growth: float,
+) -> float:
+    """Composite momentum [0-100]: 40% 1d + 35% 7d + 25% 30d growth signals."""
+    def _clamp(v: float) -> float:
+        return max(-1.0, min(1.0, v))
+
+    n1  = _clamp(d1_growth  / 20.0)
+    n7  = _clamp(d7_growth  / 30.0)
+    n30 = _clamp(d30_growth / 50.0)
+    composite = 0.40 * n1 + 0.35 * n7 + 0.25 * n30
+    return float((composite + 1.0) / 2.0 * 100.0)
+
+
+def _pr_valuation_signal(pe_ratio: float) -> str:
+    """Valuation signal: undervalued (<10), fair (10–25), overvalued (>25)."""
+    if pe_ratio < 10.0:
+        return "undervalued"
+    if pe_ratio < 25.0:
+        return "fair"
+    return "overvalued"
+
+
+def _pr_divergence(revenue_change_pct: float, price_change_pct: float) -> float:
+    """Revenue-vs-price divergence: positive means revenue outpacing price."""
+    return float(revenue_change_pct - price_change_pct)
+
+
+def _pr_rank_protocols(protocols: dict) -> list:
+    """Sort protocols by daily_revenue_usd descending; return (name, data) tuples."""
+    if not protocols:
+        return []
+    return sorted(
+        protocols.items(),
+        key=lambda x: x[1].get("daily_revenue_usd", 0),
+        reverse=True,
+    )
+
+
+def _pr_growth_label(momentum: float) -> str:
+    """Growth label from momentum score [0-100]."""
+    if momentum >= 65.0:
+        return "accelerating"
+    if momentum >= 50.0:
+        return "growing"
+    if momentum >= 35.0:
+        return "stable"
+    return "declining"
+
+
+async def compute_protocol_revenue_card() -> dict:
+    """Top 10 DeFi protocols by revenue with P/E ratios and growth momentum."""
+    import httpx, datetime, random
+
+    # Baseline data — could be enriched from Token Terminal / DeFi Llama API
+    PROTOCOLS = {
+        "Uniswap":   {"daily": 1_200_000, "mcap": 5_000_000_000, "price": 10.00,
+                      "g7": 5.2,  "g30": 12.1, "p7": 3.1},
+        "MakerDAO":  {"daily":   950_000, "mcap": 2_800_000_000, "price": 3100.0,
+                      "g7": 3.5,  "g30":  8.2, "p7": 1.2},
+        "Aave":      {"daily":   720_000, "mcap": 1_800_000_000, "price":  120.0,
+                      "g7": 9.1,  "g30": 18.4, "p7": 5.0},
+        "Curve":     {"daily":   580_000, "mcap":   600_000_000, "price":   0.38,
+                      "g7": 1.2,  "g30": -2.1, "p7": -3.5},
+        "GMX":       {"daily":   450_000, "mcap":   500_000_000, "price":  25.00,
+                      "g7": -1.5, "g30": -4.2, "p7": -2.0},
+        "Lido":      {"daily":   380_000, "mcap": 2_100_000_000, "price":   2.30,
+                      "g7": 2.1,  "g30":  5.5, "p7": 4.0},
+        "Compound":  {"daily":   290_000, "mcap":   450_000_000, "price":  60.00,
+                      "g7": -3.2, "g30": -8.5, "p7": -5.0},
+        "dYdX":      {"daily":   210_000, "mcap":   320_000_000, "price":   3.20,
+                      "g7": 6.5,  "g30": 14.2, "p7": 7.0},
+        "Convex":    {"daily":   180_000, "mcap":   280_000_000, "price":   0.28,
+                      "g7": -0.8, "g30": -3.5, "p7": -4.0},
+        "Synthetix": {"daily":   140_000, "mcap":   380_000_000, "price":   2.80,
+                      "g7": 1.0,  "g30":  2.5, "p7": 0.5},
+    }
+
+    today = datetime.date.today()
+    dates_30d = [
+        (today - datetime.timedelta(days=30 - i * 5)).isoformat()
+        for i in range(7)
+    ]
+
+    protocols_out = {}
+    pe_list = []
+
+    ranked = _pr_rank_protocols({n: {"daily_revenue_usd": d["daily"]} for n, d in PROTOCOLS.items()})
+    rank_map = {name: idx + 1 for idx, (name, _) in enumerate(ranked)}
+
+    for name, d in PROTOCOLS.items():
+        annual  = _pr_annualized_revenue(d["daily"])
+        pe      = _pr_pe_ratio(d["mcap"], annual)
+        vsig    = _pr_valuation_signal(pe)
+        div7    = _pr_divergence(d["g7"], d["p7"])
+        # approximate 1d growth from 7d
+        g1_est  = d["g7"] / 7.0
+        mom     = _pr_momentum_score(g1_est, d["g7"], d["g30"])
+        glabel  = _pr_growth_label(mom)
+
+        pe_list.append(pe)
+        protocols_out[name] = {
+            "daily_revenue_usd":        d["daily"],
+            "weekly_revenue_usd":       round(d["daily"] * 7, 0),
+            "monthly_revenue_usd":      round(d["daily"] * 30, 0),
+            "annualized_revenue_usd":   round(annual, 0),
+            "market_cap_usd":           d["mcap"],
+            "token_price_usd":          d["price"],
+            "pe_ratio":                 round(pe, 2),
+            "valuation_signal":         vsig,
+            "revenue_growth_7d_pct":    d["g7"],
+            "revenue_growth_30d_pct":   d["g30"],
+            "price_change_7d_pct":      d["p7"],
+            "divergence_7d":            round(div7, 2),
+            "momentum_score":           round(mom, 1),
+            "growth_label":             glabel,
+            "rank":                     rank_map[name],
+        }
+
+    # Aggregates
+    total_daily   = sum(d["daily"] for d in PROTOCOLS.values())
+    total_annual  = _pr_annualized_revenue(total_daily)
+    avg_pe        = sum(pe_list) / len(pe_list) if pe_list else 0.0
+    best_pe_proto = min(
+        (n for n in protocols_out if protocols_out[n]["pe_ratio"] > 0),
+        key=lambda n: protocols_out[n]["pe_ratio"],
+    )
+    best_growth   = max(protocols_out, key=lambda n: protocols_out[n]["momentum_score"])
+    top_proto     = ranked[0][0]
+
+    # 30-day history (synthetic — scale daily revenue down for prior days)
+    history_30d = []
+    for i, date in enumerate(dates_30d):
+        scale = 0.94 + 0.06 * (i / 6)
+        day_daily  = total_daily * scale * (1 + random.uniform(-0.01, 0.01))
+        day_pe_avg = avg_pe * (1.0 + 0.05 * (1 - scale))
+        history_30d.append({
+            "date": date,
+            "total_daily_revenue_usd": round(day_daily, 0),
+            "avg_pe_ratio": round(day_pe_avg, 2),
+        })
+
+    top_by_revenue = [name for name, _ in ranked]
+
+    desc = (
+        f"DeFi revenue: {top_proto} leads "
+        f"${protocols_out[top_proto]['daily_revenue_usd'] / 1e6:.1f}M/day"
+        f" — sector avg P/E {avg_pe:.1f}x"
+    )
+
+    return {
+        "protocols": protocols_out,
+        "aggregate": {
+            "total_daily_revenue_usd":      round(total_daily, 0),
+            "total_weekly_revenue_usd":     round(total_daily * 7, 0),
+            "total_monthly_revenue_usd":    round(total_daily * 30, 0),
+            "total_annualized_revenue_usd": round(total_annual, 0),
+            "avg_pe_ratio":                 round(avg_pe, 2),
+            "best_pe_protocol":             best_pe_proto,
+            "highest_growth_protocol":      best_growth,
+            "top_protocol":                 top_proto,
+        },
+        "top_by_revenue": top_by_revenue,
+        "history_30d": history_30d,
+        "description": desc,
+    }
+
+
+# ── Network Health Score ───────────────────────────────────────────────────────
+# Composite 0-100 gauge combining four on-chain signals for Bitcoin network
+# health: hash rate trend, mempool congestion, active addresses, fee pressure.
+#
+# Weights: each component = 25%.
+# Labels: 90-100 excellent | 70-89 healthy | 50-69 neutral | 30-49 stressed | 0-29 critical
+#
+# Data: blockchain.info public charts API (free, no API key required).
 
 def _bd_dominance_pct(asset_market_cap: float, total_market_cap: float) -> float:
     """Return asset's % share of total market cap, clamped to [0, 100]."""
@@ -7751,6 +7946,205 @@ async def compute_staking_yield_tracker() -> dict:
             "best_yield_protocol": best_yield,
             "lowest_risk_protocol": lowest_risk,
             "total_value_staked_usd": round(total_tvs, 0),
+        },
+        "history_30d": history_30d,
+        "description": desc,
+    }
+
+
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  LEVERAGE RATIO HEATMAP                                                 ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+
+def _lv_leverage_ratio(oi_usd: float, market_cap_usd: float) -> float:
+    """Leverage ratio: OI as % of market cap.  Returns 0.0 if mcap is zero."""
+    if market_cap_usd == 0:
+        return 0.0
+    return float(oi_usd / market_cap_usd * 100.0)
+
+
+def _lv_percentile_rank(value: float, history: list) -> float:
+    """Fraction of history values <= current value, expressed as [0-100].
+    Returns 50.0 when history is empty (neutral/unknown).
+    """
+    if not history:
+        return 50.0
+    count = sum(1 for h in history if h <= value)
+    return float(count / len(history) * 100.0)
+
+
+def _lv_deleverage_risk(percentile: float) -> str:
+    """Deleveraging risk label from percentile rank."""
+    if percentile >= 80.0:
+        return "high"
+    if percentile >= 65.0:
+        return "elevated"
+    if percentile >= 40.0:
+        return "normal"
+    return "low"
+
+
+def _lv_risk_score(leverage_ratio: float, percentile: float) -> float:
+    """Composite risk score [0-100]: 40% normalised leverage + 60% percentile."""
+    norm_lev = min(100.0, max(0.0, leverage_ratio / 5.0 * 100.0))
+    return float(0.40 * norm_lev + 0.60 * percentile)
+
+
+def _lv_zscore(current: float, history: list) -> float:
+    """Z-score of current leverage ratio vs historical distribution."""
+    if len(history) < 2:
+        return 0.0
+    import math
+    mean = sum(history) / len(history)
+    std  = math.sqrt(sum((v - mean) ** 2 for v in history) / len(history))
+    if std == 0:
+        return 0.0
+    return float((current - mean) / std)
+
+
+def _lv_trend(values: list) -> str:
+    """Linear-regression trend of a leverage series: rising / falling / stable."""
+    if len(values) < 2:
+        return "stable"
+    n = len(values)
+    mean_x = (n - 1) / 2.0
+    mean_y = sum(values) / n
+    num = sum((i - mean_x) * (v - mean_y) for i, v in enumerate(values))
+    den = sum((i - mean_x) ** 2 for i in range(n))
+    if den == 0:
+        return "stable"
+    slope = num / den
+    threshold = (max(values) - min(values)) * 0.01
+    if slope > threshold:
+        return "rising"
+    if slope < -threshold:
+        return "falling"
+    return "stable"
+
+
+def _lv_heatmap_color(percentile: float) -> str:
+    """Heatmap color bucket from percentile rank."""
+    if percentile >= 80.0:
+        return "red"
+    if percentile >= 65.0:
+        return "orange"
+    if percentile >= 40.0:
+        return "yellow"
+    return "green"
+
+
+def _lv_sector_avg(ratios: dict) -> float:
+    """Simple mean of leverage ratios across assets."""
+    if not ratios:
+        return 0.0
+    return float(sum(ratios.values()) / len(ratios))
+
+
+async def compute_leverage_ratio_heatmap() -> dict:
+    """Leverage ratio heatmap: OI/mcap across BTC/ETH/SOL/BNB perps."""
+    import httpx, datetime, random
+
+    today = datetime.date.today()
+
+    ASSETS = {
+        "BTC": {
+            "oi": 18_500_000_000, "mcap": 1_200_000_000_000,
+            "history_lv": [1.22, 1.28, 1.33, 1.38, 1.42, 1.47, 1.54],
+        },
+        "ETH": {
+            "oi":  9_800_000_000, "mcap":   380_000_000_000,
+            "history_lv": [2.45, 2.48, 2.51, 2.53, 2.55, 2.57, 2.58],
+        },
+        "SOL": {
+            "oi":  4_200_000_000, "mcap":    75_000_000_000,
+            "history_lv": [4.20, 4.40, 4.60, 4.80, 5.10, 5.35, 5.60],
+        },
+        "BNB": {
+            "oi":  1_800_000_000, "mcap":    85_000_000_000,
+            "history_lv": [2.25, 2.22, 2.19, 2.17, 2.15, 2.13, 2.12],
+        },
+    }
+
+    dates = [
+        (today - datetime.timedelta(days=30 - i * 5)).isoformat()
+        for i in range(7)
+    ]
+
+    assets_out = {}
+    sector_ratios = {}
+
+    for name, d in ASSETS.items():
+        current_lv = _lv_leverage_ratio(d["oi"], d["mcap"])
+        hist_lv    = d["history_lv"]
+
+        # Extended history for percentile (synthetic 90d baseline)
+        extended = [
+            hist_lv[0] * (0.75 + 0.03 * i) for i in range(10)
+        ] + hist_lv
+        pct   = _lv_percentile_rank(current_lv, extended)
+        risk  = _lv_deleverage_risk(pct)
+        rs    = _lv_risk_score(current_lv, pct)
+        zs    = _lv_zscore(current_lv, hist_lv[:-1])
+        trend = _lv_trend(hist_lv)
+        color = _lv_heatmap_color(pct)
+
+        history_30d = [
+            {
+                "date": dates[i],
+                "leverage_ratio": round(hist_lv[i], 3),
+                "percentile": round(_lv_percentile_rank(hist_lv[i], extended), 1),
+            }
+            for i in range(len(hist_lv))
+        ]
+
+        assets_out[name] = {
+            "oi_usd":          d["oi"],
+            "market_cap_usd":  d["mcap"],
+            "leverage_ratio":  round(current_lv, 3),
+            "percentile_rank": round(pct, 1),
+            "risk_signal":     risk,
+            "risk_score":      round(rs, 1),
+            "zscore":          round(zs, 3),
+            "trend":           trend,
+            "heatmap_color":   color,
+            "history_30d":     history_30d,
+        }
+        sector_ratios[name] = current_lv
+
+    avg_lv  = _lv_sector_avg(sector_ratios)
+    avg_pct = _lv_sector_avg({n: assets_out[n]["percentile_rank"] for n in assets_out})
+    max_risk = max(assets_out, key=lambda n: assets_out[n]["risk_score"])
+    deleverage_count = sum(
+        1 for a in assets_out.values() if a["risk_signal"] == "high"
+    )
+    sector_rs = _lv_sector_avg({n: assets_out[n]["risk_score"] for n in assets_out})
+
+    history_30d = [
+        {
+            "date": dates[i],
+            "avg_leverage_ratio": round(
+                sum(ASSETS[n]["history_lv"][i] for n in ASSETS) / len(ASSETS), 3
+            ),
+            "avg_percentile": round(avg_pct * (0.90 + 0.10 * (i / 6)), 1),
+        }
+        for i in range(7)
+    ]
+
+    desc = (
+        f"Leverage {'elevated' if avg_pct >= 65 else 'normal'}: "
+        f"{max_risk} at {assets_out[max_risk]['percentile_rank']:.0f}th pct"
+        f" — {deleverage_count} asset{'s' if deleverage_count != 1 else ''} "
+        f"in deleveraging risk zone"
+    )
+
+    return {
+        "assets": assets_out,
+        "sector": {
+            "avg_leverage_ratio":    round(avg_lv, 3),
+            "avg_percentile":        round(avg_pct, 1),
+            "max_risk_asset":        max_risk,
+            "deleverage_risk_count": deleverage_count,
+            "sector_risk_score":     round(sector_rs, 1),
         },
         "history_30d": history_30d,
         "description": desc,

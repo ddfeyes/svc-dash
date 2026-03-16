@@ -2839,8 +2839,10 @@ async function refresh() {
     await Promise.all([safe(renderDerivativesHeatmap)]);
     // Batch 16: network health score
     await Promise.all([safe(renderNetworkHealthScore)]);
-    // Batch 24: staking yield tracker (global, multi-chain)
-    await Promise.all([safe(renderStakingYieldTracker)]);
+    // Batch 24: protocol revenue (global DeFi signal)
+    await Promise.all([safe(renderProtocolRevenue)]);
+    // Batch 25: leverage ratio heatmap (global, multi-asset)
+    await Promise.all([safe(renderLeverageRatioHeatmap)]);
   } finally {
     _refreshRunning = false;
   }
@@ -3460,77 +3462,150 @@ async function renderValidatorActivity() {
     ${data.description ? `<div style="font-size:10px;color:var(--muted)">${data.description}</div>` : ''}`;
 }
 
-// ── Staking Yield Tracker ─────────────────────────────────────────────────
-async function renderStakingYieldTracker() {
-  const data  = await apiFetch('/staking-yield-tracker');
-  const el    = document.getElementById('staking-yield-content');
-  const badge = document.getElementById('staking-yield-badge');
+// ── Protocol Revenue ─────────────────────────────────────────────────────
+async function renderProtocolRevenue() {
+  const data  = await apiFetch('/protocol-revenue-card');
+  const el    = document.getElementById('protocol-revenue-content');
+  const badge = document.getElementById('protocol-revenue-badge');
   if (!data || !el) return;
 
-  const agg     = data.aggregate ?? {};
-  const best    = agg.best_yield_protocol ?? '—';
-  const avgApy  = agg.avg_apy ?? 0;
-  const avgReal = agg.avg_real_yield ?? 0;
-  const realCol = avgReal >= 2 ? 'var(--green)' : avgReal > 0 ? '#f59e0b' : 'var(--red)';
+  const agg      = data.aggregate ?? {};
+  const top      = agg.top_protocol ?? '—';
+  const avgPe    = agg.avg_pe_ratio ?? 0;
+  const bestPe   = agg.best_pe_protocol ?? '—';
+  const topGrowth = agg.highest_growth_protocol ?? '—';
 
   if (badge) {
-    badge.textContent = best;
+    badge.textContent = top;
     badge.style.display = 'inline-block';
     badge.style.color = 'var(--green)';
   }
 
-  const fmtPct = v => (v ?? 0).toFixed(2) + '%';
+  const fmtM   = v => { const av = Math.abs(v||0); return av >= 1e6 ? '$' + (av/1e6).toFixed(1) + 'M' : '$' + av.toFixed(0); };
+  const fmtPe  = v => (v ?? 0).toFixed(1) + 'x';
+  const fmtPct = v => (v >= 0 ? '+' : '') + (v ?? 0).toFixed(1) + '%';
 
   const protos = data.protocols ?? {};
-  const rows = Object.entries(protos).map(([sym, p]) => {
-    const rlCol   = p.yield_label === 'attractive' ? 'var(--green)'
-      : p.yield_label === 'neutral' ? '#f59e0b' : 'var(--red)';
-    const riskCol = p.risk_label === 'low' ? 'var(--green)'
-      : p.risk_label === 'medium' ? '#f59e0b' : 'var(--red)';
+  // Sort by rank
+  const sorted = Object.entries(protos).sort((a, b) => a[1].rank - b[1].rank);
+  const rows = sorted.map(([name, p]) => {
+    const vsCol = p.valuation_signal === 'undervalued' ? 'var(--green)'
+      : p.valuation_signal === 'overvalued' ? 'var(--red)' : 'var(--muted)';
+    const gCol  = p.growth_label === 'accelerating' ? 'var(--green)'
+      : p.growth_label === 'growing' ? '#a3e635'
+      : p.growth_label === 'declining' ? 'var(--red)' : 'var(--muted)';
+    const divCol = (p.divergence_7d ?? 0) >= 0 ? 'var(--green)' : 'var(--red)';
     return `<tr>
-      <td style="color:var(--text);font-size:9px;font-weight:600">${sym}</td>
-      <td style="text-align:right;font-size:9px">${fmtPct(p.apy)}</td>
-      <td style="text-align:right;font-size:9px;color:${rlCol}">${fmtPct(p.real_yield)}</td>
-      <td style="text-align:right;font-size:9px">${(p.stake_ratio ?? 0).toFixed(1)}%</td>
-      <td style="text-align:right;font-size:9px;color:${riskCol}">${(p.risk_label ?? '').toUpperCase()}</td>
+      <td style="color:var(--text);font-size:9px">${p.rank}. ${name.substring(0,10)}</td>
+      <td style="text-align:right;font-size:9px">${fmtM(p.daily_revenue_usd)}</td>
+      <td style="text-align:right;font-size:9px;color:${vsCol}">${fmtPe(p.pe_ratio)}</td>
+      <td style="text-align:right;font-size:9px;color:${divCol}">${fmtPct(p.divergence_7d)}</td>
+      <td style="text-align:right;font-size:9px;color:${gCol}">${(p.growth_label ?? '').substring(0,5).toUpperCase()}</td>
     </tr>`;
   }).join('');
 
-  const tvs = agg.total_value_staked_usd ?? 0;
-  const tvsStr = tvs >= 1e9 ? '$' + (tvs/1e9).toFixed(1) + 'B'
-    : tvs >= 1e6 ? '$' + (tvs/1e6).toFixed(0) + 'M' : '$' + tvs.toFixed(0);
+  const totDaily = agg.total_daily_revenue_usd ?? 0;
 
   el.innerHTML = `
     <div style="display:flex;gap:12px;margin-bottom:6px">
       <div>
-        <div style="font-size:9px;color:var(--muted)">AVG APY</div>
-        <div style="font-size:16px;font-weight:700">${fmtPct(avgApy)}</div>
+        <div style="font-size:9px;color:var(--muted)">SECTOR/DAY</div>
+        <div style="font-size:16px;font-weight:700">${fmtM(totDaily)}</div>
       </div>
       <div>
-        <div style="font-size:9px;color:var(--muted)">AVG REAL</div>
-        <div style="font-size:13px;font-weight:600;color:${realCol}">${fmtPct(avgReal)}</div>
+        <div style="font-size:9px;color:var(--muted)">AVG P/E</div>
+        <div style="font-size:13px;font-weight:600;color:var(--muted)">${fmtPe(avgPe)}</div>
       </div>
       <div>
-        <div style="font-size:9px;color:var(--muted)">BEST</div>
-        <div style="font-size:13px;font-weight:600;color:var(--green)">${best}</div>
+        <div style="font-size:9px;color:var(--muted)">CHEAPEST</div>
+        <div style="font-size:11px;font-weight:600;color:var(--green)">${bestPe}</div>
       </div>
       <div>
-        <div style="font-size:9px;color:var(--muted)">TVS</div>
-        <div style="font-size:11px;color:var(--muted)">${tvsStr}</div>
+        <div style="font-size:9px;color:var(--muted)">TOP GROWTH</div>
+        <div style="font-size:11px;font-weight:600;color:#a3e635">${topGrowth}</div>
       </div>
     </div>
     <table style="width:100%;border-collapse:collapse">
       <thead><tr>
-        <th style="font-size:8px;color:var(--muted);text-align:left;font-weight:500">PROTO</th>
-        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">APY</th>
-        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">REAL</th>
-        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">STAKED%</th>
-        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">RISK</th>
+        <th style="font-size:8px;color:var(--muted);text-align:left;font-weight:500">PROTOCOL</th>
+        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">REV/DAY</th>
+        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">P/E</th>
+        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">DIV</th>
+        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">MOM</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>
     <div style="font-size:9px;color:var(--muted);margin-top:4px">${data.description ?? ''}</div>
   `;
+}
+
+// ── Leverage Ratio Heatmap ───────────────────────────────────────────────
+async function renderLeverageRatioHeatmap() {
+  const data   = await apiFetch('/leverage-ratio-heatmap');
+  const el     = document.getElementById('leverage-heatmap-content');
+  const badge  = document.getElementById('leverage-heatmap-badge');
+  if (!data || !el) return;
+
+  const sector   = data.sector ?? {};
+  const maxRisk  = sector.max_risk_asset ?? '—';
+  const delCount = sector.deleverage_risk_count ?? 0;
+  const avgPct   = sector.avg_percentile ?? 50;
+  const sectorCol = avgPct >= 80 ? 'var(--red)' : avgPct >= 65 ? '#f97316' : avgPct >= 40 ? '#facc15' : 'var(--green)';
+
+  if (badge) {
+    badge.textContent = maxRisk;
+    badge.style.display = 'inline-block';
+    badge.style.color = sectorCol;
+  }
+
+  const COLOR_MAP = { red: 'var(--red)', orange: '#f97316', yellow: '#facc15', green: 'var(--green)' };
+  const assets = data.assets ?? {};
+  const sorted = Object.entries(assets).sort((a, b) => b[1].risk_score - a[1].risk_score);
+
+  const rows = sorted.map(([sym, a]) => {
+    const c     = COLOR_MAP[a.heatmap_color] ?? 'var(--muted)';
+    const tIcon = a.trend === 'rising' ? '↑' : a.trend === 'falling' ? '↓' : '→';
+    const tCol  = a.trend === 'rising' ? 'var(--red)' : a.trend === 'falling' ? 'var(--green)' : 'var(--muted)';
+    const pctBar = Math.min(100, Math.round(a.percentile_rank ?? 0));
+    return `<tr>
+      <td style="font-size:9px;font-weight:600">${sym}</td>
+      <td style="text-align:right;font-size:9px">${(a.leverage_ratio ?? 0).toFixed(2)}%</td>
+      <td style="text-align:right;font-size:9px">
+        <div style="display:inline-flex;align-items:center;gap:3px">
+          <div style="width:36px;height:4px;background:var(--border);border-radius:2px">
+            <div style="width:${pctBar}%;height:100%;background:${c};border-radius:2px"></div>
+          </div>
+          <span style="color:${c};font-size:8px">${pctBar}p</span>
+        </div>
+      </td>
+      <td style="text-align:right;font-size:9px;color:${c}">${(a.risk_signal ?? '').toUpperCase()}</td>
+      <td style="text-align:right;font-size:9px;color:${tCol}">${tIcon}</td>
+    </tr>`;
+  }).join('');
+
+  const delCol = delCount > 0 ? 'var(--red)' : 'var(--green)';
+  el.innerHTML = `
+    <div style="display:flex;gap:12px;margin-bottom:6px">
+      <div><div style="font-size:9px;color:var(--muted)">AVG OI/MCAP</div>
+        <div style="font-size:16px;font-weight:700">${(sector.avg_leverage_ratio ?? 0).toFixed(2)}%</div></div>
+      <div><div style="font-size:9px;color:var(--muted)">SECTOR PCT</div>
+        <div style="font-size:13px;font-weight:600;color:${sectorCol}">${avgPct.toFixed(0)}th</div></div>
+      <div><div style="font-size:9px;color:var(--muted)">TOP RISK</div>
+        <div style="font-size:13px;font-weight:600;color:var(--red)">${maxRisk}</div></div>
+      <div><div style="font-size:9px;color:var(--muted)">DELEV ZONE</div>
+        <div style="font-size:13px;font-weight:600;color:${delCol}">${delCount}</div></div>
+    </div>
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr>
+        <th style="font-size:8px;color:var(--muted);text-align:left;font-weight:500">ASSET</th>
+        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">OI/MCAP</th>
+        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">PERCENTILE</th>
+        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">RISK</th>
+        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">TREND</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div style="font-size:9px;color:var(--muted);margin-top:4px">${data.description ?? ''}</div>`;
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
