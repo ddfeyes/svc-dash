@@ -5203,3 +5203,63 @@ async def liquidation_heatmap_endpoint(
         }
 
     return JSONResponse({"status": "ok", "ts": now, "window_s": window_s, "symbols": result})
+
+
+@router.get("/trade-percentiles")
+async def trade_percentiles_endpoint(
+    window_s: int = Query(default=3600, ge=60, le=86400),
+):
+    """
+    Compute p50/p75/p90/p95/p99 trade-qty and USD-notional percentiles
+    per tracked symbol from trades in the last window_s seconds.
+    """
+    now = time.time()
+    since = now - window_s
+    symbols = get_symbols()
+
+    def _pct(s: list, p: float) -> float | None:
+        if not s:
+            return None
+        n = len(s)
+        if n == 1:
+            return s[0]
+        k = (n - 1) * p / 100
+        lo = int(k)
+        hi = min(lo + 1, n - 1)
+        return s[lo] + (k - lo) * (s[hi] - s[lo])
+
+    def _percentiles(values: list) -> dict:
+        if not values:
+            return {f"p{p}": None for p in (50, 75, 90, 95, 99)}
+        s = sorted(values)
+        return {f"p{p}": round(_pct(s, p), 8) for p in (50, 75, 90, 95, 99)}
+
+    result: dict = {}
+    for sym in symbols:
+        trades = await get_recent_trades(since=since, symbol=sym, limit=10000)
+        if not trades:
+            result[sym] = {
+                "n_trades": 0,
+                **{f"p{p}": None for p in (50, 75, 90, 95, 99)},
+                **{f"usd_p{p}": None for p in (50, 75, 90, 95, 99)},
+                "mean_qty": None,
+                "mean_usd": None,
+            }
+            continue
+
+        qtys = [float(t["qty"]) for t in trades]
+        usds = [float(t["qty"]) * float(t["price"]) for t in trades]
+
+        qty_pcts = _percentiles(qtys)
+        usd_pcts = {f"usd_p{p}": round(v, 2) if v is not None else None
+                    for p, v in zip((50, 75, 90, 95, 99),
+                                    [_pct(sorted(usds), p) for p in (50, 75, 90, 95, 99)])}
+        result[sym] = {
+            "n_trades": len(trades),
+            **qty_pcts,
+            **usd_pcts,
+            "mean_qty": round(sum(qtys) / len(qtys), 8),
+            "mean_usd": round(sum(usds) / len(usds), 2),
+        }
+
+    return JSONResponse({"status": "ok", "ts": now, "window_s": window_s, "symbols": result})

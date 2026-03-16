@@ -2008,6 +2008,84 @@ async function renderLiqHeatmap() {
   el.innerHTML = html;
 }
 
+// ── Trade Size Percentiles ────────────────────────────────────────────────────
+async function renderTradePercentiles() {
+  const data = await apiFetch('/trade-percentiles?window_s=3600');
+  const el    = document.getElementById('trade-percentiles-content');
+  const badge = document.getElementById('trade-percentiles-badge');
+  if (!el) return;
+  if (!data) { setErr('trade-percentiles-content'); return; }
+
+  const syms = Object.keys(data.symbols || {});
+  if (syms.length === 0) {
+    el.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:8px 0">No trade data</div>';
+    return;
+  }
+
+  function fmtQty(v) {
+    if (v == null) return '<span style="color:var(--muted)">—</span>';
+    if (v >= 1e6) return (v / 1e6).toFixed(2) + 'M';
+    if (v >= 1e3) return (v / 1e3).toFixed(1) + 'k';
+    if (v < 0.01) return v.toFixed(6);
+    if (v < 1)    return v.toFixed(4);
+    return v.toFixed(2);
+  }
+
+  function fmtUsd(v) {
+    if (v == null) return '<span style="color:var(--muted)">—</span>';
+    if (v >= 1e6) return '$' + (v / 1e6).toFixed(1) + 'M';
+    if (v >= 1e3) return '$' + (v / 1e3).toFixed(1) + 'k';
+    return '$' + v.toFixed(2);
+  }
+
+  // Badge: total trades across all symbols
+  const totalTrades = syms.reduce((s, k) => s + (data.symbols[k].n_trades || 0), 0);
+  if (badge) {
+    badge.textContent = totalTrades.toLocaleString() + ' trades';
+    badge.className = 'card-badge badge-blue';
+    badge.style.display = 'inline-block';
+  }
+
+  const PCTS = [50, 75, 90, 95, 99];
+
+  let html = `
+    <table style="width:100%;border-collapse:collapse;font-size:11px">
+      <thead>
+        <tr style="color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.05em">
+          <th style="text-align:left;padding:2px 6px 6px 0;font-weight:400">symbol</th>
+          <th style="text-align:left;padding:2px 4px 6px;font-weight:400">n</th>`;
+  for (const p of PCTS) {
+    html += `<th style="text-align:right;padding:2px 4px 6px;font-weight:400">p${p}</th>`;
+  }
+  html += `<th style="text-align:right;padding:2px 0 6px 4px;font-weight:400">p99 $</th>`;
+  html += `</tr></thead><tbody>`;
+
+  for (const sym of syms) {
+    const e = data.symbols[sym];
+    const label = sym.replace('USDT', '');
+    const n = e.n_trades || 0;
+
+    html += `<tr style="border-top:1px solid var(--border)">`;
+    html += `<td style="padding:4px 6px 4px 0;font-weight:600;color:var(--fg)">${label}</td>`;
+    html += `<td style="padding:4px;color:var(--muted);font-size:10px">${n >= 1000 ? (n / 1000).toFixed(1) + 'k' : n}</td>`;
+
+    for (const p of PCTS) {
+      const v = e[`p${p}`];
+      // Colour gradient: p50=muted, p99=yellow
+      const intensity = PCTS.indexOf(p) / (PCTS.length - 1);
+      const col = intensity < 0.3 ? 'var(--fg)' : intensity < 0.7 ? 'var(--blue)' : 'var(--yellow)';
+      html += `<td style="text-align:right;padding:4px;font-family:monospace;color:${col}">${fmtQty(v)}</td>`;
+    }
+
+    html += `<td style="text-align:right;padding:4px 0 4px 4px;font-family:monospace;color:var(--muted);font-size:10px">${fmtUsd(e.usd_p99)}</td>`;
+    html += `</tr>`;
+  }
+
+  html += `</tbody></table>`;
+  html += `<div style="font-size:9px;color:var(--muted);margin-top:6px">qty = contract size · last 1h</div>`;
+  el.innerHTML = html;
+}
+
 // ── Top Movers ────────────────────────────────────────────────────────────────
 async function renderTopMovers() {
   const data = await apiFetch('/top-movers');
@@ -2115,6 +2193,7 @@ async function refresh() {
     safe(renderObWalls),
     safe(renderTopMovers),
     safe(renderLiqHeatmap),
+    safe(renderTradePercentiles),
   ]);
 }
 
