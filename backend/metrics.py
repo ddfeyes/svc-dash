@@ -5324,3 +5324,243 @@ async def compute_social_sentiment() -> dict:
         "zscore":      round(zscore, 4),
         "description": desc,
     }
+
+
+# ── Miner Reserve Indicator ───────────────────────────────────────────────────
+
+_MR_RESERVE_WINDOW: int = 30          # rolling days
+_MR_SPI_HIGH_THRESHOLD: float = 25.0  # SPI% above which is considered high pressure
+_MR_SPI_LOW_THRESHOLD: float = 5.0   # SPI% below which is considered low pressure
+_MR_TREND_THRESHOLD_PCT: float = 2.0  # % change needed to call accumulating/depleting
+_MR_BLOCKCHAIN_INFO: str = "https://api.blockchain.info/charts"
+
+
+def _mr_sell_pressure_index(daily_outflow: float, reserve: float) -> float:
+    """Sell Pressure Index = daily outflow / reserve × 100, clamped 0–100.
+
+    Higher SPI → miners selling more relative to their reserve → more sell pressure.
+    """
+    if reserve <= 0:
+        return 100.0 if daily_outflow > 0 else 0.0
+    return min(100.0, round(daily_outflow / reserve * 100.0, 4))
+
+
+def _mr_reserve_trend(reserve_history: list) -> str:
+    """Classify reserve direction over a list of reserve values.
+
+    Compares average of last third vs first third.
+    Returns 'accumulating' | 'depleting' | 'stable'.
+    """
+    n = len(reserve_history)
+    if n < 3:
+        return "stable"
+    third = max(1, n // 3)
+    early_avg = sum(reserve_history[:third]) / third
+    late_avg = sum(reserve_history[-third:]) / third
+    if early_avg <= 0:
+        return "stable"
+    pct_change = (late_avg - early_avg) / early_avg * 100.0
+    if pct_change > _MR_TREND_THRESHOLD_PCT:
+        return "accumulating"
+    if pct_change < -_MR_TREND_THRESHOLD_PCT:
+        return "depleting"
+    return "stable"
+
+
+def _mr_signal(reserve_trend: str, spi: float) -> str:
+    """Generate bullish / bearish / neutral signal.
+
+    Bullish: reserves accumulating AND low SPI (miners holding).
+    Bearish: reserves depleting OR high SPI (miners selling hard).
+    Neutral: otherwise.
+    """
+    if reserve_trend == "accumulating" and spi <= _MR_SPI_HIGH_THRESHOLD:
+        return "bullish"
+    if reserve_trend == "depleting" or spi >= _MR_SPI_HIGH_THRESHOLD:
+        return "bearish"
+    return "neutral"
+
+
+def _mr_outflow_zscore(current_outflow: float, history: list) -> float:
+    """Z-score of current outflow vs historical outflow values.
+
+    When std ≈ 0 but current ≠ mean, returns ±3 to preserve sign information.
+    """
+    if len(history) < 2:
+        return 0.0
+    n = len(history)
+    mean = sum(history) / n
+    variance = sum((v - mean) ** 2 for v in history) / n
+    std = variance ** 0.5
+    if std < 1.0:
+        diff = current_outflow - mean
+        if abs(diff) < 1.0:
+            return 0.0
+        return 3.0 if diff > 0 else -3.0
+    return round((current_outflow - mean) / std, 4)
+
+
+def _mr_rolling_reserve(revenues: list) -> float:
+    """Estimate miner reserve as sum of the last _MR_RESERVE_WINDOW daily revenues."""
+    if not revenues:
+        return 0.0
+    window = revenues[-_MR_RESERVE_WINDOW:]
+    return round(sum(window), 2)
+
+
+def _mr_depletion_rate(daily_outflow: float, reserve: float) -> float:
+    """Days until reserve depleted at current daily outflow rate.
+
+    Returns 0 when reserve is empty, large float when outflow is zero.
+    """
+    if reserve <= 0:
+        return 0.0
+    if daily_outflow <= 0:
+        return float("inf")
+    return round(reserve / daily_outflow, 2)
+
+
+def _mr_spi_percentile(current_spi: float, history_spis: list) -> float:
+    """Percentile rank of current SPI within historical SPI values (0–100)."""
+    if not history_spis:
+        return 50.0
+    below = sum(1 for v in history_spis if v <= current_spi)
+    return round(below / len(history_spis) * 100.0, 2)
+
+
+async def compute_miner_reserve() -> dict:
+    """Fetch BTC miner revenue history from blockchain.info and compute
+    reserve / sell-pressure metrics as a macro sell-pressure signal.
+
+    Proxy model:
+      - Daily miner revenue   ≈ maximum daily sell pressure (if all is sold)
+      - Rolling 30d reserve   ≈ accumulated revenue miners could sell
+      - SPI = daily / reserve × 100 → how fast reserve is being depleted
+      - Hash-rate trend       → miner profitability / network growth
+    """
+    import aiohttp
+    import datetime
+
+    params = "timespan=30days&sampled=true&metadata=false&cors=true&format=json"
+
+    async def _fetch(session: "aiohttp.ClientSession", endpoint: str) -> list:
+        url = f"{_MR_BLOCKCHAIN_INFO}/{endpoint}?{params}"
+        try:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=6)) as r:
+                if r.status != 200:
+                    return []
+                j = await r.json(content_type=None)
+                return j.get("values", [])
+        except Exception:
+            return []
+
+    async with aiohttp.ClientSession() as session:
+        revenue_vals, hashrate_vals = await asyncio.gather(
+            _fetch(session, "miners-revenue"),
+            _fetch(session, "hash-rate"),
+        )
+
+    # ── Parse revenue ─────────────────────────────────────────────────────────
+    # Each value: {"x": unix_ts, "y": float (USD)}
+    revenues: list = []
+    for v in revenue_vals:
+        try:
+            ts = int(v["x"])
+            usd = float(v["y"] or 0)
+            date = datetime.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
+            revenues.append({"ts": ts, "date": date, "revenue_usd": round(usd, 2)})
+        except (KeyError, TypeError, ValueError):
+            continue
+    revenues.sort(key=lambda x: x["ts"])
+
+    # Fallback synthetic data if API unavailable
+    if not revenues:
+        now_ts = int(time.time())
+        revenues = [
+            {
+                "ts": now_ts - (29 - i) * 86400,
+                "date": datetime.datetime.utcfromtimestamp(
+                    now_ts - (29 - i) * 86400
+                ).strftime("%Y-%m-%d"),
+                "revenue_usd": 20_000_000.0,
+            }
+            for i in range(30)
+        ]
+
+    # ── Parse hash rate ────────────────────────────────────────────────────────
+    hashrates: list = []
+    for v in hashrate_vals:
+        try:
+            hashrates.append(float(v["y"] or 0))
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    current_hashrate = hashrates[-1] if hashrates else 0.0
+    first_hashrate = hashrates[0] if hashrates else current_hashrate
+    hr_change_pct = (
+        (current_hashrate - first_hashrate) / first_hashrate * 100.0
+        if first_hashrate > 0
+        else 0.0
+    )
+
+    # ── Build rolling reserve and history ────────────────────────────────────
+    revenue_list = [r["revenue_usd"] for r in revenues]
+    history: list = []
+    for i, row in enumerate(revenues):
+        window = revenue_list[max(0, i - _MR_RESERVE_WINDOW + 1): i + 1]
+        reserve_proxy = _mr_rolling_reserve(window)
+        spi = _mr_sell_pressure_index(row["revenue_usd"], reserve_proxy)
+        history.append(
+            {
+                "date": row["date"],
+                "revenue_usd": row["revenue_usd"],
+                "reserve_proxy": reserve_proxy,
+                "spi": spi,
+            }
+        )
+
+    # ── Current metrics ───────────────────────────────────────────────────────
+    daily_outflow = revenues[-1]["revenue_usd"] if revenues else 0.0
+    miner_reserve = _mr_rolling_reserve(revenue_list)
+    spi = _mr_sell_pressure_index(daily_outflow, miner_reserve)
+
+    reserve_history = [h["reserve_proxy"] for h in history]
+    reserve_trend = _mr_reserve_trend(reserve_history)
+
+    outflow_history = [h["revenue_usd"] for h in history[:-1]]
+    outflow_zscore = _mr_outflow_zscore(daily_outflow, outflow_history)
+
+    spi_history = [h["spi"] for h in history[:-1]]
+    spi_pct = _mr_spi_percentile(spi, spi_history)
+
+    depletion_days = _mr_depletion_rate(daily_outflow, miner_reserve)
+    signal = _mr_signal(reserve_trend, spi)
+
+    # ── Description ───────────────────────────────────────────────────────────
+    def _fmt(v: float) -> str:
+        if v >= 1e9:
+            return f"${v / 1e9:.1f}B"
+        if v >= 1e6:
+            return f"${v / 1e6:.0f}M"
+        return f"${v:.0f}"
+
+    desc = (
+        f"{signal.capitalize()}: miners {reserve_trend} — "
+        f"SPI {spi:.1f}% at {spi_pct:.0f}th percentile"
+    )
+
+    return {
+        "source": "blockchain.info (BTC proxy)",
+        "miner_reserve_usd": miner_reserve,
+        "daily_outflow_usd": daily_outflow,
+        "sell_pressure_index": spi,
+        "spi_percentile": spi_pct,
+        "reserve_trend": reserve_trend,
+        "signal": signal,
+        "hash_rate": round(current_hashrate, 2),
+        "hash_rate_change_30d_pct": round(hr_change_pct, 4),
+        "outflow_zscore": outflow_zscore,
+        "depletion_rate_days": depletion_days if depletion_days != float("inf") else 9999.0,
+        "history": history[-30:],
+        "description": desc,
+    }

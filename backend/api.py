@@ -79,6 +79,12 @@ from metrics import (
     detect_ob_walls,
     compute_cross_asset_corr,
     compute_social_sentiment,
+    compute_session_volume_profile,
+    compute_order_flow_toxicity,
+    compute_momentum_divergence,
+    compute_spread_analysis,
+    compute_options_skew,
+    compute_miner_reserve,
 )
 
 router = APIRouter(prefix="/api")
@@ -5279,4 +5285,11 @@ async def cross_asset_corr_endpoint(
 async def social_sentiment_endpoint():
     """Social sentiment aggregator: keyword scoring + Reddit/Twitter volume proxy."""
     data = await compute_social_sentiment()
+    return JSONResponse(data)
+
+
+@router.get("/miner-reserve")
+async def miner_reserve_endpoint():
+    """BTC miner reserve indicator: sell pressure index, reserve trend, exchange flow signal."""
+    data = await compute_miner_reserve()
     return JSONResponse(data)

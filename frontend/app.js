@@ -2814,6 +2814,23 @@ async function refresh() {
     await Promise.all([safe(renderCrossAssetCorr)]);
     // Batch 16: social sentiment
     await Promise.all([safe(renderSocialSentiment)]);
+
+    // Batch 17: rv-iv card
+    await Promise.all([safe(renderRVIV)]);
+    await delay(200);
+
+    // Batch 18: session volume profile
+    await Promise.all([safe(renderSessionVolumeProfile)]);
+    // Batch 19: OFT
+    await Promise.all([safe(renderOrderFlowToxicity)]);
+    // Batch 20: momentum divergence
+    await Promise.all([safe(renderMomentumDivergence)]);
+    // Batch 21: spread analysis
+    await Promise.all([safe(renderMarketMicrostructure)]);
+    // Batch 22: options skew
+    await Promise.all([safe(renderOptionsSkew)]);
+    // Batch 23: miner reserve (global BTC signal, no symbol)
+    await Promise.all([safe(renderMinerReserve)]);
   } finally {
     _refreshRunning = false;
   }
@@ -2887,6 +2904,90 @@ async function renderSocialSentiment() {
     ${data.description ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${data.description}</div>` : ''}`;
 }
 
+// ── Miner Reserve Indicator ───────────────────────────────────────────────────
+async function renderMinerReserve() {
+  const data  = await apiFetch('/miner-reserve');
+  const el    = document.getElementById('miner-reserve-content');
+  const badge = document.getElementById('miner-reserve-badge');
+  if (!data || !el) return;
+
+  const signal = data.signal ?? 'neutral';
+  const trend  = data.reserve_trend ?? 'stable';
+  const spi    = data.sell_pressure_index ?? 0;
+  const spiPct = data.spi_percentile ?? 50;
+
+  const sigCol = signal === 'bullish' ? 'var(--green)'
+    : signal === 'bearish' ? 'var(--red)' : 'var(--muted)';
+
+  if (badge) {
+    badge.textContent = signal.toUpperCase();
+    badge.style.display = 'inline-block';
+    badge.style.color = sigCol;
+  }
+
+  const fmtUsd = v => {
+    const av = Math.abs(v || 0);
+    if (av >= 1e9) return '$' + (av / 1e9).toFixed(2) + 'B';
+    if (av >= 1e6) return '$' + (av / 1e6).toFixed(0) + 'M';
+    return '$' + av.toFixed(0);
+  };
+
+  const trendCol  = trend === 'accumulating' ? 'var(--green)'
+    : trend === 'depleting' ? 'var(--red)' : 'var(--muted)';
+  const trendIcon = trend === 'accumulating' ? '↑' : trend === 'depleting' ? '↓' : '→';
+
+  const hrChange = data.hash_rate_change_30d_pct ?? 0;
+  const hrCol    = hrChange > 0 ? 'var(--green)' : hrChange < 0 ? 'var(--red)' : 'var(--muted)';
+
+  // SPI gauge bar
+  const spiBar = `
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+      <span style="font-size:9px;color:var(--muted);width:20px">SPI</span>
+      <div style="flex:1;height:5px;background:var(--border);border-radius:3px">
+        <div style="width:${Math.min(spi, 100).toFixed(0)}%;height:100%;background:${spi > 25 ? 'var(--red)' : spi > 10 ? '#f59e0b' : 'var(--green)'};border-radius:3px"></div>
+      </div>
+      <span style="font-size:9px;color:var(--muted);width:36px;text-align:right">${spi.toFixed(1)}% <span style="font-size:8px">(${spiPct.toFixed(0)}p)</span></span>
+    </div>`;
+
+  // 30-day history sparkline
+  const hist = (data.history || []).slice(-30);
+  let sparkline = '';
+  if (hist.length >= 2) {
+    const spiVals = hist.map(h => h.spi ?? 0);
+    const sMax = Math.max(...spiVals, 0.01);
+    const W = 120, H = 22;
+    const pts = spiVals.map((s, i) => {
+      const x = (i / (spiVals.length - 1)) * W;
+      const y = H - (s / sMax) * H;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+    sparkline = `<div style="font-size:9px;color:var(--muted);margin-bottom:2px">30d SPI</div>
+    <svg width="${W}" height="${H}" style="display:block;margin-bottom:4px">
+      <polyline points="${pts}" fill="none" stroke="${sigCol}" stroke-width="1.5"/>
+    </svg>`;
+  }
+
+  const depDays = data.depletion_rate_days;
+  const depStr  = depDays >= 9999 ? '∞' : depDays.toFixed(0) + 'd';
+
+  el.innerHTML = `
+    <div style="font-size:10px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:4px">
+      <span>reserve: <b style="color:var(--fg)">${fmtUsd(data.miner_reserve_usd)}</b></span>
+      <span>outflow: <b style="color:var(--red)">${fmtUsd(data.daily_outflow_usd)}/d</b></span>
+    </div>
+    <div style="font-size:10px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:4px">
+      <span>trend: <b style="color:${trendCol}">${trendIcon} ${trend}</b></span>
+      <span>depletion: <b style="color:var(--fg)">${depStr}</b></span>
+      <span>z: <b style="color:var(--fg)">${(data.outflow_zscore ?? 0).toFixed(2)}</b></span>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-bottom:4px">
+      hashrate: <b style="color:${hrCol}">${(data.hash_rate ?? 0).toFixed(1)} EH/s (${hrChange >= 0 ? '+' : ''}${hrChange.toFixed(1)}% 30d)</b>
+    </div>
+    ${spiBar}
+    ${sparkline}
+    ${data.description ? `<div style="font-size:10px;color:var(--muted)">${data.description}</div>` : ''}`;
+}
+
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 async function init() {
   const safeInit = (fn) => { try { fn(); } catch(e) { console.warn('Chart init failed:', e.message); } };
@@ -2946,4 +3047,5 @@ async function init() {
     if (btn) btn.addEventListener('click', toggleTheme);
   });
 })();
+
 
