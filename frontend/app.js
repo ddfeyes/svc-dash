@@ -2555,6 +2555,8 @@ async function refresh() {
     await Promise.all([safe(renderLiqCascadeDetector), safe(renderLiquidationHeatmap)]);
     // Batch 31: options flow tracker
     await Promise.all([safe(refreshOptionsFlowTracker)]);
+    // Batch 32: whale wallet flow tracker (Wave 23)
+    await Promise.all([safe(renderWhaleFlow)]);
   } finally {
     _refreshRunning = false;
   }
@@ -3869,6 +3871,113 @@ async function renderPerpSpotBasis() {
   } catch (err) {
     console.error('Error rendering perp/spot basis:', err);
     document.getElementById('perp-spot-basis-content').innerHTML = 'Error';
+  }
+}
+
+
+// ── Whale Wallet Flow Tracker (Wave 23, Issue #117) ───────────────────────────
+async function renderWhaleFlow() {
+  const el    = document.getElementById('whale-flow-content');
+  const badge = document.getElementById('whale-flow-badge');
+  if (!el) return;
+
+  try {
+    const sym = activeSymbol || 'BTCUSDT';
+    const res = await fetch(`/api/whale-flow?symbol=${sym}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+
+    const {
+      whale_inflow_7d,
+      whale_outflow_7d,
+      net_flow_bps,
+      accumulation_score,
+      flow_signal,
+      trend_7d,
+      daily_buckets,
+    } = data;
+
+    // Signal colors
+    const signalColor = (s) =>
+      s === 'accumulating' ? '#27ae60' :
+      s === 'distributing' ? '#e74c3c' :
+      '#f39c12';
+
+    const signalLabel = (s) =>
+      s === 'accumulating' ? '▲ Accumulating' :
+      s === 'distributing' ? '▼ Distributing' :
+      '— Neutral';
+
+    // Accumulation badge color
+    const scoreColor = (sc) =>
+      sc >= 70 ? '#27ae60' :
+      sc <= 30 ? '#e74c3c' :
+      '#f39c12';
+
+    // Format large USD amounts
+    const fmtUsd = (v) => {
+      if (v >= 1e9) return `$${(v / 1e9).toFixed(2)}B`;
+      if (v >= 1e6) return `$${(v / 1e6).toFixed(2)}M`;
+      return `$${v.toLocaleString()}`;
+    };
+
+    // Build sparkline (7 bars: bucket[6]=oldest, bucket[0]=today)
+    const maxAbs = Math.max(...daily_buckets.map(b => Math.max(Math.abs(b.inflow), Math.abs(b.outflow))), 1);
+    const sparkBars = [...daily_buckets].reverse().map((b, i) => {
+      const inH = Math.round((b.inflow / maxAbs) * 20);
+      const outH = Math.round((b.outflow / maxAbs) * 20);
+      const label = i === 6 ? 'Today' : `${6 - i}d ago`;
+      return `
+        <div style="display:flex;flex-direction:column;align-items:center;width:${100 / 7}%;gap:1px;" title="${label}: in=${fmtUsd(b.inflow)} out=${fmtUsd(b.outflow)}">
+          <div style="width:8px;background:#27ae60;height:${inH}px;border-radius:2px 2px 0 0;"></div>
+          <div style="width:8px;background:#e74c3c;height:${outH}px;border-radius:0 0 2px 2px;"></div>
+        </div>`;
+    }).join('');
+
+    const trendArrow = trend_7d > 0 ? '↗' : trend_7d < 0 ? '↘' : '→';
+    const trendColor = trend_7d > 0 ? '#27ae60' : trend_7d < 0 ? '#e74c3c' : '#f39c12';
+
+    el.innerHTML = `
+      <div style="display:flex;align-items:flex-end;gap:1px;height:44px;padding:4px 0;margin-bottom:6px;">
+        ${sparkBars}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;font-size:10px;margin-bottom:4px;">
+        <div style="text-align:center;">
+          <div style="color:#27ae60;font-weight:bold;">${fmtUsd(whale_inflow_7d)}</div>
+          <div style="color:#888;font-size:9px;">Inflow 7d</div>
+        </div>
+        <div style="text-align:center;">
+          <div style="color:#e74c3c;font-weight:bold;">${fmtUsd(whale_outflow_7d)}</div>
+          <div style="color:#888;font-size:9px;">Outflow 7d</div>
+        </div>
+        <div style="text-align:center;">
+          <div style="color:#4a9eff;font-weight:bold;">${net_flow_bps.toFixed(0)} bps</div>
+          <div style="color:#888;font-size:9px;">Net Flow</div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;font-size:10px;">
+        <div>
+          <span style="color:#aaa;">Score: </span>
+          <span style="color:${scoreColor(accumulation_score)};font-weight:bold;">${accumulation_score.toFixed(0)}</span>
+          <span style="color:#555;font-size:9px;">/100</span>
+        </div>
+        <div style="color:${signalColor(flow_signal)};font-weight:bold;">${signalLabel(flow_signal)}</div>
+        <div style="color:${trendColor};">${trendArrow} trend</div>
+      </div>
+    `;
+
+    if (badge) {
+      badge.textContent = signalLabel(flow_signal);
+      badge.style.background = signalColor(flow_signal);
+      badge.style.color = '#fff';
+      badge.style.fontSize = '10px';
+      badge.style.padding = '2px 6px';
+      badge.style.display = 'inline-block';
+      badge.style.borderRadius = '3px';
+    }
+  } catch (err) {
+    console.error('Error rendering whale flow:', err);
+    if (el) el.innerHTML = 'Error';
   }
 }
 

@@ -5500,3 +5500,20 @@ async def market_regime_endpoint(symbol: Optional[str] = None):
     """
     data = await compute_market_regime_v2(symbol=symbol)
     return JSONResponse(data)
+
+
+@router.get("/whale-flow")
+@cache_result(ttl_seconds=60)
+async def whale_flow_endpoint(symbol: Optional[str] = None):
+    """
+    Whale Wallet Flow Tracker: simulate large wallet movements (>$1M notional).
+
+    Computes 7-day inflow/outflow, accumulation score, and flow signal.
+    Data is seeded-mock (deterministic per symbol, no live API). Cache TTL: 60s.
+
+    Query params:
+        symbol: trading pair (default: BTCUSDT)
+    """
+    from whale_flow import compute_whale_flow
+    data = compute_whale_flow(symbol)
+    return JSONResponse(data)
