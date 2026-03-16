@@ -5727,318 +5727,228 @@ async def compute_options_skew(
     }
 
 
-# ── Fear & Greed Composite Index ──────────────────────────────────────────────
+# ── Whale Alert Tracker ───────────────────────────────────────────────────────
 
-# Signal weights — must sum to 1.0
-_FG_WEIGHTS: dict = {
-    "funding":        0.20,
-    "oi_momentum":    0.15,
-    "price_deviation": 0.20,
-    "volatility":     0.15,
-    "taker_pressure": 0.20,
-    "liquidation":    0.10,
-}
-
-# Funding rate ±% that maps to score 0 / 100
-_FG_FUNDING_SCALE: float = 0.05   # ±5% funding → full fear/greed
-
-# OI % change that maps to score 0 / 100
-_FG_OI_SCALE: float = 20.0        # ±20% OI change → full fear/greed
-
-# Price deviation % that maps to score 0 / 100
-_FG_PRICE_DEV_SCALE: float = 10.0  # ±10% from SMA → full fear/greed
-
-# Volatility regime → score mapping
-_FG_VOL_SCORES: dict = {
-    "low":     70.0,   # low vol = complacency = mild greed
-    "mid":     50.0,
-    "high":    30.0,
-    "extreme": 15.0,
-}
-
-# Liquidation count → score (exponential decay towards 0)
-_FG_LIQ_SCALE: float = 10.0       # 10 liquidations → score ≈ 28
+_WHALE_MEDIUM_USD: float = 50_000.0
+_WHALE_HIGH_USD: float = 100_000.0
+_WHALE_CRITICAL_USD: float = 500_000.0
 
 
-def _fg_clamp(v: float, lo: float, hi: float) -> float:
-    """Clamp v to [lo, hi]."""
-    return max(lo, min(hi, v))
+def _wa_classify_size(usd: float) -> str:
+    """Return alert severity level for a single trade's USD value."""
+    if usd >= _WHALE_CRITICAL_USD:
+        return "critical"
+    if usd >= _WHALE_HIGH_USD:
+        return "high"
+    return "medium"
 
 
-def _fg_normalize(v: float, lo: float, hi: float) -> float:
-    """Map v from [lo, hi] to [0, 100], clamped."""
-    if lo == hi:
+def _wa_flow_score(buy_usd: float, sell_usd: float) -> float:
+    """Return 0–100 flow score; 100 = all buys, 0 = all sells, 50 = zero/equal."""
+    total = buy_usd + sell_usd
+    if total <= 0:
         return 50.0
-    return _fg_clamp((v - lo) / (hi - lo) * 100.0, 0.0, 100.0)
+    return round(buy_usd / total * 100, 2)
 
 
-def _fg_label(score: float) -> str:
-    """Return sentiment label from composite score."""
-    if score <= 20:
-        return "Extreme Fear"
-    if score <= 40:
-        return "Fear"
-    if score < 60:
-        return "Neutral"
-    if score < 80:
-        return "Greed"
-    return "Extreme Greed"
+def _wa_flow_direction(buy_usd: float, sell_usd: float) -> str:
+    """Return 'inflow' (buy-dominated ≥60%), 'outflow' (sell-dominated ≥60%), 'mixed'."""
+    score = _wa_flow_score(buy_usd, sell_usd)
+    if score >= 60.0:
+        return "inflow"
+    if score <= 40.0:
+        return "outflow"
+    return "mixed"
 
 
-def _fg_label_color(label: str) -> str:
-    """Return CSS color variable string for a sentiment label."""
-    return {
-        "Extreme Fear":  "#ef4444",
-        "Fear":          "#f97316",
-        "Neutral":       "#6b7280",
-        "Greed":         "#22c55e",
-        "Extreme Greed": "#16a34a",
-    }.get(label, "#6b7280")
+def _wa_cluster_trades(
+    trades: list,
+    cluster_window_s: float = 60.0,
+    price_proximity_pct: float = 0.5,
+) -> list:
+    """Group trades within time window and price proximity into clusters.
 
-
-def _fg_funding_score(avg_rate: float) -> float:
-    """Map average funding rate to 0-100 score.
-    Zero rate → 50; positive (longs pay) → greed (>50); negative → fear (<50).
+    Two consecutive trades are in the same cluster if:
+      - time between them ≤ cluster_window_s
+      - price difference from running cluster mean ≤ price_proximity_pct %
     """
-    return _fg_normalize(avg_rate, -_FG_FUNDING_SCALE, _FG_FUNDING_SCALE)
+    if not trades:
+        return []
+
+    sorted_trades = sorted(trades, key=lambda t: t["ts"])
+    clusters: list = []
+    current: list = [sorted_trades[0]]
+
+    for trade in sorted_trades[1:]:
+        prev_ts = current[-1]["ts"]
+        mid_price = sum(t["price"] for t in current) / len(current)
+        time_diff = trade["ts"] - prev_ts
+        price_diff_pct = (
+            abs(trade["price"] - mid_price) / mid_price * 100
+            if mid_price > 0
+            else 100.0
+        )
+        if time_diff <= cluster_window_s and price_diff_pct <= price_proximity_pct:
+            current.append(trade)
+        else:
+            clusters.append(current)
+            current = [trade]
+
+    clusters.append(current)
+    return clusters
 
 
-def _fg_oi_momentum_score(oi_change_pct: float) -> float:
-    """Map OI % change to 0-100. Rising OI → greed; falling → fear."""
-    return _fg_normalize(oi_change_pct, -_FG_OI_SCALE, _FG_OI_SCALE)
+def _wa_cluster_stats(cluster: list, cluster_id: int) -> dict:
+    """Compute aggregate statistics for a single trade cluster."""
+    buy_usd = sum(
+        t["price"] * t["qty"]
+        for t in cluster
+        if t.get("side", "") in ("buy", "Buy")
+    )
+    sell_usd = sum(
+        t["price"] * t["qty"]
+        for t in cluster
+        if t.get("side", "") not in ("buy", "Buy")
+    )
+    total_usd = buy_usd + sell_usd
+    prices = [t["price"] for t in cluster]
+    mid_price = sum(prices) / len(prices) if prices else 0.0
+    start_ts = cluster[0]["ts"]
+    end_ts = cluster[-1]["ts"]
+    dominant_side = "buy" if buy_usd >= sell_usd else "sell"
+
+    return {
+        "id": cluster_id,
+        "start_ts": round(start_ts, 3),
+        "end_ts": round(end_ts, 3),
+        "duration_s": round(end_ts - start_ts, 3),
+        "num_trades": len(cluster),
+        "total_usd": round(total_usd, 2),
+        "buy_usd": round(buy_usd, 2),
+        "sell_usd": round(sell_usd, 2),
+        "dominant_side": dominant_side,
+        "flow": _wa_flow_direction(buy_usd, sell_usd),
+        "flow_score": _wa_flow_score(buy_usd, sell_usd),
+        "mid_price": round(mid_price, 8),
+        "alert_level": _wa_classify_size(total_usd),
+    }
 
 
-def _fg_price_deviation_score(deviation_pct: float) -> float:
-    """Map price-vs-SMA deviation % to 0-100. Above SMA → greed; below → fear."""
-    return _fg_normalize(deviation_pct, -_FG_PRICE_DEV_SCALE, _FG_PRICE_DEV_SCALE)
+def _wa_exchange_flow_summary(cluster_stats: list) -> dict:
+    """Aggregate exchange flow direction across all clusters."""
+    if not cluster_stats:
+        return {
+            "direction": "mixed",
+            "inflow_usd": 0.0,
+            "outflow_usd": 0.0,
+            "net_usd": 0.0,
+            "net_direction": "neutral",
+            "dominant_side": "neutral",
+        }
+
+    inflow_usd = sum(c["buy_usd"] for c in cluster_stats)
+    outflow_usd = sum(c["sell_usd"] for c in cluster_stats)
+    net_usd = inflow_usd - outflow_usd
+    direction = _wa_flow_direction(inflow_usd, outflow_usd)
+    net_direction = (
+        "positive" if net_usd > 0 else ("negative" if net_usd < 0 else "neutral")
+    )
+    dominant_side = (
+        "buy" if inflow_usd > outflow_usd
+        else ("sell" if outflow_usd > inflow_usd else "neutral")
+    )
+
+    return {
+        "direction": direction,
+        "inflow_usd": round(inflow_usd, 2),
+        "outflow_usd": round(outflow_usd, 2),
+        "net_usd": round(net_usd, 2),
+        "net_direction": net_direction,
+        "dominant_side": dominant_side,
+    }
 
 
-def _fg_volatility_score(regime: str) -> float:
-    """Map volatility regime label to 0-100. Low vol → greed; extreme → fear."""
-    return float(_FG_VOL_SCORES.get(regime, 50.0))
-
-
-def _fg_taker_score(buy_ratio: float) -> float:
-    """Map taker buy ratio [0,1] to 0-100. All buys → 100; all sells → 0."""
-    return _fg_clamp(buy_ratio * 100.0, 0.0, 100.0)
-
-
-def _fg_liquidation_score(liq_count: int) -> float:
-    """Map recent liquidation count to 0-100. More liquidations → fear (lower score)."""
-    import math
-    if liq_count <= 0:
-        return 70.0
-    # Exponential decay: score = 70 * exp(-liq_count / scale)
-    score = 70.0 * math.exp(-liq_count / _FG_LIQ_SCALE)
-    return _fg_clamp(round(score, 2), 0.0, 100.0)
-
-
-def _fg_composite(scores: list, weights: list) -> float:
-    """Weighted average of signal scores, result clamped to [0, 100]."""
-    if not scores or not weights:
-        return 50.0
-    total = sum(s * w for s, w in zip(scores, weights))
-    return _fg_clamp(round(total, 2), 0.0, 100.0)
-
-
-async def compute_fear_greed(
+async def compute_whale_alerts(
     symbol: str,
     window_seconds: int = 3600,
+    min_usd: float = 50_000.0,
+    cluster_window_s: int = 60,
+    price_proximity_pct: float = 0.5,
 ) -> dict:
-    """Composite Fear & Greed Index from 6 on-chain / market signals.
+    """Whale alert tracker: large trade detection, clustering, and exchange flow.
 
-    Returns score 0-100, label, per-signal breakdown, historical snapshots, trend.
+    Returns:
+      alerts    — top-20 individual whale trades sorted by value_usd desc
+      clusters  — top-10 whale trade clusters sorted by total_usd desc
+      exchange_flow — aggregate inflow/outflow summary
+      summary   — counts, totals, and metadata
     """
-    import math
-    from storage import get_recent_trades, get_funding_history
+    from storage import get_recent_trades
 
-    now = time.time()
-    since = now - window_seconds
-    prev_since = now - window_seconds * 2
+    since = time.time() - window_seconds
+    all_trades = await get_recent_trades(symbol=symbol, since=since, limit=50_000)
 
-    # ── Fetch raw data ──────────────────────────────────────────────────────
-    trades_task = get_recent_trades(symbol=symbol, since=since, limit=50_000)
-    prev_trades_task = get_recent_trades(symbol=symbol, since=prev_since, limit=50_000)
-    funding_task = get_funding_history(limit=8, symbol=symbol)
+    # Filter to whale-sized trades and annotate
+    whale_trades: list = []
+    for t in all_trades:
+        usd = t["price"] * t["qty"]
+        if usd >= min_usd:
+            whale_trades.append(
+                {
+                    "ts": t["ts"],
+                    "price": t["price"],
+                    "qty": t["qty"],
+                    "side": t["side"],
+                    "value_usd": round(usd, 2),
+                    "level": _wa_classify_size(usd),
+                }
+            )
 
-    trades, prev_trades, funding_rows = await asyncio.gather(
-        trades_task, prev_trades_task, funding_task
-    )
+    # Top-20 alerts sorted by value desc
+    alerts = sorted(whale_trades, key=lambda t: t["value_usd"], reverse=True)[:20]
 
-    # ── 1. Funding rate sentiment ────────────────────────────────────────────
-    funding_rates: dict = {}
-    for row in (funding_rows or []):
-        ex = row.get("exchange", "")
-        if ex not in funding_rates:
-            funding_rates[ex] = row.get("rate", 0.0)
-    avg_funding = (
-        sum(funding_rates.values()) / len(funding_rates) if funding_rates else 0.0
-    )
-    funding_score = _fg_funding_score(avg_funding)
-
-    # ── 2. OI momentum ──────────────────────────────────────────────────────
-    # Proxy: compare total qty in recent half vs earlier half of window
-    mid_ts = since + (now - since) / 2
-    early_qty = sum(t["qty"] for t in trades if t["ts"] < mid_ts)
-    late_qty  = sum(t["qty"] for t in trades if t["ts"] >= mid_ts)
-    oi_change_pct = 0.0
-    if early_qty > 0:
-        oi_change_pct = (late_qty - early_qty) / early_qty * 100.0
-    oi_score = _fg_oi_momentum_score(oi_change_pct)
-
-    # ── 3. Price vs SMA deviation ────────────────────────────────────────────
-    prices = [t["price"] for t in trades if t.get("price", 0) > 0]
-    sma = sum(prices) / len(prices) if prices else 0.0
-    latest_price = prices[-1] if prices else 0.0  # trades are DESC order
-    # trades may be DESC; get last-inserted price
-    if trades:
-        latest_price = trades[0]["price"]
-    dev_pct = 0.0
-    if sma > 0:
-        dev_pct = (latest_price - sma) / sma * 100.0
-    price_dev_score = _fg_price_deviation_score(dev_pct)
-
-    # ── 4. Volatility regime ─────────────────────────────────────────────────
-    # Compute intra-window realized vol percentile as proxy for regime
-    regime = "mid"
-    if len(prices) >= 20:
-        import statistics
-        log_rets = [
-            math.log(prices[i] / prices[i + 1])
-            for i in range(min(len(prices) - 1, 100))
-            if prices[i] > 0 and prices[i + 1] > 0
-        ]
-        if log_rets:
-            realized_vol = statistics.stdev(log_rets) * (252 * 24 * 60) ** 0.5 * 100
-            if realized_vol < 50:
-                regime = "low"
-            elif realized_vol < 150:
-                regime = "mid"
-            elif realized_vol < 300:
-                regime = "high"
-            else:
-                regime = "extreme"
-    vol_score = _fg_volatility_score(regime)
-
-    # ── 5. Net taker buy pressure ────────────────────────────────────────────
-    buy_qty  = sum(t["qty"] for t in trades if t.get("side", "") in ("buy", "Buy"))
-    sell_qty = sum(t["qty"] for t in trades if t.get("side", "") not in ("buy", "Buy"))
-    total_qty = buy_qty + sell_qty
-    buy_ratio = buy_qty / total_qty if total_qty > 0 else 0.5
-    taker_score = _fg_taker_score(buy_ratio)
-
-    # ── 6. Liquidation pressure ──────────────────────────────────────────────
-    # Proxy: count trades with high qty variance (sharp single-candle events)
-    liq_count = 0
-    if prices:
-        median_qty = sorted(t["qty"] for t in trades)[len(trades) // 2]
-        liq_count = sum(
-            1 for t in trades if t["qty"] > median_qty * 10
-        )
-    liq_score = _fg_liquidation_score(liq_count)
-
-    # ── Composite score ──────────────────────────────────────────────────────
-    signal_keys = list(_FG_WEIGHTS.keys())
-    signal_scores_list = [
-        funding_score, oi_score, price_dev_score,
-        vol_score, taker_score, liq_score,
+    # Cluster whale trades by time + price proximity
+    raw_clusters = _wa_cluster_trades(whale_trades, cluster_window_s, price_proximity_pct)
+    cluster_stats = [
+        _wa_cluster_stats(c, i + 1)
+        for i, c in enumerate(raw_clusters)
+        if c and sum(t["price"] * t["qty"] for t in c) >= min_usd
     ]
-    weights_list = [_FG_WEIGHTS[k] for k in signal_keys]
-    composite = _fg_composite(signal_scores_list, weights_list)
-    label = _fg_label(composite)
+    cluster_stats.sort(key=lambda c: c["total_usd"], reverse=True)
 
-    # ── Previous period composite ────────────────────────────────────────────
-    prev_prices = [t["price"] for t in prev_trades if t.get("price", 0) > 0]
-    prev_sma = sum(prev_prices) / len(prev_prices) if prev_prices else sma
-    prev_latest = prev_trades[0]["price"] if prev_trades else latest_price
-    prev_dev_pct = (prev_latest - prev_sma) / prev_sma * 100.0 if prev_sma > 0 else 0.0
-    prev_buy_qty  = sum(t["qty"] for t in prev_trades if t.get("side", "") in ("buy", "Buy"))
-    prev_sell_qty = sum(t["qty"] for t in prev_trades if t.get("side", "") not in ("buy", "Buy"))
-    prev_total_qty = prev_buy_qty + prev_sell_qty
-    prev_buy_ratio = prev_buy_qty / prev_total_qty if prev_total_qty > 0 else 0.5
-    prev_composite = _fg_composite(
-        [
-            _fg_funding_score(avg_funding),
-            _fg_oi_momentum_score(0.0),
-            _fg_price_deviation_score(prev_dev_pct),
-            vol_score,
-            _fg_taker_score(prev_buy_ratio),
-            _fg_liquidation_score(0),
-        ],
-        weights_list,
+    exchange_flow = _wa_exchange_flow_summary(cluster_stats)
+
+    total_whale_usd = sum(t["value_usd"] for t in whale_trades)
+    buy_whale_usd = sum(
+        t["value_usd"] for t in whale_trades if t["side"] in ("buy", "Buy")
     )
-    label_prev = _fg_label(prev_composite)
-    delta = round(composite - prev_composite, 2)
-    trend = "rising" if delta > 2 else ("falling" if delta < -2 else "stable")
+    sell_whale_usd = sum(
+        t["value_usd"] for t in whale_trades if t["side"] not in ("buy", "Buy")
+    )
+    level_counts: dict = {"medium": 0, "high": 0, "critical": 0}
+    for t in whale_trades:
+        level_counts[t["level"]] = level_counts.get(t["level"], 0) + 1
 
-    # ── History snapshots ────────────────────────────────────────────────────
-    history = [
-        {"ts": round(prev_since + window_seconds, 3), "score": prev_composite, "label": label_prev},
-        {"ts": round(now, 3), "score": composite, "label": label},
-    ]
-
-    # ── Description ──────────────────────────────────────────────────────────
-    desc_parts = []
-    if funding_score > 65:
-        desc_parts.append("positive funding")
-    elif funding_score < 35:
-        desc_parts.append("negative funding")
-    if taker_score > 65:
-        desc_parts.append("strong buy pressure")
-    elif taker_score < 35:
-        desc_parts.append("strong sell pressure")
-    if vol_score < 35:
-        desc_parts.append("high volatility fear")
-    if liq_count > 5:
-        desc_parts.append("liquidation pressure")
-    desc_suffix = ", ".join(desc_parts) if desc_parts else "mixed signals"
-    description = f"{label}: {desc_suffix}"
+    largest_cluster_usd = max(
+        (c["total_usd"] for c in cluster_stats), default=0.0
+    )
 
     return {
         "symbol": symbol,
-        "score": composite,
-        "label": label,
-        "label_prev": label_prev,
-        "delta": delta,
-        "trend": trend,
-        "signals": {
-            "funding": {
-                "score": funding_score,
-                "weight": _FG_WEIGHTS["funding"],
-                "raw": round(avg_funding, 6),
-                "label": _fg_label(funding_score),
-            },
-            "oi_momentum": {
-                "score": oi_score,
-                "weight": _FG_WEIGHTS["oi_momentum"],
-                "raw": round(oi_change_pct, 4),
-                "label": _fg_label(oi_score),
-            },
-            "price_deviation": {
-                "score": price_dev_score,
-                "weight": _FG_WEIGHTS["price_deviation"],
-                "raw": round(dev_pct, 4),
-                "label": _fg_label(price_dev_score),
-            },
-            "volatility": {
-                "score": vol_score,
-                "weight": _FG_WEIGHTS["volatility"],
-                "raw": regime,
-                "label": _fg_label(vol_score),
-            },
-            "taker_pressure": {
-                "score": taker_score,
-                "weight": _FG_WEIGHTS["taker_pressure"],
-                "raw": round(buy_ratio, 4),
-                "label": _fg_label(taker_score),
-            },
-            "liquidation": {
-                "score": liq_score,
-                "weight": _FG_WEIGHTS["liquidation"],
-                "raw": liq_count,
-                "label": _fg_label(liq_score),
-            },
+        "alerts": alerts,
+        "clusters": cluster_stats[:10],
+        "exchange_flow": exchange_flow,
+        "summary": {
+            "total_whale_usd": round(total_whale_usd, 2),
+            "buy_whale_usd": round(buy_whale_usd, 2),
+            "sell_whale_usd": round(sell_whale_usd, 2),
+            "cluster_count": len(cluster_stats),
+            "alert_count": len(whale_trades),
+            "critical_count": level_counts.get("critical", 0),
+            "high_count": level_counts.get("high", 0),
+            "medium_count": level_counts.get("medium", 0),
+            "largest_cluster_usd": round(largest_cluster_usd, 2),
+            "window_seconds": window_seconds,
+            "min_usd_threshold": min_usd,
         },
-        "history": history,
-        "description": description,
     }

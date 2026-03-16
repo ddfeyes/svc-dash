@@ -82,7 +82,7 @@ from metrics import (
     compute_momentum_divergence,
     compute_spread_analysis,
     compute_options_skew,
-    compute_fear_greed,
+    compute_whale_alerts,
 )
 
 router = APIRouter(prefix="/api")
@@ -5444,12 +5444,19 @@ async def options_skew_endpoint(
     return JSONResponse(data)
 
 
-@router.get("/fear-greed")
-async def fear_greed_endpoint(
+@router.get("/whale-alerts")
+async def whale_alerts_endpoint(
     symbol: Optional[str] = Query(None),
     window: int = Query(3600, ge=300, le=86400),
+    min_usd: float = Query(50_000, ge=10_000),
+    cluster_window: int = Query(60, ge=10, le=300),
 ):
-    """Composite Fear & Greed Index from funding, OI momentum, price deviation, volatility, taker pressure, liquidations."""
+    """Whale alert tracker: large transaction detection, clustering, exchange flow."""
     target = symbol or get_symbols()[0]
-    data = await compute_fear_greed(symbol=target, window_seconds=window)
+    data = await compute_whale_alerts(
+        symbol=target,
+        window_seconds=window,
+        min_usd=min_usd,
+        cluster_window_s=cluster_window,
+    )
     return JSONResponse(data)

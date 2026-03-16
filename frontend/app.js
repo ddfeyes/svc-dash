@@ -23383,158 +23383,109 @@ async function refresh() {
     await Promise.all([safe(renderMomentumDivergence)]);
     // Batch 15: spread analysis
     await Promise.all([safe(renderMarketMicrostructure)]);
-    // Batch 16: options skew
-    await Promise.all([safe(renderOptionsSkew)]);
-    // Batch 17: fear & greed composite
-    await Promise.all([safe(renderFearGreed)]);
+    // Batch 18: whale alerts
+    await Promise.all([safe(renderWhaleAlerts)]);
   } finally {
     _refreshRunning = false;
   }
 }
 
-// ── Options Skew ─────────────────────────────────────────────────────────────
-async function renderOptionsSkew() {
-  const sym   = encodeURIComponent(activeSymbol);
-  const el    = document.getElementById('options-skew-content');
-  const badge = document.getElementById('options-skew-badge');
-  if (!el) return;
-  const data = await apiFetch(`/options-skew?symbol=${sym}`);
-  if (!data) { setErr('options-skew-content'); return; }
-
-  const dir     = data.skew_direction || 'neutral';
-  const rr_pct  = data.rr_percentile  ?? 50;
-  const fly_pct = data.fly_percentile ?? 50;
-  const slope   = data.term_slope     || 'flat';
-  const windows = data.windows        || [];
-  const rr_map  = data.rr_25d         || {};
-  const fly_map = data.fly_25d        || {};
-  const iv_map  = data.atm_iv         || {};
-
-  const dirCls   = dir === 'put_heavy' ? 'badge-red' : dir === 'call_heavy' ? 'badge-green' : 'badge-blue';
-  const dirLabel = dir === 'put_heavy' ? 'PUT HEAVY' : dir === 'call_heavy' ? 'CALL HEAVY' : 'NEUTRAL';
-  if (badge) {
-    badge.textContent = dirLabel;
-    badge.className = `card-badge ${dirCls}`;
-    badge.style.display = '';
-  }
-
-  const fmtRR  = v => v == null ? '—' : (v >= 0 ? '+' : '') + (v * 100).toFixed(3) + '%';
-  const fmtIV  = v => v == null ? '—' : (v * 100).toFixed(2) + '%';
-  const rrCol  = v => v == null ? 'var(--muted)' : v > 0.0005 ? 'var(--green)' : v < -0.0005 ? 'var(--red)' : 'var(--muted)';
-  const slopeCol = slope === 'normal' ? 'var(--green)' : slope === 'inverted' ? 'var(--red)' : 'var(--muted)';
-
-  const termRows = windows.map(w => {
-    const rr = rr_map[w], fly = fly_map[w], iv = iv_map[w];
-    return `<tr>
-      <td style="font-size:9px;color:var(--muted);padding-right:8px">${w}</td>
-      <td style="font-size:10px;color:${rrCol(rr)};font-weight:600;text-align:right;padding-right:6px">${fmtRR(rr)}</td>
-      <td style="font-size:10px;color:var(--blue);text-align:right;padding-right:6px">${fmtRR(fly)}</td>
-      <td style="font-size:10px;color:var(--muted);text-align:right">${fmtIV(iv)}</td>
-    </tr>`;
-  }).join('');
-
-  el.innerHTML = `
-    <div style="font-size:10px;color:var(--muted);margin-bottom:4px;display:flex;gap:10px">
-      <span>RR pct: <b style="color:var(--fg)">${rr_pct.toFixed(1)}%</b></span>
-      <span>Fly pct: <b style="color:var(--fg)">${fly_pct.toFixed(1)}%</b></span>
-      <span>slope: <b style="color:${slopeCol}">${slope}</b></span>
-    </div>
-    <table style="border-collapse:collapse;width:100%">
-      <thead><tr>
-        <th style="font-size:9px;color:var(--muted);text-align:left">win</th>
-        <th style="font-size:9px;color:var(--muted);text-align:right;padding-right:6px">RR</th>
-        <th style="font-size:9px;color:var(--muted);text-align:right;padding-right:6px">Fly</th>
-        <th style="font-size:9px;color:var(--muted);text-align:right">ATM IV</th>
-      </tr></thead>
-      <tbody>${termRows}</tbody>
-    </table>
-    ${data.description ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${data.description}</div>` : ''}`;
-}
-
-// ── Fear & Greed Composite ────────────────────────────────────────────────────
-async function renderFearGreed() {
-  const sym  = encodeURIComponent(activeSymbol);
-  const data = await apiFetch(`/fear-greed?symbol=${sym}`);
-  const el   = document.getElementById('fear-greed-content');
-  const badge = document.getElementById('fear-greed-badge');
+// ── Whale Alerts ──────────────────────────────────────────────────────────────
+async function renderWhaleAlerts() {
+  const sym    = encodeURIComponent(activeSymbol);
+  const data   = await apiFetch(`/whale-alerts?symbol=${sym}`);
+  const el     = document.getElementById('whale-alert-content');
+  const badge  = document.getElementById('whale-alert-badge');
   if (!data || !el) return;
 
-  const score  = data.score ?? 50;
-  const label  = data.label ?? 'Neutral';
-  const delta  = data.delta ?? 0;
-  const trend  = data.trend ?? 'stable';
-  const sigs   = data.signals || {};
+  const ef  = data.exchange_flow || {};
+  const sum = data.summary || {};
+  const alerts   = data.alerts || [];
+  const clusters = data.clusters || [];
 
-  // Label color
-  const labelColors = {
-    'Extreme Fear':  '#ef4444',
-    'Fear':          '#f97316',
-    'Neutral':       '#6b7280',
-    'Greed':         '#22c55e',
-    'Extreme Greed': '#16a34a',
-  };
-  const col = labelColors[label] || '#6b7280';
-
+  // Direction badge
+  const dirColor = ef.direction === 'inflow'
+    ? 'var(--green)'
+    : ef.direction === 'outflow'
+      ? 'var(--red)'
+      : 'var(--muted)';
+  const dirLabel = ef.direction === 'inflow' ? 'INFLOW' : ef.direction === 'outflow' ? 'OUTFLOW' : 'MIXED';
   if (badge) {
-    badge.textContent = label.toUpperCase();
+    badge.textContent = dirLabel;
     badge.style.display = 'inline-block';
-    badge.style.color = col;
+    badge.style.color = dirColor;
   }
 
-  // Gauge bar (0-100 → red to green)
-  const gaugeCol = score < 25 ? '#ef4444' : score < 45 ? '#f97316' : score < 55 ? '#6b7280' : score < 75 ? '#22c55e' : '#16a34a';
-  const gaugeBar = `
-    <div style="position:relative;height:8px;background:var(--border);border-radius:4px;margin-bottom:6px">
-      <div style="width:${score.toFixed(1)}%;height:100%;background:${gaugeCol};border-radius:4px;transition:width 0.3s"></div>
-      <div style="position:absolute;top:50%;left:${score.toFixed(1)}%;transform:translate(-50%,-50%);width:10px;height:10px;background:var(--bg);border:2px solid ${gaugeCol};border-radius:50%"></div>
+  if (!alerts.length) {
+    el.innerHTML = `<div style="color:var(--muted);font-size:11px;padding:4px 0">No whale trades in window</div>`;
+    return;
+  }
+
+  // Flow summary bar
+  const buyPct  = sum.total_whale_usd > 0 ? sum.buy_whale_usd / sum.total_whale_usd * 100 : 50;
+  const sellPct = 100 - buyPct;
+  const flowBar = `
+    <div style="display:flex;height:6px;border-radius:3px;overflow:hidden;margin-bottom:6px">
+      <div style="width:${buyPct.toFixed(1)}%;background:var(--green)"></div>
+      <div style="width:${sellPct.toFixed(1)}%;background:var(--red)"></div>
     </div>`;
 
-  const trendArrow = trend === 'rising' ? '↑' : trend === 'falling' ? '↓' : '→';
-  const trendCol   = trend === 'rising' ? 'var(--green)' : trend === 'falling' ? 'var(--red)' : 'var(--muted)';
-
-  // Signal breakdown rows
-  const sigOrder = ['funding', 'oi_momentum', 'price_deviation', 'volatility', 'taker_pressure', 'liquidation'];
-  const sigNames = {
-    funding: 'Funding', oi_momentum: 'OI Mom', price_deviation: 'Price Dev',
-    volatility: 'Volatility', taker_pressure: 'Taker', liquidation: 'Liq',
+  const fmtUsd = v => {
+    if (v >= 1e6) return '$' + (v / 1e6).toFixed(2) + 'M';
+    if (v >= 1e3) return '$' + (v / 1e3).toFixed(1) + 'k';
+    return '$' + v.toFixed(0);
   };
-  const sigRows = sigOrder.map(k => {
-    const s = sigs[k];
-    if (!s) return '';
-    const sc = s.score ?? 50;
-    const barCol = sc < 40 ? 'var(--red)' : sc > 60 ? 'var(--green)' : 'var(--muted)';
-    const wPct = (s.weight * 100).toFixed(0);
+
+  // Level badge colors
+  const lvlColor = l => l === 'critical' ? 'var(--red)' : l === 'high' ? '#f59e0b' : 'var(--muted)';
+
+  // Top alerts table
+  const alertRows = alerts.slice(0, 8).map(a => {
+    const side = a.side.toLowerCase();
+    const col  = side === 'buy' ? 'var(--green)' : 'var(--red)';
+    const ts   = new Date(a.ts * 1000).toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false});
     return `<tr>
-      <td style="font-size:9px;color:var(--muted);padding-right:6px;white-space:nowrap">${sigNames[k]}</td>
-      <td style="padding-right:4px;width:60px">
-        <div style="height:4px;background:var(--border);border-radius:2px">
-          <div style="width:${sc.toFixed(0)}%;height:100%;background:${barCol};border-radius:2px"></div>
-        </div>
-      </td>
-      <td style="font-size:9px;color:${barCol};text-align:right;padding-right:4px;font-weight:600">${sc.toFixed(0)}</td>
-      <td style="font-size:9px;color:var(--muted);text-align:right">${wPct}%</td>
+      <td style="font-size:9px;color:var(--muted);padding-right:4px">${ts}</td>
+      <td style="font-size:9px;color:${col};padding-right:4px">${side.toUpperCase()}</td>
+      <td style="font-size:9px;color:var(--fg);text-align:right;padding-right:4px">${fmtUsd(a.value_usd)}</td>
+      <td style="font-size:9px;color:${lvlColor(a.level)};text-align:right">${a.level.toUpperCase()}</td>
+    </tr>`;
+  }).join('');
+
+  // Cluster summary rows
+  const clusterRows = clusters.slice(0, 4).map(c => {
+    const flowCol = c.flow === 'inflow' ? 'var(--green)' : c.flow === 'outflow' ? 'var(--red)' : 'var(--muted)';
+    return `<tr>
+      <td style="font-size:9px;color:var(--muted);padding-right:4px">${c.num_trades}tx</td>
+      <td style="font-size:9px;color:var(--fg);text-align:right;padding-right:4px">${fmtUsd(c.total_usd)}</td>
+      <td style="font-size:9px;color:${flowCol};text-align:right;padding-right:4px">${c.flow.toUpperCase()}</td>
+      <td style="font-size:9px;color:var(--muted);text-align:right">${c.flow_score.toFixed(0)}%</td>
     </tr>`;
   }).join('');
 
   el.innerHTML = `
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-      <span style="font-size:22px;font-weight:700;color:${col}">${score.toFixed(0)}</span>
-      <div>
-        <div style="font-size:12px;font-weight:600;color:${col}">${label}</div>
-        <div style="font-size:10px;color:${trendCol}">${trendArrow} ${delta >= 0 ? '+' : ''}${delta.toFixed(1)} vs prev</div>
-      </div>
+    <div style="font-size:10px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:4px">
+      <span>buy: <b style="color:var(--green)">${fmtUsd(sum.buy_whale_usd || 0)}</b></span>
+      <span>sell: <b style="color:var(--red)">${fmtUsd(sum.sell_whale_usd || 0)}</b></span>
+      <span>net: <b style="color:${ef.net_direction === 'positive' ? 'var(--green)' : ef.net_direction === 'negative' ? 'var(--red)' : 'var(--muted)'}">${fmtUsd(Math.abs(ef.net_usd || 0))}</b></span>
+      <span>clusters: <b style="color:var(--fg)">${sum.cluster_count || 0}</b></span>
     </div>
-    ${gaugeBar}
-    <table style="border-collapse:collapse;width:100%;margin-top:2px">
-      <thead><tr>
-        <th style="font-size:9px;color:var(--muted);text-align:left">signal</th>
-        <th style="font-size:9px;color:var(--muted);padding-right:4px"></th>
-        <th style="font-size:9px;color:var(--muted);text-align:right;padding-right:4px">score</th>
-        <th style="font-size:9px;color:var(--muted);text-align:right">wt</th>
-      </tr></thead>
-      <tbody>${sigRows}</tbody>
+    ${flowBar}
+    <div style="font-size:10px;font-weight:600;color:var(--muted);margin-bottom:2px">Top Trades</div>
+    <table style="border-collapse:collapse;width:100%;margin-bottom:6px">
+      <tbody>${alertRows}</tbody>
     </table>
-    ${data.description ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${data.description}</div>` : ''}`;
+    ${clusters.length > 0 ? `
+    <div style="font-size:10px;font-weight:600;color:var(--muted);margin-bottom:2px">Clusters</div>
+    <table style="border-collapse:collapse;width:100%">
+      <thead><tr>
+        <th style="font-size:9px;color:var(--muted);text-align:left">size</th>
+        <th style="font-size:9px;color:var(--muted);text-align:right;padding-right:4px">total</th>
+        <th style="font-size:9px;color:var(--muted);text-align:right;padding-right:4px">flow</th>
+        <th style="font-size:9px;color:var(--muted);text-align:right">score</th>
+      </tr></thead>
+      <tbody>${clusterRows}</tbody>
+    </table>` : ''}`;
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
@@ -23598,12 +23549,12 @@ async function init() {
 })();
 
 document.addEventListener('DOMContentLoaded', init);
-}
-}
-}
-}
 
 
+}
+}
+}
+}
 }
 }
 }
