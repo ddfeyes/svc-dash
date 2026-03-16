@@ -3068,6 +3068,10 @@ async function init() {
 })();
 
 // ── Bootstrap on Load ──────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', init);
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', init);
+} else {
+  init();
+}
 
 

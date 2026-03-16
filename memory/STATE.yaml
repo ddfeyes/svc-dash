@@ -1,0 +1,52 @@
+# Lain State
+last_updated: "2026-03-16T10:50:00Z"
+
+tasks:
+  - id: svc-dash
+    goal: "Fix dashboard rendering — 80 PRs were merged but only 8/54 cards worked"
+    status: in_progress
+    repo: "https://github.com/ddfeyes/svc-dash"
+    running: true
+
+    current_work:
+      - "Removed 17 broken cards (404 + 500 endpoints)"
+      - "Fixed DOMContentLoaded trigger so init() actually runs"
+      - "46 cards now visible, 9 working, 37 need JS debugging"
+      - "All endpoints work, problem is JS rendering logic"
+
+    working_cards: 9
+      - Price Chart (OHLCV)
+      - Open Interest (OI)
+      - CVD
+      - Funding Rate
+      - Bid-Ask Spread
+      - Aggressor Ratio
+      - Volume Profile
+      - Market Regime (timeline chart)
+      - (Whale Clustering or similar)
+
+    broken_cards: 37
+      - All have working endpoints
+      - Problem: render() functions have wrong selectors, wrong data parsing, or incorrect HTML structure
+      - Examples: Funding Momentum, Trade Tape, Volume Imbalance, Alerts, VPIN, Liquidation Heatmap, Top Movers, etc.
+      
+    blocker: "AO cannot write working JS without testing in browser. Need systematic debugging per card."
+    next_step: "Fix render functions one by one: test endpoint → check HTML → verify JS logic"
+
+    stats:
+      cards_total: 46
+      cards_working: 9
+      cards_broken: 37
+      endpoints_tested: 51
+      endpoints_working: 41
+      endpoints_broken: 10 (removed from frontend)
+      prs_merged_today: 80
+      tests: 1995 passing
+
+notes:
+  - "Major insight: AO was stamping out PRs blind — no visual verification"
+  - "Pipeline had no 'does this card actually show data in browser?' check"
+  - "Commit f023449: removed 17 broken cards (404 + 500 endpoints)"
+  - "Commit 7d18a4c: added init() trigger"
+  - "Now dashing actually loads! But 37 cards need fixing"
+  - "Remaining work: debug each broken render function"

@@ -71,6 +71,7 @@ from metrics import (
     compute_token_velocity_nvt,
     compute_layer2_metrics,
     compute_nft_market_pulse,
+    compute_cross_chain_bridge_monitor,
 )
 
 router = APIRouter(prefix="/api")
@@ -5318,4 +5319,11 @@ async def nft_market_pulse_endpoint():
 async def holder_distribution_endpoint():
     """Holder distribution: wallet bands, Gini, HHI, whale accumulation delta."""
     data = await compute_holder_distribution_card()
+    return JSONResponse(data)
+
+
+@router.get("/cross-chain-bridge-monitor")
+async def cross_chain_bridge_monitor_endpoint():
+    """Cross-chain bridge monitor: flows across ETH/BSC/ARB/OP/BASE, top bridges, anomaly detection."""
+    data = await compute_cross_chain_bridge_monitor()
     return JSONResponse(data)
