@@ -12,6 +12,7 @@ from storage import (
     get_funding_history,
     get_recent_trades,
     get_orderbook_snapshots_for_heatmap,
+    get_ohlcv,
 )
 
 
@@ -8536,4 +8537,245 @@ async def compute_cross_chain_bridge_monitor() -> dict:
         "total_volume_24h": total_volume,
         "zscore":           float(zscore),
         "description":      desc,
+    }
+
+
+# ── Market Regime Classifier ───────────────────────────────────────────────────
+
+_regime_classifier_state: dict = {}  # per-symbol: {regime, start_ts, history}
+
+
+def _rsi(closes: List[float], period: int = 14) -> float:
+    """Compute RSI from a list of close prices using SMA of gains/losses."""
+    if len(closes) < period + 1:
+        return 50.0
+    gains: List[float] = []
+    losses: List[float] = []
+    for i in range(1, len(closes)):
+        d = closes[i] - closes[i - 1]
+        gains.append(max(d, 0.0))
+        losses.append(max(-d, 0.0))
+    avg_gain = sum(gains[-period:]) / period
+    avg_loss = sum(losses[-period:]) / period
+    if avg_loss == 0:
+        return 99.0
+    rs = avg_gain / avg_loss
+    return round(100.0 - 100.0 / (1.0 + rs), 2)
+
+
+def _compute_rsi_signal(ohlcv_data: List[Dict]) -> float:
+    """RSI signal: >60 = bullish (+), <40 = bearish (-), else 0. Clamped to [-1, 1]."""
+    if not ohlcv_data:
+        return 0.0
+    closes = [c["close"] for c in ohlcv_data if c.get("close") is not None]
+    if len(closes) < 2:
+        return 0.0
+    rsi_val = _rsi(closes)
+    if rsi_val > 60:
+        return round(min(1.0, (rsi_val - 60.0) / 40.0), 4)
+    elif rsi_val < 40:
+        return round(max(-1.0, -(40.0 - rsi_val) / 40.0), 4)
+    return 0.0
+
+
+def _compute_funding_signal(funding_data: List[Dict]) -> float:
+    """Funding signal: positive rate = bull bias, negative = bear bias. Clamped [-1, 1]."""
+    if not funding_data:
+        return 0.0
+    recent = funding_data[-10:] if len(funding_data) >= 10 else funding_data
+    avg_rate = sum(r.get("rate", 0.0) or 0.0 for r in recent) / len(recent)
+    # Scale: 0.01% (0.0001) → signal 1.0
+    signal = avg_rate * 10000.0
+    return round(max(-1.0, min(1.0, signal)), 4)
+
+
+def _compute_cvd_signal(cvd_data: List[Dict]) -> float:
+    """CVD signal: positive cumulative delta = buying pressure. Clamped [-1, 1]."""
+    if not cvd_data:
+        return 0.0
+    total_abs = sum(abs(p.get("delta", 0.0) or 0.0) for p in cvd_data)
+    if total_abs == 0.0:
+        return 0.0
+    final_cvd = cvd_data[-1].get("cvd", 0.0) or 0.0
+    signal = final_cvd / total_abs
+    return round(max(-1.0, min(1.0, signal)), 4)
+
+
+def _compute_oi_signal(oi_data: List[Dict], ohlcv_data: List[Dict]) -> float:
+    """OI signal: rising OI + price up = bull, falling OI = bear. Clamped [-1, 1]."""
+    if len(oi_data) < 2:
+        return 0.0
+
+    from collections import defaultdict
+    exchange_oi: dict = defaultdict(list)
+    for row in oi_data:
+        exchange_oi[row["exchange"]].append(row["oi_value"])
+
+    oi_changes: List[float] = []
+    for vals in exchange_oi.values():
+        if len(vals) >= 2 and vals[0] and vals[0] > 0:
+            pct = (vals[-1] - vals[0]) / vals[0]
+            oi_changes.append(pct)
+
+    if not oi_changes:
+        return 0.0
+
+    avg_oi_change = sum(oi_changes) / len(oi_changes)
+
+    # Price trend from OHLCV
+    price_up = False
+    if len(ohlcv_data) >= 2:
+        p_old = ohlcv_data[0].get("close") or 0.0
+        p_new = ohlcv_data[-1].get("close") or 0.0
+        price_up = bool(p_old) and p_new > p_old * 1.001
+
+    oi_rising = avg_oi_change > 0.001
+    oi_falling = avg_oi_change < -0.001
+
+    if oi_rising and price_up:
+        return round(min(1.0, avg_oi_change * 20.0), 4)
+    elif oi_falling:
+        return round(max(-1.0, avg_oi_change * 20.0), 4)
+    return 0.0
+
+
+def _compute_dominance_signal(symbol: Optional[str], ohlcv_data: List[Dict]) -> float:
+    """
+    BTC dominance proxy: if the alt is outperforming vs its recent average,
+    signals alt-season bull. BTC symbols get 0 (they are the denominator).
+    Clamped [-1, 1].
+    """
+    if not symbol or "BTC" in symbol:
+        return 0.0
+    if len(ohlcv_data) < 5:
+        return 0.0
+    recent = ohlcv_data[-5:]
+    p_old = recent[0].get("close") or 0.0
+    p_new = recent[-1].get("close") or 0.0
+    if not p_old:
+        return 0.0
+    alt_momentum = (p_new - p_old) / p_old
+    # 1% move = 0.5 signal
+    signal = alt_momentum * 50.0
+    return round(max(-1.0, min(1.0, signal)), 4)
+
+
+def _classify_regime(score: float, signals: Dict[str, float]) -> str:
+    """Map weighted score + signals to one of five regime labels."""
+    if score > 0.4:
+        return "bull"
+    elif score < -0.4:
+        return "bear"
+    # Near zero — check CVD and OI for subtle regimes
+    cvd = signals.get("cvd", 0.0)
+    oi = signals.get("oi", 0.0)
+    if abs(score) < 0.15:
+        if cvd > 0.1 and oi >= 0:
+            return "accumulation"
+        elif cvd < -0.1 and oi <= 0:
+            return "distribution"
+        return "ranging"
+    # Moderate score
+    return "bull" if score > 0 else "bear"
+
+
+def _classify_regime_signal(score: float) -> str:
+    """Map weighted score to strong/weak signal label."""
+    if score > 0.6:
+        return "strong_bull"
+    elif score > 0.2:
+        return "bull"
+    elif score < -0.6:
+        return "strong_bear"
+    elif score < -0.2:
+        return "bear"
+    return "neutral"
+
+
+async def compute_market_regime_classifier(symbol: str = None) -> Dict:
+    """
+    Composite market regime classifier.
+
+    Fuses five signals — RSI, OI, funding, CVD, BTC dominance proxy — via
+    weighted voting to produce a regime label and confidence score.
+
+    Returns:
+        regime: bull | bear | accumulation | distribution | ranging
+        regime_confidence: float 0-1
+        duration_hours: hours the current regime has lasted
+        signal_weights: per-signal weighted contributions
+        regime_history: last ≤10 regime transitions [{ts, from, to}]
+        regime_signal: strong_bull | bull | neutral | bear | strong_bear
+        signals: raw per-signal values in [-1, 1]
+    """
+    now = time.time()
+    sym_key = symbol or "__default__"
+
+    # Gather all signals concurrently
+    cvd_data, oi_data, funding_data, ohlcv_data = await asyncio.gather(
+        compute_cvd(window_seconds=3600, symbol=symbol),
+        get_oi_history(limit=200, since=now - 3600, symbol=symbol),
+        get_funding_history(limit=50, since=now - 3600, symbol=symbol),
+        get_ohlcv(interval_seconds=60, window_seconds=1800, symbol=symbol),
+    )
+
+    # Per-signal raw values in [-1, 1]
+    rsi_sig = _compute_rsi_signal(ohlcv_data)
+    oi_sig = _compute_oi_signal(oi_data, ohlcv_data)
+    funding_sig = _compute_funding_signal(funding_data)
+    cvd_sig = _compute_cvd_signal(cvd_data)
+    dom_sig = _compute_dominance_signal(symbol, ohlcv_data)
+
+    WEIGHTS = {"rsi": 0.25, "oi": 0.20, "funding": 0.15, "cvd": 0.25, "dominance": 0.15}
+    raw_signals = {
+        "rsi": rsi_sig,
+        "oi": oi_sig,
+        "funding": funding_sig,
+        "cvd": cvd_sig,
+        "dominance": dom_sig,
+    }
+
+    signal_weights = {k: round(v * WEIGHTS[k], 4) for k, v in raw_signals.items()}
+    weighted_score = sum(signal_weights.values())
+
+    regime = _classify_regime(weighted_score, raw_signals)
+    regime_signal = _classify_regime_signal(weighted_score)
+
+    # Confidence: scaled from absolute score, boosted by signal agreement
+    agreement = sum(
+        1 for v in raw_signals.values() if (v > 0) == (weighted_score > 0) and v != 0.0
+    )
+    n_nonzero = sum(1 for v in raw_signals.values() if v != 0.0)
+    agreement_factor = (agreement / n_nonzero) if n_nonzero > 0 else 0.5
+    regime_confidence = round(
+        min(0.99, max(0.05, abs(weighted_score) * agreement_factor + 0.3)), 3
+    )
+
+    # Duration and history tracking
+    global _regime_classifier_state
+    if sym_key not in _regime_classifier_state:
+        _regime_classifier_state[sym_key] = {
+            "regime": regime,
+            "start_ts": now,
+            "history": [],
+        }
+
+    state = _regime_classifier_state[sym_key]
+    if state["regime"] != regime:
+        state["history"].append({"ts": now, "from": state["regime"], "to": regime})
+        state["regime"] = regime
+        state["start_ts"] = now
+    if len(state["history"]) > 10:
+        state["history"] = state["history"][-10:]
+
+    duration_hours = round((now - state["start_ts"]) / 3600.0, 4)
+
+    return {
+        "regime": regime,
+        "regime_confidence": regime_confidence,
+        "duration_hours": duration_hours,
+        "signal_weights": signal_weights,
+        "regime_history": list(state["history"]),
+        "regime_signal": regime_signal,
+        "signals": {k: round(v, 4) for k, v in raw_signals.items()},
     }

@@ -46,6 +46,7 @@ from metrics import (
     detect_funding_extreme,
     detect_cvd_momentum,
     compute_market_regime,
+    compute_market_regime_classifier,
     detect_accumulation_distribution_pattern,
     detect_cross_symbol_oi_spike,
     detect_funding_arbitrage,
@@ -860,6 +861,17 @@ async def market_regime_all():
     syms = get_symbols()
     results = await asyncio.gather(*[compute_market_regime(symbol=s) for s in syms])
     return {"status": "ok", "symbols": {s: r for s, r in zip(syms, results)}}
+
+
+@router.get("/market-regime-classifier")
+async def market_regime_classifier_endpoint(
+    symbol: Optional[str] = None,
+):
+    """Composite market regime classifier: bull/bear/accumulation/distribution/ranging."""
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await compute_market_regime_classifier(symbol=target)
+    return {"status": "ok", "symbol": target, **data}
 
 
 @router.get("/volume-spike")
