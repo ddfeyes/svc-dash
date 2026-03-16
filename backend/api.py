@@ -71,8 +71,7 @@ from metrics import (
     compute_token_velocity_nvt,
     compute_layer2_metrics,
     compute_nft_market_pulse,
-    compute_dex_vs_cex_flow,
-    compute_token_unlock_calendar,
+    compute_cross_chain_arb_monitor,
 )
 
 router = APIRouter(prefix="/api")
@@ -5326,12 +5325,9 @@ async def holder_distribution_endpoint():
     return JSONResponse(data)
 
 
-@router.get("/dex-vs-cex-flow")
-async def dex_vs_cex_flow_endpoint(symbol: Optional[str] = None, window_hours: int = 24):
-    """DEX vs CEX volume divergence: Uniswap/Curve/Balancer vs CEX spot, Z-score, price discovery."""
-    data = await compute_dex_vs_cex_flow(symbol=symbol, window_hours=window_hours)
-@router.get("/token-unlock-calendar")
-async def token_unlock_calendar_endpoint():
-    """Token unlock calendar: top 20 tokens by unlock size in 90-day window with sell pressure risk score."""
-    data = await compute_token_unlock_calendar()
+@router.get("/cross-chain-arb")
+async def cross_chain_arb_endpoint():
+    """Cross-chain arbitrage monitor: BTC/ETH/USDC price spread across ETH/BSC/ARB/OP/BASE.
+    Returns fee-adjusted profit signal, best bridge route, and arb frequency heatmap."""
+    data = await compute_cross_chain_arb_monitor()
     return JSONResponse(data)

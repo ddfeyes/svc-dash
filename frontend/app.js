@@ -2512,13 +2512,8 @@ async function refresh() {
     await Promise.all([safe(renderTokenVelocityNvt)]);
     // Batch 16: derivatives heatmap
         // Batch 25: holder distribution card
-        // Batch 26: cross-chain bridge monitor
-    await Promise.all([safe(renderCrossChainBridge)]);
-    // Batch 27: DEX vs CEX flow
-    await Promise.all([safe(refreshDexVsCexFlow)]);
-    await Promise.all([safe(refreshOptionsFlowTracker)]);
-    // Batch 27: token unlock calendar
-    await Promise.all([safe(renderTokenUnlockCalendar)]);
+        // Batch 26: cross-chain arb monitor
+    await Promise.all([safe(refreshCrossChainArb)]);
   } finally {
     _refreshRunning = false;
   }
@@ -3077,89 +3072,91 @@ async function renderNftMarketPulse() {
   `;
 }
 
-// ── Token Unlock Calendar ──────────────────────────────────────────────────────
-async function renderTokenUnlockCalendar() {
-  const el    = document.getElementById('token-unlock-content');
-  const badge = document.getElementById('token-unlock-badge');
+// ── Cross-Chain Arb Monitor ────────────────────────────────────────────────────
+async function refreshCrossChainArb() {
+  const el    = document.getElementById('cross-chain-arb-content');
+  const badge = document.getElementById('cross-chain-arb-badge');
   if (!el) return;
-  const data = await apiFetch('/token-unlock-calendar');
-  if (!data) { setErr('token-unlock-content'); return; }
+  const data = await apiFetch('/cross-chain-arb');
+  if (!data) { setErr('cross-chain-arb-content'); return; }
 
-  const events  = data.events  || [];
-  const summary = data.summary || {};
+  const signal  = data.signal            || 'low';
+  const opps    = data.top_opportunities || [];
+  const assets  = data.assets            || {};
+  const hmap    = data.arb_frequency_heatmap || {};
+  const bestOpp = data.best_opportunity;
 
-  if (!events.length) {
-    el.innerHTML = '<div class="text-muted" style="font-size:11px;">No unlock events in window</div>';
-    return;
-  }
-
-  const critCount = summary.critical_count || 0;
   if (badge) {
-    if (critCount > 0) {
-      badge.textContent = `${critCount} CRITICAL`;
-      badge.className = 'card-badge badge-red';
-      badge.style.display = 'inline-block';
-    } else {
-      badge.style.display = 'none';
-    }
+    const label = signal === 'high_opportunity' ? 'HIGH' : signal === 'moderate' ? 'MOD' : 'LOW';
+    const cls   = signal === 'high_opportunity' ? 'badge-green' : signal === 'moderate' ? 'badge-yellow' : 'badge-red';
+    badge.textContent   = label;
+    badge.className     = 'card-badge ' + cls;
+    badge.style.display = 'inline-block';
   }
 
-  const riskColor = label => {
-    if (label === 'critical') return '#ef4444';
-    if (label === 'high')     return '#f97316';
-    if (label === 'medium')   return '#eab308';
-    return 'var(--muted)';
-  };
+  // Price grid: assets × chains
+  const CHAINS = ['ETH', 'BSC', 'ARB', 'OP', 'BASE'];
+  let gridHtml = '<table style="width:100%;font-size:10px;border-collapse:collapse;margin-bottom:6px">'
+    + '<tr><th style="text-align:left;padding:2px 4px;color:var(--muted)">Asset</th>'
+    + CHAINS.map(c => `<th style="padding:2px 4px;color:var(--muted)">${c}</th>`).join('')
+    + '<th style="padding:2px 4px;color:var(--muted)">Spread</th></tr>';
+  for (const [asset, aData] of Object.entries(assets)) {
+    const chains   = aData.chains     || {};
+    const bestSprd = aData.best_spread || {};
+    const profCol  = bestSprd.is_profitable ? 'var(--green)' : 'var(--muted)';
+    const buyChain = bestSprd.buy_chain;
+    const sellChain= bestSprd.sell_chain;
+    gridHtml += `<tr><td style="font-weight:bold;padding:2px 4px">${asset}</td>`;
+    for (const c of CHAINS) {
+      const p   = chains[c] ? chains[c].price : null;
+      const col = c === sellChain ? 'var(--green)' : c === buyChain ? 'var(--red)' : '';
+      const fmt = p == null ? '—'
+        : asset === 'USDC' ? p.toFixed(4)
+        : p >= 1000 ? (p / 1000).toFixed(2) + 'k'
+        : p.toFixed(2);
+      gridHtml += `<td style="padding:2px 4px${col ? ';color:' + col : ''}">${fmt}</td>`;
+    }
+    const sp = bestSprd.spread_bps != null ? bestSprd.spread_bps.toFixed(1) + ' bps' : '—';
+    gridHtml += `<td style="padding:2px 4px;color:${profCol};font-weight:600">${sp}</td></tr>`;
+  }
+  gridHtml += '</table>';
 
-  const avgLabel = summary.avg_risk_score >= 75 ? 'critical'
-                 : summary.avg_risk_score >= 50 ? 'high'
-                 : summary.avg_risk_score >= 25 ? 'medium' : 'low';
+  // Top opportunities
+  let oppsHtml = '';
+  for (const op of opps.slice(0, 3)) {
+    const profBps = op.fee_adjusted_profit_bps ?? 0;
+    const profCol = op.is_profitable ? 'var(--green)' : 'var(--red)';
+    const profUsd = op.fee_adjusted_profit_usd != null ? '$' + op.fee_adjusted_profit_usd.toFixed(2) : '—';
+    oppsHtml += `<div style="margin:3px 0;padding:3px 6px;background:rgba(255,255,255,0.04);border-radius:4px;font-size:10px;display:flex;gap:6px;align-items:center">
+      <b style="min-width:32px">${op.asset}</b>
+      <span style="color:var(--muted)">${op.bridge_route}</span>
+      <span style="color:${profCol};margin-left:auto">${profBps.toFixed(1)} bps · ${profUsd}</span>
+    </div>`;
+  }
 
-  const rows = events.map(e => {
-    const impactCol = e.historical_price_impact_pct < 0 ? '#ef4444' : '#22c55e';
-    const impactStr = (e.historical_price_impact_pct > 0 ? '+' : '') + e.historical_price_impact_pct.toFixed(1) + '%';
-    return `<tr style="border-top:1px solid var(--border)">
-      <td style="font-size:10px;padding:3px 0;color:var(--fg);font-weight:600">${e.symbol}</td>
-      <td style="font-size:10px;padding:3px 2px;color:var(--muted);text-align:right">${e.unlock_date}</td>
-      <td style="font-size:10px;padding:3px 2px;color:var(--muted);text-align:right">${e.pct_circulating_supply.toFixed(1)}%</td>
-      <td style="font-size:10px;padding:3px 2px;color:var(--muted);text-align:right">${e.unlock_usd_formatted}</td>
-      <td style="font-size:10px;padding:3px 2px;color:${impactCol};text-align:right">${impactStr}</td>
-      <td style="font-size:10px;padding:3px 0;color:${riskColor(e.risk_label)};text-align:right;font-weight:600">${e.risk_score.toFixed(0)}</td>
-    </tr>`;
-  }).join('');
+  // Arb frequency heatmap (24 hours × 5 chain pairs)
+  const hmapCounts = hmap.counts || [];
+  const hmapPairs  = hmap.chain_pairs || [];
+  let hmapHtml = '<div style="margin-top:6px"><div style="font-size:9px;color:var(--muted);margin-bottom:3px">Arb Freq Heatmap · 24h · ' + hmapPairs.slice(0,3).join(' ') + '</div>'
+    + '<div style="display:flex;gap:1px">';
+  for (let h = 0; h < 24; h++) {
+    const row   = hmapCounts[h] || [];
+    const total = row.reduce((a, b) => a + b, 0);
+    const alpha = Math.min(total / 30, 1) * 0.8 + 0.1;
+    const bg    = `rgba(38,166,154,${alpha.toFixed(2)})`;
+    const lbl   = h % 6 === 0 ? String(h) : '';
+    hmapHtml += `<div title="${h}h: ${total}" style="flex:1;height:18px;background:${bg};border-radius:2px;display:flex;align-items:center;justify-content:center;font-size:7px;color:#fff">${lbl}</div>`;
+  }
+  hmapHtml += '</div></div>';
 
-  el.innerHTML = `
-    <div style="display:flex;gap:16px;margin-bottom:8px;flex-wrap:wrap">
-      <div>
-        <div style="font-size:9px;color:var(--muted)">TOTAL UNLOCKING</div>
-        <div style="font-size:13px;font-weight:600;color:var(--fg)">${fmtUSD(summary.total_unlock_usd)}</div>
-      </div>
-      <div>
-        <div style="font-size:9px;color:var(--muted)">AVG RISK</div>
-        <div style="font-size:13px;font-weight:600;color:${riskColor(avgLabel)}">${(summary.avg_risk_score ?? 0).toFixed(1)}</div>
-      </div>
-      <div>
-        <div style="font-size:9px;color:var(--muted)">HIGHEST RISK</div>
-        <div style="font-size:13px;font-weight:600;color:#ef4444">${summary.highest_risk_token ?? '—'}</div>
-      </div>
-      <div>
-        <div style="font-size:9px;color:var(--muted)">CRITICAL</div>
-        <div style="font-size:13px;font-weight:600;color:#ef4444">${summary.critical_count ?? 0}</div>
-      </div>
-    </div>
-    <table style="width:100%;border-collapse:collapse">
-      <thead><tr>
-        <th style="font-size:8px;color:var(--muted);text-align:left;font-weight:500;padding-bottom:4px">TOKEN</th>
-        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500;padding-bottom:4px">DATE</th>
-        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500;padding-bottom:4px">%SUPPLY</th>
-        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500;padding-bottom:4px">SIZE</th>
-        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500;padding-bottom:4px">HIST Δ</th>
-        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500;padding-bottom:4px">RISK</th>
-      </tr></thead>
-      <tbody>${rows}</tbody>
-    </table>
-    <div style="font-size:9px;color:var(--muted);margin-top:4px">${data.description ?? ''}</div>
-  `;
+  const bestRoute = bestOpp ? bestOpp.route : '—';
+  const bestBps   = bestOpp ? bestOpp.fee_adjusted_profit_bps.toFixed(1) + ' bps' : '—';
+  const footer = `<div style="font-size:9px;color:var(--muted);margin-top:4px">best: <b style="color:var(--green)">${bestBps}</b> · ${bestRoute}</div>`;
+
+  el.innerHTML = gridHtml
+    + (oppsHtml ? `<div style="margin-bottom:4px"><div style="font-size:10px;font-weight:600;margin-bottom:2px">Top Opportunities</div>${oppsHtml}</div>` : '')
+    + hmapHtml
+    + footer;
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
