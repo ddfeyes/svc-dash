@@ -9030,52 +9030,6 @@ async def compute_dex_vs_cex_flow(
     }
 
 
-async def compute_options_flow_tracker() -> dict:
-    """
-    Options flow tracker: aggregate large trades (>$100k notional) across
-    Deribit/Lyra, call/put skew by expiry, unusual flow alerts,
-    positioning heat map by strike.
-    Uses simulated data — no real API calls needed.
-    """
-    trades = _oft_simulate_large_trades()
-    skew_by_expiry = _oft_compute_skew_by_expiry(trades)
-    unusual_alerts = _oft_detect_unusual_flow(trades)
-    strike_heatmap = _oft_build_strike_heatmap(trades)
-
-    total_call_vol = sum(v["call_volume_usd"] for v in skew_by_expiry.values())
-    total_put_vol = sum(v["put_volume_usd"] for v in skew_by_expiry.values())
-    overall_ratio = _oft_skew_ratio(total_call_vol, total_put_vol)
-    overall_signal = _oft_skew_signal(total_call_vol, total_put_vol)
-    dominant_exp = _oft_dominant_expiry(skew_by_expiry)
-    skew_pct = _oft_skew_percentile(overall_ratio)
-
-    desc = (
-        f"{overall_signal.capitalize()} options flow: "
-        f"${total_call_vol/1e6:.1f}M calls vs ${total_put_vol/1e6:.1f}M puts "
-        f"(ratio {overall_ratio:.2f}x), {len(unusual_alerts)} unusual alerts, "
-        f"dominant expiry {dominant_exp}"
-    )
-
-    return {
-        "large_trades": trades[:20],  # top 20 most recent
-        "skew_by_expiry": skew_by_expiry,
-        "unusual_flow_alerts": unusual_alerts[:10],
-        "strike_heatmap": strike_heatmap,
-        "summary": {
-            "total_call_volume_usd": round(total_call_vol, 2),
-            "total_put_volume_usd": round(total_put_vol, 2),
-            "overall_skew_ratio": overall_ratio,
-            "net_flow_direction": overall_signal,
-            "dominant_expiry": dominant_exp,
-            "skew_percentile": skew_pct,
-            "unusual_activity_count": len(unusual_alerts),
-            "total_trades_analyzed": len(trades),
-            "exchanges": list({t["exchange"] for t in trades}),
-        },
-        "description": desc,
-    }
-
-
 def _oft_skew_label(call_ratio: float) -> str:
     """Classify call/put skew direction from call ratio (0-1)."""
     if call_ratio >= 0.60:
@@ -9328,6 +9282,189 @@ def _oft_build_strike_heatmap(trades: list) -> dict:
         v["put_notional_usd"] = round(v["put_notional_usd"], 2)
     return hm
 
+async def compute_cross_market_correlation() -> dict:
+    """Rolling correlation matrix for BTC/ETH/SOL/BNB with lead-lag analysis."""
+    import random
+    from datetime import datetime, timezone
+
+    random.seed(20260319)
+
+    ASSETS = ["BTC", "ETH", "SOL", "BNB"]
+    WINDOWS_DAYS = {"7d": 7, "30d": 30, "90d": 90}
+
+    def _gen_corr_matrix(seed_offset: int) -> dict:
+        """Generate a symmetric correlation matrix for ASSETS."""
+        random.seed(20260319 + seed_offset)
+        matrix: dict = {a: {} for a in ASSETS}
+        for i, a in enumerate(ASSETS):
+            for j, b in enumerate(ASSETS):
+                if i == j:
+                    continue
+                if j < i:
+                    matrix[a][b] = matrix[b][a]
+                else:
+                    # Crypto assets tend to be positively correlated (0.4–0.95)
+                    base = 0.4 + random.random() * 0.55
+                    # Small random noise to make windows differ
+                    val = round(min(1.0, max(-1.0, base)), 4)
+                    matrix[a][b] = float(val)
+        return matrix
+
+    # Main 90-day correlation matrix (default view)
+    correlation_matrix = _gen_corr_matrix(0)
+
+    # Per-window matrices with slight variation
+    windows: dict = {}
+    for w, days in WINDOWS_DAYS.items():
+        random.seed(20260319 + days)
+        w_matrix: dict = {a: {} for a in ASSETS}
+        for i, a in enumerate(ASSETS):
+            for j, b in enumerate(ASSETS):
+                if i == j:
+                    continue
+                if j < i:
+                    w_matrix[a][b] = w_matrix[b][a]
+                else:
+                    base_val = correlation_matrix[a][b]
+                    noise = (random.random() - 0.5) * 0.15  # ±0.075
+                    val = round(min(1.0, max(-1.0, base_val + noise)), 4)
+                    w_matrix[a][b] = float(val)
+        windows[w] = w_matrix
+
+    # Lead-lag analysis: BTC is dominant leader in crypto
+    random.seed(20260319 + 999)
+    leader = "BTC"
+    lag_hours = {}
+    for a in ASSETS:
+        if a != leader:
+            lag_hours[a] = round(1 + random.random() * 5, 1)
+
+    lead_lag = {
+        "leader": leader,
+        "lag_hours": lag_hours,
+    }
+    dominant_leader = leader
+
+    # Breakdown detection: check if any 30d correlation dropped below 0.3
+    # compared to 90d (sustained divergence)
+    breakdown_assets = []
+    for a in ASSETS:
+        for b in ASSETS:
+            if a != b and b in windows["30d"].get(a, {}):
+                diff = windows["90d"][a][b] - windows["30d"][a][b]
+                if diff > 0.35:  # correlation breakdown threshold
+                    if a not in breakdown_assets:
+                        breakdown_assets.append(a)
+
+    breakdown_detected = len(breakdown_assets) > 0
+
+    return {
+        "correlation_matrix": correlation_matrix,
+        "windows": windows,
+        "lead_lag": lead_lag,
+        "dominant_leader": dominant_leader,
+        "breakdown_detected": breakdown_detected,
+        "breakdown_assets": breakdown_assets,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+async def compute_order_flow_toxicity() -> Dict:
+    """
+    VPIN: Volume-Synchronized Probability of Informed Trading.
+
+    Partitions volume into equal-sized buckets and estimates the fraction of
+    informed trading using buy/sell volume imbalance per bucket.
+
+    VPIN = (1/n) * sum(|V_buy_i - V_sell_i|) / V_bucket
+    """
+    import random
+    from datetime import datetime, timezone
+
+    rng = random.Random(20260320)
+
+    # ── Parameters ────────────────────────────────────────────────────────────
+    N_BUCKETS = 50
+    BUCKET_VOLUME = 1000.0  # each bucket has ~1000 units of volume
+
+    # ── Generate synthetic volume buckets ────────────────────────────────────
+    volume_buckets: List[Dict] = []
+    total_buy_vol = 0.0
+    total_sell_vol = 0.0
+
+    for i in range(N_BUCKETS):
+        # buy fraction per bucket: slightly biased to model real order flow
+        buy_frac = rng.gauss(0.52, 0.12)
+        buy_frac = max(0.05, min(0.95, buy_frac))
+        sell_frac = 1.0 - buy_frac
+
+        buy_vol = round(BUCKET_VOLUME * buy_frac, 4)
+        sell_vol = round(BUCKET_VOLUME * sell_frac, 4)
+        imbalance = round(abs(buy_vol - sell_vol) / BUCKET_VOLUME, 6)
+
+        total_buy_vol += buy_vol
+        total_sell_vol += sell_vol
+
+        volume_buckets.append({
+            "bucket_id": i,
+            "buy_vol": buy_vol,
+            "sell_vol": sell_vol,
+            "imbalance": imbalance,
+        })
+
+    # ── VPIN score (0–1) ─────────────────────────────────────────────────────
+    vpin_score = round(
+        sum(b["imbalance"] for b in volume_buckets) / N_BUCKETS,
+        6,
+    )
+
+    # ── Rolling VPIN (50 values, sliding window of 10 buckets) ───────────────
+    window = 10
+    rolling_vpin_50: List[float] = []
+    for i in range(N_BUCKETS):
+        start = max(0, i - window + 1)
+        window_buckets = volume_buckets[start: i + 1]
+        wvpin = round(
+            sum(b["imbalance"] for b in window_buckets) / len(window_buckets),
+            6,
+        )
+        rolling_vpin_50.append(wvpin)
+
+    # ── Buy / sell volume fractions across all buckets ────────────────────────
+    total_vol = total_buy_vol + total_sell_vol
+    buy_volume_frac = round(total_buy_vol / total_vol, 6)
+    sell_volume_frac = round(total_sell_vol / total_vol, 6)
+
+    # ── Toxicity level classification ─────────────────────────────────────────
+    if vpin_score < 0.25:
+        toxicity_level = "low"
+    elif vpin_score < 0.50:
+        toxicity_level = "medium"
+    elif vpin_score < 0.75:
+        toxicity_level = "high"
+    else:
+        toxicity_level = "extreme"
+
+    # ── Informed trading signal ───────────────────────────────────────────────
+    if vpin_score >= 0.50:
+        informed_trading_signal = "high_toxicity"
+    elif vpin_score <= 0.20:
+        informed_trading_signal = "low_toxicity"
+    else:
+        informed_trading_signal = "neutral"
+
+    return {
+        "vpin_score": vpin_score,
+        "buy_volume_frac": buy_volume_frac,
+        "sell_volume_frac": sell_volume_frac,
+        "toxicity_level": toxicity_level,
+        "volume_buckets": volume_buckets,
+        "informed_trading_signal": informed_trading_signal,
+        "rolling_vpin_50": rolling_vpin_50,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 async def compute_volatility_regime_detector() -> Dict:
     """Classify market volatility regime into low/medium/high/extreme.
 
@@ -9406,9 +9543,13 @@ async def compute_volatility_regime_detector() -> Dict:
 
 def _smi_compute_components(rng) -> dict:
     """Compute sub-components of the Smart Money Index using a seeded RNG."""
+    # block_ratio: fraction of volume coming from block trades (institutional)
     block_ratio = round(rng.uniform(0.05, 0.60), 4)
+    # oi_skew: open-interest skew between longs (inst) and shorts (retail), -1..1
     oi_skew = round(rng.uniform(-0.8, 0.8), 4)
+    # futures_basis: annualised futures premium/discount in %, positive = contango
     futures_basis = round(rng.uniform(-2.0, 12.0), 4)
+    # whale_accumulation: net BTC equivalent accumulation by >1k BTC wallets (rolling 24h)
     whale_accumulation = round(rng.uniform(-5000.0, 8000.0), 2)
     return {
         "block_ratio": block_ratio,
@@ -9427,13 +9568,17 @@ def _smi_compute_flows(rng) -> tuple:
 
 def _smi_score_from_components(components: dict, inst: float, retail: float) -> float:
     """Combine components into a normalised SMI score in [-1, 1]."""
-    block_score = (components["block_ratio"] - 0.325) / 0.275
-    oi_score = components["oi_skew"]
-    basis_norm = (components["futures_basis"] - 5.0) / 7.0
-    whale_norm = components["whale_accumulation"] / 8000.0
+    # Weight scheme: block_ratio (30%), oi_skew (30%), futures_basis normalised (20%),
+    # whale_accumulation normalised (20%)
+    block_score = (components["block_ratio"] - 0.325) / 0.275  # centre at mid-range
+    oi_score = components["oi_skew"]  # already in -1..1 approx
+    basis_norm = (components["futures_basis"] - 5.0) / 7.0  # centre around 5%
+    whale_norm = components["whale_accumulation"] / 8000.0  # normalise to max expected
     raw = 0.30 * block_score + 0.30 * oi_score + 0.20 * basis_norm + 0.20 * whale_norm
-    flow_div = (inst - retail) / 1400.0
+    # Also blend in flow divergence (inst - retail direction)
+    flow_div = (inst - retail) / 1400.0  # normalise by max possible divergence
     combined = 0.7 * raw + 0.3 * flow_div
+    # Clamp to [-1, 1]
     return round(max(-1.0, min(1.0, combined)), 6)
 
 
@@ -9451,13 +9596,13 @@ async def compute_smart_money_index() -> dict:
     Smart Money Index: measures divergence between institutional and retail order flow.
 
     Returns a dict with:
-      smi_score          -- float in [-1, 1]; positive = institutional buying
-      institutional_flow -- net institutional flow in millions USD (24h rolling)
-      retail_flow        -- net retail flow in millions USD (24h rolling)
-      divergence         -- institutional_flow - retail_flow
-      signal             -- "accumulation" | "distribution" | "neutral"
-      components         -- {block_ratio, oi_skew, futures_basis, whale_accumulation}
-      timestamp          -- ISO 8601 UTC string
+      smi_score          — float in [-1, 1]; positive = institutional buying
+      institutional_flow — net institutional flow in millions USD (24h rolling)
+      retail_flow        — net retail flow in millions USD (24h rolling)
+      divergence         — institutional_flow - retail_flow
+      signal             — "accumulation" | "distribution" | "neutral"
+      components         — {block_ratio, oi_skew, futures_basis, whale_accumulation}
+      timestamp          — ISO 8601 UTC string
 
     Uses random.seed(20260317) for deterministic simulated data.
     """
@@ -9484,91 +9629,50 @@ async def compute_smart_money_index() -> dict:
     }
 
 
-async def compute_order_flow_toxicity() -> Dict:
+
+async def compute_options_flow_tracker() -> dict:
     """
-    VPIN: Volume-Synchronized Probability of Informed Trading.
-
-    Partitions volume into equal-sized buckets and estimates the fraction of
-    informed trading using buy/sell volume imbalance per bucket.
-
-    VPIN = (1/n) * sum(|V_buy_i - V_sell_i|) / V_bucket
+    Options flow tracker: aggregate large trades (>$100k notional) across
+    Deribit/Lyra, call/put skew by expiry, unusual flow alerts,
+    positioning heat map by strike.
+    Uses simulated data — no real API calls needed.
     """
-    import random
-    from datetime import datetime, timezone
+    trades = _oft_simulate_large_trades()
+    skew_by_expiry = _oft_compute_skew_by_expiry(trades)
+    unusual_alerts = _oft_detect_unusual_flow(trades)
+    strike_heatmap = _oft_build_strike_heatmap(trades)
 
-    rng = random.Random(20260320)
+    total_call_vol = sum(v["call_volume_usd"] for v in skew_by_expiry.values())
+    total_put_vol = sum(v["put_volume_usd"] for v in skew_by_expiry.values())
+    overall_ratio = _oft_skew_ratio(total_call_vol, total_put_vol)
+    overall_signal = _oft_skew_signal(total_call_vol, total_put_vol)
+    dominant_exp = _oft_dominant_expiry(skew_by_expiry)
+    skew_pct = _oft_skew_percentile(overall_ratio)
 
-    N_BUCKETS = 50
-    BUCKET_VOLUME = 1000.0
-
-    volume_buckets: List[Dict] = []
-    total_buy_vol = 0.0
-    total_sell_vol = 0.0
-
-    for i in range(N_BUCKETS):
-        buy_frac = rng.gauss(0.52, 0.12)
-        buy_frac = max(0.05, min(0.95, buy_frac))
-        sell_frac = 1.0 - buy_frac
-
-        buy_vol = round(BUCKET_VOLUME * buy_frac, 4)
-        sell_vol = round(BUCKET_VOLUME * sell_frac, 4)
-        imbalance = round(abs(buy_vol - sell_vol) / BUCKET_VOLUME, 6)
-
-        total_buy_vol += buy_vol
-        total_sell_vol += sell_vol
-
-        volume_buckets.append({
-            "bucket_id": i,
-            "buy_vol": buy_vol,
-            "sell_vol": sell_vol,
-            "imbalance": imbalance,
-        })
-
-    vpin_score = round(
-        sum(b["imbalance"] for b in volume_buckets) / N_BUCKETS,
-        6,
+    desc = (
+        f"{overall_signal.capitalize()} options flow: "
+        f"${total_call_vol/1e6:.1f}M calls vs ${total_put_vol/1e6:.1f}M puts "
+        f"(ratio {overall_ratio:.2f}x), {len(unusual_alerts)} unusual alerts, "
+        f"dominant expiry {dominant_exp}"
     )
 
-    window = 10
-    rolling_vpin_50: List[float] = []
-    for i in range(N_BUCKETS):
-        start = max(0, i - window + 1)
-        window_buckets = volume_buckets[start: i + 1]
-        wvpin = round(
-            sum(b["imbalance"] for b in window_buckets) / len(window_buckets),
-            6,
-        )
-        rolling_vpin_50.append(wvpin)
-
-    total_vol = total_buy_vol + total_sell_vol
-    buy_volume_frac = round(total_buy_vol / total_vol, 6)
-    sell_volume_frac = round(total_sell_vol / total_vol, 6)
-
-    if vpin_score < 0.25:
-        toxicity_level = "low"
-    elif vpin_score < 0.50:
-        toxicity_level = "medium"
-    elif vpin_score < 0.75:
-        toxicity_level = "high"
-    else:
-        toxicity_level = "extreme"
-
-    if vpin_score >= 0.50:
-        informed_trading_signal = "high_toxicity"
-    elif vpin_score <= 0.20:
-        informed_trading_signal = "low_toxicity"
-    else:
-        informed_trading_signal = "neutral"
-
     return {
-        "vpin_score": vpin_score,
-        "buy_volume_frac": buy_volume_frac,
-        "sell_volume_frac": sell_volume_frac,
-        "toxicity_level": toxicity_level,
-        "volume_buckets": volume_buckets,
-        "informed_trading_signal": informed_trading_signal,
-        "rolling_vpin_50": rolling_vpin_50,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "large_trades": trades[:20],  # top 20 most recent
+        "skew_by_expiry": skew_by_expiry,
+        "unusual_flow_alerts": unusual_alerts[:10],
+        "strike_heatmap": strike_heatmap,
+        "summary": {
+            "total_call_volume_usd": round(total_call_vol, 2),
+            "total_put_volume_usd": round(total_put_vol, 2),
+            "overall_skew_ratio": overall_ratio,
+            "net_flow_direction": overall_signal,
+            "dominant_expiry": dominant_exp,
+            "skew_percentile": skew_pct,
+            "unusual_activity_count": len(unusual_alerts),
+            "total_trades_analyzed": len(trades),
+            "exchanges": list({t["exchange"] for t in trades}),
+        },
+        "description": desc,
     }
 
 
@@ -9650,7 +9754,8 @@ async def compute_cross_market_correlation() -> Dict:
 
 # ── Liquidation Cascade Detector ─────────────────────────────────────────────
 
-def _lcd_cascade_chain(rng, assets):
+def _lcd_cascade_chain(rng, assets: list) -> list:
+    """Build a cascade chain: sequence of liquidation events across assets."""
     chain = []
     t = 0.0
     for asset in assets:
@@ -9662,12 +9767,19 @@ def _lcd_cascade_chain(rng, assets):
                 "amount": round(rng.uniform(500_000, 25_000_000), 2),
                 "time": round(t, 2),
             })
+    # sort by time
     chain.sort(key=lambda x: x["time"])
     return chain
 
 
-def _lcd_support_levels(rng):
-    base_prices = {"BTC": 65_000.0, "ETH": 3_200.0, "SOL": 145.0, "BNB": 580.0}
+def _lcd_support_levels(rng) -> list:
+    """Simulate support price levels for BTC/ETH/SOL/BNB."""
+    base_prices = {
+        "BTC": 65_000.0,
+        "ETH": 3_200.0,
+        "SOL": 145.0,
+        "BNB": 580.0,
+    }
     levels = []
     for base in base_prices.values():
         for frac in [0.97, 0.94, 0.90]:
@@ -9675,7 +9787,8 @@ def _lcd_support_levels(rng):
     return sorted(levels, reverse=True)
 
 
-def _lcd_regime(prob):
+def _lcd_regime(prob: float) -> str:
+    """Map cascade probability to regime label."""
     if prob < 0.25:
         return "calm"
     elif prob < 0.50:
@@ -9689,6 +9802,7 @@ def _lcd_regime(prob):
 async def compute_liquidation_cascade_detector() -> dict:
     import random as _random
     rng = _random.Random(20260316)
+
     assets = ["BTC", "ETH", "SOL", "BNB"]
     exchanges_pool = ["Binance", "OKX", "Bybit", "dYdX", "BitMEX", "Huobi"]
     cascade_probability = round(rng.uniform(0.0, 1.0), 4)
