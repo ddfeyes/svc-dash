@@ -11364,3 +11364,14 @@ async def compute_market_regime_v2(symbol: str = None) -> dict:
 async def compute_market_regime(symbol: str = None) -> dict:
     """Alias to compute_market_regime_v2 for compatibility with existing callers."""
     return await compute_market_regime_v2(symbol=symbol)
+
+
+async def compute_protocol_revenue_card() -> dict:
+    """Stub: protocol revenue card — returns empty data until full implementation."""
+    return {
+        "protocols": [],
+        "total_revenue_7d": 0,
+        "top_protocol": None,
+        "signal": "unavailable",
+        "error": None,
+    }
