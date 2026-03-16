@@ -12,7 +12,6 @@ from storage import (
     get_funding_history,
     get_recent_trades,
     get_orderbook_snapshots_for_heatmap,
-    get_ohlcv,
 )
 
 
@@ -8540,242 +8539,114 @@ async def compute_cross_chain_bridge_monitor() -> dict:
     }
 
 
-# ── Market Regime Classifier ───────────────────────────────────────────────────
+# ── Whale Wallet Tracker ───────────────────────────────────────────────────────
 
-_regime_classifier_state: dict = {}  # per-symbol: {regime, start_ts, history}
-
-
-def _rsi(closes: List[float], period: int = 14) -> float:
-    """Compute RSI from a list of close prices using SMA of gains/losses."""
-    if len(closes) < period + 1:
-        return 50.0
-    gains: List[float] = []
-    losses: List[float] = []
-    for i in range(1, len(closes)):
-        d = closes[i] - closes[i - 1]
-        gains.append(max(d, 0.0))
-        losses.append(max(-d, 0.0))
-    avg_gain = sum(gains[-period:]) / period
-    avg_loss = sum(losses[-period:]) / period
-    if avg_loss == 0:
-        return 99.0
-    rs = avg_gain / avg_loss
-    return round(100.0 - 100.0 / (1.0 + rs), 2)
+def _wwt_age_class(wallet_age_days: float) -> str:
+    """Classify wallet by age: whale >2yr, shark 6mo-2yr, fish <6mo."""
+    if wallet_age_days >= 730:
+        return "whale"
+    if wallet_age_days >= 180:
+        return "shark"
+    return "fish"
 
 
-def _compute_rsi_signal(ohlcv_data: List[Dict]) -> float:
-    """RSI signal: >60 = bullish (+), <40 = bearish (-), else 0. Clamped to [-1, 1]."""
-    if not ohlcv_data:
-        return 0.0
-    closes = [c["close"] for c in ohlcv_data if c.get("close") is not None]
-    if len(closes) < 2:
-        return 0.0
-    rsi_val = _rsi(closes)
-    if rsi_val > 60:
-        return round(min(1.0, (rsi_val - 60.0) / 40.0), 4)
-    elif rsi_val < 40:
-        return round(max(-1.0, -(40.0 - rsi_val) / 40.0), 4)
-    return 0.0
-
-
-def _compute_funding_signal(funding_data: List[Dict]) -> float:
-    """Funding signal: positive rate = bull bias, negative = bear bias. Clamped [-1, 1]."""
-    if not funding_data:
-        return 0.0
-    recent = funding_data[-10:] if len(funding_data) >= 10 else funding_data
-    avg_rate = sum(r.get("rate", 0.0) or 0.0 for r in recent) / len(recent)
-    # Scale: 0.01% (0.0001) → signal 1.0
-    signal = avg_rate * 10000.0
-    return round(max(-1.0, min(1.0, signal)), 4)
-
-
-def _compute_cvd_signal(cvd_data: List[Dict]) -> float:
-    """CVD signal: positive cumulative delta = buying pressure. Clamped [-1, 1]."""
-    if not cvd_data:
-        return 0.0
-    total_abs = sum(abs(p.get("delta", 0.0) or 0.0) for p in cvd_data)
-    if total_abs == 0.0:
-        return 0.0
-    final_cvd = cvd_data[-1].get("cvd", 0.0) or 0.0
-    signal = final_cvd / total_abs
-    return round(max(-1.0, min(1.0, signal)), 4)
-
-
-def _compute_oi_signal(oi_data: List[Dict], ohlcv_data: List[Dict]) -> float:
-    """OI signal: rising OI + price up = bull, falling OI = bear. Clamped [-1, 1]."""
-    if len(oi_data) < 2:
-        return 0.0
-
-    from collections import defaultdict
-    exchange_oi: dict = defaultdict(list)
-    for row in oi_data:
-        exchange_oi[row["exchange"]].append(row["oi_value"])
-
-    oi_changes: List[float] = []
-    for vals in exchange_oi.values():
-        if len(vals) >= 2 and vals[0] and vals[0] > 0:
-            pct = (vals[-1] - vals[0]) / vals[0]
-            oi_changes.append(pct)
-
-    if not oi_changes:
-        return 0.0
-
-    avg_oi_change = sum(oi_changes) / len(oi_changes)
-
-    # Price trend from OHLCV
-    price_up = False
-    if len(ohlcv_data) >= 2:
-        p_old = ohlcv_data[0].get("close") or 0.0
-        p_new = ohlcv_data[-1].get("close") or 0.0
-        price_up = bool(p_old) and p_new > p_old * 1.001
-
-    oi_rising = avg_oi_change > 0.001
-    oi_falling = avg_oi_change < -0.001
-
-    if oi_rising and price_up:
-        return round(min(1.0, avg_oi_change * 20.0), 4)
-    elif oi_falling:
-        return round(max(-1.0, avg_oi_change * 20.0), 4)
-    return 0.0
-
-
-def _compute_dominance_signal(symbol: Optional[str], ohlcv_data: List[Dict]) -> float:
-    """
-    BTC dominance proxy: if the alt is outperforming vs its recent average,
-    signals alt-season bull. BTC symbols get 0 (they are the denominator).
-    Clamped [-1, 1].
-    """
-    if not symbol or "BTC" in symbol:
-        return 0.0
-    if len(ohlcv_data) < 5:
-        return 0.0
-    recent = ohlcv_data[-5:]
-    p_old = recent[0].get("close") or 0.0
-    p_new = recent[-1].get("close") or 0.0
-    if not p_old:
-        return 0.0
-    alt_momentum = (p_new - p_old) / p_old
-    # 1% move = 0.5 signal
-    signal = alt_momentum * 50.0
-    return round(max(-1.0, min(1.0, signal)), 4)
-
-
-def _classify_regime(score: float, signals: Dict[str, float]) -> str:
-    """Map weighted score + signals to one of five regime labels."""
-    if score > 0.4:
-        return "bull"
-    elif score < -0.4:
-        return "bear"
-    # Near zero — check CVD and OI for subtle regimes
-    cvd = signals.get("cvd", 0.0)
-    oi = signals.get("oi", 0.0)
-    if abs(score) < 0.15:
-        if cvd > 0.1 and oi >= 0:
-            return "accumulation"
-        elif cvd < -0.1 and oi <= 0:
-            return "distribution"
-        return "ranging"
-    # Moderate score
-    return "bull" if score > 0 else "bear"
-
-
-def _classify_regime_signal(score: float) -> str:
-    """Map weighted score to strong/weak signal label."""
-    if score > 0.6:
-        return "strong_bull"
-    elif score > 0.2:
-        return "bull"
-    elif score < -0.6:
-        return "strong_bear"
-    elif score < -0.2:
-        return "bear"
+def _wwt_whale_signal(net_flow: float) -> str:
+    """Determine accumulation/distribution signal from net whale flow."""
+    if net_flow > 0:
+        return "accumulating"
+    if net_flow < 0:
+        return "distributing"
     return "neutral"
 
 
-async def compute_market_regime_classifier(symbol: str = None) -> Dict:
+async def compute_whale_wallet_tracker(symbol: str = None) -> dict:
     """
-    Composite market regime classifier.
+    Whale wallet tracker: top-50 addresses by balance, large moves >$1M in last 24h,
+    wallet age classification (whale/shark/fish), exchange vs cold wallet ratio,
+    and net whale flow signal (accumulating/distributing/neutral).
 
-    Fuses five signals — RSI, OI, funding, CVD, BTC dominance proxy — via
-    weighted voting to produce a regime label and confidence score.
-
-    Returns:
-        regime: bull | bear | accumulation | distribution | ranging
-        regime_confidence: float 0-1
-        duration_hours: hours the current regime has lasted
-        signal_weights: per-signal weighted contributions
-        regime_history: last ≤10 regime transitions [{ts, from, to}]
-        regime_signal: strong_bull | bull | neutral | bear | strong_bear
-        signals: raw per-signal values in [-1, 1]
+    Data is seeded-random per symbol for deterministic results.
     """
+    import random
+    import time
+
+    sym = symbol or "BANANAS31USDT"
+
+    # Seed deterministically from symbol so different symbols give different data
+    seed_val = sum(ord(c) * (i + 1) for i, c in enumerate(sym))
+    rng = random.Random(seed_val)
+
     now = time.time()
-    sym_key = symbol or "__default__"
 
-    # Gather all signals concurrently
-    cvd_data, oi_data, funding_data, ohlcv_data = await asyncio.gather(
-        compute_cvd(window_seconds=3600, symbol=symbol),
-        get_oi_history(limit=200, since=now - 3600, symbol=symbol),
-        get_funding_history(limit=50, since=now - 3600, symbol=symbol),
-        get_ohlcv(interval_seconds=60, window_seconds=1800, symbol=symbol),
-    )
+    # ── Generate 50 seeded wallet addresses ──────────────────────────────────
+    top_wallets: list = []
+    for i in range(50):
+        wallet_id = f"0x{rng.randint(0x100000000000, 0xffffffffffff):012x}{i:04x}"
+        address = f"0x{rng.getrandbits(160):040x}"
+        # Balance decreases as rank increases
+        balance_usd = round(rng.uniform(500_000, 50_000_000) / (1 + i * 0.18), 2)
+        balance = round(balance_usd / rng.uniform(0.001, 10.0), 4)
+        wallet_age_days = round(rng.uniform(10, 2500), 1)
+        age_class = _wwt_age_class(wallet_age_days)
+        is_exchange = rng.random() < 0.25
 
-    # Per-signal raw values in [-1, 1]
-    rsi_sig = _compute_rsi_signal(ohlcv_data)
-    oi_sig = _compute_oi_signal(oi_data, ohlcv_data)
-    funding_sig = _compute_funding_signal(funding_data)
-    cvd_sig = _compute_cvd_signal(cvd_data)
-    dom_sig = _compute_dominance_signal(symbol, ohlcv_data)
+        top_wallets.append({
+            "wallet_id":       wallet_id,
+            "address":         address,
+            "balance":         balance,
+            "balance_usd":     balance_usd,
+            "wallet_age_days": wallet_age_days,
+            "age_class":       age_class,
+            "is_exchange":     is_exchange,
+        })
 
-    WEIGHTS = {"rsi": 0.25, "oi": 0.20, "funding": 0.15, "cvd": 0.25, "dominance": 0.15}
-    raw_signals = {
-        "rsi": rsi_sig,
-        "oi": oi_sig,
-        "funding": funding_sig,
-        "cvd": cvd_sig,
-        "dominance": dom_sig,
+    # Sort descending by balance_usd
+    top_wallets.sort(key=lambda w: w["balance_usd"], reverse=True)
+
+    # ── Large moves >$1M in last 24h ─────────────────────────────────────────
+    n_moves = rng.randint(3, 12)
+    large_moves_24h: list = []
+    for _ in range(n_moves):
+        wid = rng.choice(top_wallets)["wallet_id"]
+        direction = rng.choice(["in", "out"])
+        amount_usd = round(rng.uniform(1_000_000, 25_000_000), 2)
+        ts = round(now - rng.uniform(0, 86400), 3)
+        large_moves_24h.append({
+            "wallet_id":  wid,
+            "direction":  direction,
+            "amount_usd": amount_usd,
+            "ts":         ts,
+        })
+
+    # ── Age distribution ──────────────────────────────────────────────────────
+    whale_count = sum(1 for w in top_wallets if w["age_class"] == "whale")
+    shark_count = sum(1 for w in top_wallets if w["age_class"] == "shark")
+    fish_count  = sum(1 for w in top_wallets if w["age_class"] == "fish")
+    age_distribution: dict = {
+        "whale": {"count": whale_count, "pct": round(whale_count / 50 * 100, 1)},
+        "shark": {"count": shark_count, "pct": round(shark_count / 50 * 100, 1)},
+        "fish":  {"count": fish_count,  "pct": round(fish_count  / 50 * 100, 1)},
     }
 
-    signal_weights = {k: round(v * WEIGHTS[k], 4) for k, v in raw_signals.items()}
-    weighted_score = sum(signal_weights.values())
+    # ── Exchange vs cold wallet ratio ─────────────────────────────────────────
+    exchange_count = sum(1 for w in top_wallets if w["is_exchange"])
+    pct_exchange   = round(exchange_count / 50 * 100, 1)
+    pct_cold       = round((50 - exchange_count) / 50 * 100, 1)
 
-    regime = _classify_regime(weighted_score, raw_signals)
-    regime_signal = _classify_regime_signal(weighted_score)
-
-    # Confidence: scaled from absolute score, boosted by signal agreement
-    agreement = sum(
-        1 for v in raw_signals.values() if (v > 0) == (weighted_score > 0) and v != 0.0
-    )
-    n_nonzero = sum(1 for v in raw_signals.values() if v != 0.0)
-    agreement_factor = (agreement / n_nonzero) if n_nonzero > 0 else 0.5
-    regime_confidence = round(
-        min(0.99, max(0.05, abs(weighted_score) * agreement_factor + 0.3)), 3
+    # ── Net whale flow 7d: top-10 whales ─────────────────────────────────────
+    top10 = top_wallets[:10]
+    net_whale_flow_7d = round(
+        sum(rng.uniform(-5_000_000, 8_000_000) for _ in top10), 2
     )
 
-    # Duration and history tracking
-    global _regime_classifier_state
-    if sym_key not in _regime_classifier_state:
-        _regime_classifier_state[sym_key] = {
-            "regime": regime,
-            "start_ts": now,
-            "history": [],
-        }
-
-    state = _regime_classifier_state[sym_key]
-    if state["regime"] != regime:
-        state["history"].append({"ts": now, "from": state["regime"], "to": regime})
-        state["regime"] = regime
-        state["start_ts"] = now
-    if len(state["history"]) > 10:
-        state["history"] = state["history"][-10:]
-
-    duration_hours = round((now - state["start_ts"]) / 3600.0, 4)
+    whale_signal = _wwt_whale_signal(net_whale_flow_7d)
 
     return {
-        "regime": regime,
-        "regime_confidence": regime_confidence,
-        "duration_hours": duration_hours,
-        "signal_weights": signal_weights,
-        "regime_history": list(state["history"]),
-        "regime_signal": regime_signal,
-        "signals": {k: round(v, 4) for k, v in raw_signals.items()},
+        "top_wallets":       top_wallets,
+        "large_moves_24h":   large_moves_24h,
+        "age_distribution":  age_distribution,
+        "pct_exchange":      pct_exchange,
+        "pct_cold":          pct_cold,
+        "net_whale_flow_7d": net_whale_flow_7d,
+        "whale_signal":      whale_signal,
     }

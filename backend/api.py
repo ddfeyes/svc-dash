@@ -73,6 +73,7 @@ from metrics import (
     compute_layer2_metrics,
     compute_nft_market_pulse,
     compute_cross_chain_bridge_monitor,
+    compute_whale_wallet_tracker,
 )
 
 router = APIRouter(prefix="/api")
@@ -5339,3 +5340,14 @@ async def cross_chain_bridge_monitor_endpoint():
     """Cross-chain bridge monitor: flows across ETH/BSC/ARB/OP/BASE, top bridges, anomaly detection."""
     data = await compute_cross_chain_bridge_monitor()
     return JSONResponse(data)
+
+
+@router.get("/whale-wallet-tracker")
+async def whale_wallet_tracker_endpoint(
+    symbol: Optional[str] = Query(None),
+):
+    """Whale wallet tracker: top-50 addresses, large moves >$1M, age classification, flow signal."""
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    data = await compute_whale_wallet_tracker(symbol=target)
+    return JSONResponse({"status": "ok", "symbol": target, **data})

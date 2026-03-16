@@ -2499,11 +2499,11 @@ async function refresh() {
     // Batch 24: macro liquidity indicator
     // Batch 24: token velocity + NVT
     await Promise.all([safe(renderTokenVelocityNvt)]);
-    // Batch 25: market regime classifier
-    await Promise.all([safe(renderMarketRegimeClassifier)]);
     // Batch 16: derivatives heatmap
         // Batch 25: holder distribution card
         // Batch 26: cross-chain bridge monitor
+    // Batch 27: whale wallet tracker
+    await Promise.all([safe(renderWhaleWalletTracker)]);
   } finally {
     _refreshRunning = false;
   }
@@ -2750,105 +2750,96 @@ async function renderTokenVelocityNvt() {
 // ── Derivatives Heatmap ───────────────────────────────────────────────────────
 // ── Holder Distribution ───────────────────────────────────────────────────
 
-// ── Market Regime Classifier ──────────────────────────────────────────────────
-async function renderMarketRegimeClassifier() {
-  const el    = document.getElementById('market-regime-classifier-content');
-  const badge = document.getElementById('market-regime-classifier-badge');
+// ── Whale Wallet Tracker ──────────────────────────────────────────────────────
+async function renderWhaleWalletTracker() {
+  const el    = document.getElementById('whale-wallet-tracker-content');
+  const badge = document.getElementById('whale-wallet-tracker-badge');
   if (!el) return;
-
   const sym  = encodeURIComponent(activeSymbol);
-  const data = await apiFetch(`/market-regime-classifier?symbol=${sym}`);
-  if (!data) { setErr('market-regime-classifier-content'); return; }
+  const data = await apiFetch(`/whale-wallet-tracker?symbol=${sym}`);
+  if (!data) { setErr('whale-wallet-tracker-content'); return; }
 
-  const regime     = data.regime     || 'ranging';
-  const signal     = data.regime_signal || 'neutral';
-  const conf       = data.regime_confidence ?? 0;
-  const durH       = data.duration_hours ?? 0;
-  const sigs       = data.signals        || {};
-  const sw         = data.signal_weights || {};
-  const history    = data.regime_history || [];
+  const signal      = data.whale_signal || 'neutral';
+  const moves       = data.large_moves_24h || [];
+  const ad          = data.age_distribution || {};
+  const topWallets  = data.top_wallets || [];
+  const netFlow     = data.net_whale_flow_7d ?? 0;
 
-  // Badge
-  const REGIME_COLORS = {
-    bull: 'badge-green', bear: 'badge-red',
-    accumulation: 'badge-blue', distribution: 'badge-yellow', ranging: 'badge-gray',
-  };
-  const SIGNAL_COLORS = {
-    strong_bull: '#00e082', bull: '#4ea8de',
-    neutral: '#6b7280', bear: '#f0c040', strong_bear: '#ff4d4f',
-  };
-  const regimeColor = REGIME_COLORS[regime] || 'badge-gray';
+  const sigCls = signal === 'accumulating' ? 'badge-green'
+               : signal === 'distributing' ? 'badge-red'
+               : 'badge-blue';
   if (badge) {
-    badge.textContent = signal.replace('_', ' ');
-    badge.className   = `card-badge ${regimeColor}`;
+    badge.textContent  = signal.toUpperCase();
+    badge.className    = `card-badge ${sigCls}`;
     badge.style.display = '';
   }
 
-  // Signal bar helper
-  function sigBar(val) {
-    const pct    = Math.round(Math.abs(val) * 100);
-    const color  = val >= 0 ? 'var(--green)' : 'var(--red)';
-    const dir    = val >= 0 ? 'left' : 'right';
-    return `<div style="display:flex;align-items:center;gap:4px;min-width:60px">
-      <div style="flex:1;height:4px;background:var(--border);border-radius:2px;position:relative">
-        <div style="position:absolute;${dir}:0;width:${pct}%;height:100%;background:${color};border-radius:2px"></div>
-      </div>
-      <span style="font-size:9px;color:${color};min-width:32px;text-align:right">${val >= 0 ? '+' : ''}${val.toFixed(3)}</span>
+  const netFlowCol  = netFlow > 0 ? 'var(--green)' : netFlow < 0 ? 'var(--red)' : 'var(--muted)';
+  const netFlowIcon = netFlow > 0 ? '↑' : netFlow < 0 ? '↓' : '→';
+
+  // Age distribution bar
+  const whalePct = ad.whale ? ad.whale.pct : 0;
+  const sharkPct = ad.shark ? ad.shark.pct : 0;
+  const fishPct  = ad.fish  ? ad.fish.pct  : 0;
+  const ageBars = `
+    <div style="display:flex;height:6px;border-radius:3px;overflow:hidden;margin-bottom:4px">
+      <div style="width:${whalePct}%;background:var(--blue)" title="whale ${whalePct}%"></div>
+      <div style="width:${sharkPct}%;background:#f59e0b" title="shark ${sharkPct}%"></div>
+      <div style="width:${fishPct}%;background:var(--green)" title="fish ${fishPct}%"></div>
+    </div>
+    <div style="display:flex;gap:8px;font-size:9px;color:var(--muted);margin-bottom:6px">
+      <span><span style="color:var(--blue)">■</span> whale ${whalePct}%</span>
+      <span><span style="color:#f59e0b">■</span> shark ${sharkPct}%</span>
+      <span><span style="color:var(--green)">■</span> fish ${fishPct}%</span>
     </div>`;
-  }
 
-  function fmtDur(h) {
-    if (h < 1) return `${Math.round(h * 60)}m`;
-    return `${h.toFixed(1)}h`;
-  }
-
-  const SIGNAL_LABELS = { rsi: 'RSI', oi: 'OI', funding: 'Funding', cvd: 'CVD', dominance: 'Dominance' };
-  const signalRows = Object.entries(SIGNAL_LABELS).map(([k, label]) => {
-    const raw = sigs[k] ?? 0;
-    const weighted = sw[k] ?? 0;
+  // Top-5 wallets table
+  const top5 = topWallets.slice(0, 5);
+  const walletRows = top5.map((w, i) => {
+    const ageCls = w.age_class === 'whale' ? 'var(--blue)'
+                 : w.age_class === 'shark' ? '#f59e0b'
+                 : 'var(--green)';
+    const exchTag = w.is_exchange
+      ? `<span style="font-size:8px;color:var(--muted)">[CEX]</span>`
+      : `<span style="font-size:8px;color:var(--muted)">[cold]</span>`;
     return `<tr>
-      <td style="color:var(--muted);font-size:10px;padding-right:6px">${label}</td>
-      <td>${sigBar(raw)}</td>
-      <td style="font-size:9px;color:var(--muted);padding-left:4px">${weighted >= 0 ? '+' : ''}${weighted.toFixed(3)}</td>
+      <td style="color:var(--muted);font-size:9px">#${i + 1}</td>
+      <td style="font-family:monospace;font-size:9px;color:var(--fg)">${w.address.slice(0, 10)}…</td>
+      <td style="text-align:right;font-size:9px;color:var(--fg)">${fmtUsd(w.balance_usd)}</td>
+      <td style="text-align:center;font-size:9px;color:${ageCls}">${w.age_class}</td>
+      <td style="text-align:right;font-size:9px">${exchTag}</td>
     </tr>`;
   }).join('');
 
-  const histRows = history.slice(-5).reverse().map(h => {
-    const d = new Date(h.ts * 1000);
-    const t = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    return `<div style="display:flex;gap:6px;font-size:9px;color:var(--muted)">
-      <span>${t}</span>
-      <span style="color:var(--fg)">${h.from}</span>
-      <span>→</span>
-      <span style="color:${SIGNAL_COLORS[h.to] || 'var(--fg)'};">${h.to}</span>
+  // Recent large moves (last 3)
+  const recentMoves = moves.slice(0, 3).map(m => {
+    const dirCol  = m.direction === 'in' ? 'var(--green)' : 'var(--red)';
+    const dirIcon = m.direction === 'in' ? '↙' : '↗';
+    return `<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-bottom:2px">
+      <span style="font-family:monospace;font-size:9px">${String(m.wallet_id).slice(0, 14)}…</span>
+      <span style="color:${dirCol}">${dirIcon} ${fmtUsd(m.amount_usd)}</span>
     </div>`;
-  }).join('') || `<div style="font-size:9px;color:var(--muted)">No transitions yet</div>`;
-
-  const confPct  = Math.round(conf * 100);
-  const confColor = conf > 0.65 ? 'var(--green)' : conf > 0.4 ? 'var(--yellow)' : 'var(--muted)';
-  const regimeLabel = regime.charAt(0).toUpperCase() + regime.slice(1);
-  const signalColor = SIGNAL_COLORS[signal] || 'var(--fg)';
+  }).join('');
 
   el.innerHTML = `
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
-      <div style="font-size:20px;font-weight:700;color:${signalColor}">${regimeLabel}</div>
-      <div style="display:flex;flex-direction:column;gap:2px">
-        <div style="font-size:10px;color:var(--muted)">Confidence <span style="color:${confColor}">${confPct}%</span></div>
-        <div style="font-size:10px;color:var(--muted)">Duration <span style="color:var(--fg)">${fmtDur(durH)}</span></div>
-      </div>
+    <div style="font-size:10px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:6px">
+      <span>net 7d: <b style="color:${netFlowCol}">${netFlowIcon} ${fmtUsd(Math.abs(netFlow))}</b></span>
+      <span>exch: <b style="color:var(--fg)">${data.pct_exchange ?? 0}%</b></span>
+      <span>cold: <b style="color:var(--fg)">${data.pct_cold ?? 0}%</b></span>
+      <span>moves 24h: <b style="color:var(--fg)">${moves.length}</b></span>
     </div>
-    <table style="width:100%;border-collapse:collapse;margin-bottom:8px">
-      <thead>
-        <tr>
-          <th style="text-align:left;font-size:9px;color:var(--muted);font-weight:400;padding-bottom:4px">Signal</th>
-          <th style="text-align:left;font-size:9px;color:var(--muted);font-weight:400">Raw</th>
-          <th style="text-align:left;font-size:9px;color:var(--muted);font-weight:400;padding-left:4px">Weighted</th>
-        </tr>
-      </thead>
-      <tbody>${signalRows}</tbody>
+    ${ageBars}
+    <table style="width:100%;border-collapse:collapse;margin-bottom:6px">
+      <thead><tr style="font-size:9px;color:var(--muted)">
+        <th style="text-align:left">#</th>
+        <th style="text-align:left">address</th>
+        <th style="text-align:right">balance</th>
+        <th style="text-align:center">age</th>
+        <th style="text-align:right">type</th>
+      </tr></thead>
+      <tbody>${walletRows}</tbody>
     </table>
-    <div style="font-size:9px;color:var(--muted);margin-bottom:3px">Recent transitions</div>
-    <div style="display:flex;flex-direction:column;gap:2px">${histRows}</div>`;
+    ${moves.length > 0 ? `<div style="font-size:9px;color:var(--muted);margin-bottom:3px">large moves &gt;$1M</div>${recentMoves}` : ''}`;
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
