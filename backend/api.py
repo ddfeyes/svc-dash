@@ -72,6 +72,7 @@ from metrics import (
     compute_layer2_metrics,
     compute_derivatives_heatmap,
     compute_network_health_score,
+    compute_defi_tvl_tracker,
 )
 
 router = APIRouter(prefix="/api")
@@ -5303,6 +5304,10 @@ async def derivatives_heatmap_endpoint(
 ):
     """OI heatmap by strike and expiry with max pain and GEX for BTC/ETH options."""
     data = await compute_derivatives_heatmap(asset=asset)
+@router.get("/defi-tvl-tracker")
+async def defi_tvl_tracker_endpoint():
+    """DeFi TVL tracker: top 10 protocols, chain dominance, momentum, 30d sparkline."""
+    data = await compute_defi_tvl_tracker()
     return JSONResponse(data)
 @router.get("/network-health-score")
 async def network_health_score_endpoint():

@@ -2839,6 +2839,8 @@ async function refresh() {
     await Promise.all([safe(renderDerivativesHeatmap)]);
     // Batch 16: network health score
     await Promise.all([safe(renderNetworkHealthScore)]);
+    // Batch 24: DeFi TVL tracker
+    await Promise.all([safe(renderDefiTvlTracker)]);
   } finally {
     _refreshRunning = false;
   }
@@ -3473,6 +3475,103 @@ async function renderLayer2Metrics() {
     </div>
     ${sparkSvg}
     ${data.description ? `<div style="font-size:10px;color:var(--muted)">${data.description}</div>` : ''}`;
+}
+
+// ── DeFi TVL Tracker ─────────────────────────────────────────────────────────
+async function renderDefiTvlTracker() {
+  const el    = document.getElementById('defi-tvl-tracker-content');
+  const badge = document.getElementById('defi-tvl-tracker-badge');
+  if (!el) return;
+  const data = await apiFetch('/defi-tvl-tracker');
+  if (!data) { setErr('defi-tvl-tracker-content'); return; }
+
+  const totalTvl  = data.total_tvl_usd      ?? 0;
+  const chg24h    = data.tvl_change_24h_pct  ?? 0;
+  const chg7d     = data.tvl_change_7d_pct   ?? 0;
+  const momentum  = data.momentum            || 'stable';
+  const protocols = data.protocols           || [];
+  const chainDom  = data.chain_dominance     || {};
+  const history   = data.history             || [];
+
+  const momCls = momentum === 'accelerating' ? 'badge-green'
+               : momentum === 'declining'    ? 'badge-red'
+               : 'badge-blue';
+  if (badge) {
+    badge.textContent = momentum.toUpperCase();
+    badge.className   = `card-badge ${momCls}`;
+    badge.style.display = '';
+  }
+
+  const fmtB = v => {
+    const a = Math.abs(v);
+    if (a >= 1e9) return '$' + (a / 1e9).toFixed(1) + 'B';
+    if (a >= 1e6) return '$' + (a / 1e6).toFixed(0) + 'M';
+    return '$' + a.toFixed(0);
+  };
+  const fmtPct = v => (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+  const pctCol = v => v >= 0 ? 'var(--green)' : 'var(--red)';
+
+  // Top protocols table (top 5 to fit the card)
+  const protoRows = protocols.slice(0, 5).map((p, i) => {
+    const tvl  = fmtB(p.tvl_usd || 0);
+    const c24  = fmtPct(p.change_24h_pct || 0);
+    const c7d  = fmtPct(p.change_7d_pct  || 0);
+    return `<tr>
+      <td style="font-size:9px;color:var(--muted);padding:1px 3px">${i + 1}</td>
+      <td style="font-size:9px;color:var(--fg);padding:1px 3px;white-space:nowrap">${p.name || '—'}</td>
+      <td style="font-size:9px;color:var(--fg);text-align:right;padding:1px 3px">${tvl}</td>
+      <td style="font-size:9px;color:${pctCol(p.change_24h_pct||0)};text-align:right;padding:1px 3px">${c24}</td>
+      <td style="font-size:9px;color:${pctCol(p.change_7d_pct||0)};text-align:right;padding:1px 3px">${c7d}</td>
+    </tr>`;
+  }).join('');
+
+  // Chain dominance bar
+  const chainOrder = Object.entries(chainDom)
+    .filter(([k]) => k !== 'Others')
+    .sort((a, b) => b[1] - a[1])
+    .concat(Object.entries(chainDom).filter(([k]) => k === 'Others'));
+  const chainColors = ['var(--blue)', 'var(--green)', 'var(--yellow,#f0a500)', 'var(--red)', 'var(--muted)', 'var(--border)'];
+  const domBar = chainOrder.map(([chain, pct], i) => {
+    const col = chainColors[i % chainColors.length];
+    const w   = pct.toFixed(1);
+    return `<div title="${chain}: ${w}%" style="display:inline-block;width:${w}%;height:8px;background:${col};vertical-align:top"></div>`;
+  }).join('');
+  const domLegend = chainOrder.slice(0, 4).map(([chain, pct], i) => {
+    const col = chainColors[i % chainColors.length];
+    return `<span style="font-size:8px;color:${col};margin-right:6px">■ ${chain} ${pct.toFixed(0)}%</span>`;
+  }).join('');
+
+  // Sparkline
+  const sparkVals = history.map(h => h.tvl_usd || 0);
+  const sparkMin  = Math.min(...sparkVals) * 0.98;
+  const sparkMax  = Math.max(...sparkVals) * 1.02;
+  const sparkRange = sparkMax - sparkMin || 1;
+  const sparkbars = sparkVals.slice(-14).map(v => {
+    const h   = Math.max(2, Math.round((v - sparkMin) / sparkRange * 18));
+    const col = v >= sparkVals[sparkVals.length - 1] * 0.98 ? 'var(--green)' : 'var(--muted)';
+    return `<span style="display:inline-block;width:5px;height:${h}px;background:${col};margin-right:1px;vertical-align:bottom;opacity:0.75"></span>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="font-size:10px;color:var(--muted);margin-bottom:4px;display:flex;gap:10px;flex-wrap:wrap">
+      <span>TVL: <b style="color:var(--fg)">${fmtB(totalTvl)}</b></span>
+      <span>24h: <b style="color:${pctCol(chg24h)}">${fmtPct(chg24h)}</b></span>
+      <span>7d: <b style="color:${pctCol(chg7d)}">${fmtPct(chg7d)}</b></span>
+    </div>
+    <div style="margin-bottom:3px;width:100%;border-radius:3px;overflow:hidden">${domBar}</div>
+    <div style="margin-bottom:6px">${domLegend}</div>
+    <table style="border-collapse:collapse;width:100%;margin-bottom:4px">
+      <thead><tr>
+        <th style="font-size:8px;color:var(--muted);text-align:left;padding:1px 3px">#</th>
+        <th style="font-size:8px;color:var(--muted);text-align:left;padding:1px 3px">Protocol</th>
+        <th style="font-size:8px;color:var(--muted);text-align:right;padding:1px 3px">TVL</th>
+        <th style="font-size:8px;color:var(--muted);text-align:right;padding:1px 3px">24h</th>
+        <th style="font-size:8px;color:var(--muted);text-align:right;padding:1px 3px">7d</th>
+      </tr></thead>
+      <tbody>${protoRows}</tbody>
+    </table>
+    <div style="margin-top:4px;line-height:18px">${sparkbars}</div>
+    ${data.description ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${data.description}</div>` : ''}`;
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────

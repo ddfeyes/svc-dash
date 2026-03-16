@@ -6088,6 +6088,274 @@ async def compute_macro_liquidity_indicator() -> dict:
         },
         "history_90d": history_90d,
         "description": desc,
+        "description": desc,
+    }
+
+
+# ── DeFi TVL Tracker ───────────────────────────────────────────────────────────
+# Dashboard card: top 10 protocols by TVL, chain dominance breakdown,
+# TVL momentum signal, and 30-day sparkline history.
+# Data: DeFi Llama public API (free, no auth) with realistic mock fallback.
+
+_DT_PROTOCOLS_URL: str = "https://api.llama.fi/protocols"
+_DT_HISTORY_URL:   str = "https://api.llama.fi/v2/historicalChainTvl"
+_DT_CHAINS_URL:    str = "https://api.llama.fi/chains"
+_DT_TOP_N:         int = 10
+_DT_DOM_THRESHOLD: float = 3.0   # % below which a chain collapses into "Others"
+
+# Momentum thresholds: 7d TVL change
+_DT_ACCEL_THR: float =  5.0   # % gain
+_DT_DECL_THR:  float = -5.0   # % loss
+
+# Realistic mock data for when the API is unavailable
+_DT_MOCK_PROTOCOLS: list = [
+    {"name": "Lido",           "tvl": 28_100_000_000.0, "chain": "Ethereum",  "category": "Liquid Staking", "change1d": 0.012,  "change7d": 0.035},
+    {"name": "AAVE",           "tvl": 12_300_000_000.0, "chain": "Multi",     "category": "Lending",        "change1d": 0.005,  "change7d": -0.021},
+    {"name": "Uniswap",        "tvl":  6_540_000_000.0, "chain": "Ethereum",  "category": "DEX",            "change1d": 0.031,  "change7d":  0.010},
+    {"name": "Curve Finance",  "tvl":  5_820_000_000.0, "chain": "Multi",     "category": "DEX",            "change1d": -0.003, "change7d": -0.042},
+    {"name": "MakerDAO",       "tvl":  5_210_000_000.0, "chain": "Ethereum",  "category": "CDP",            "change1d": 0.008,  "change7d":  0.005},
+    {"name": "JustLend",       "tvl":  4_720_000_000.0, "chain": "Tron",      "category": "Lending",        "change1d": 0.015,  "change7d":  0.028},
+    {"name": "Kamino",         "tvl":  3_180_000_000.0, "chain": "Solana",    "category": "Lending",        "change1d": 0.042,  "change7d":  0.081},
+    {"name": "EigenLayer",     "tvl":  3_010_000_000.0, "chain": "Ethereum",  "category": "Restaking",      "change1d": 0.000,  "change7d": -0.012},
+    {"name": "PancakeSwap",    "tvl":  2_150_000_000.0, "chain": "BSC",       "category": "DEX",            "change1d": 0.019,  "change7d":  0.033},
+    {"name": "GMX",            "tvl":  1_820_000_000.0, "chain": "Arbitrum",  "category": "Derivatives",    "change1d": 0.027,  "change7d":  0.059},
+    {"name": "Compound",       "tvl":  1_650_000_000.0, "chain": "Ethereum",  "category": "Lending",        "change1d": -0.002, "change7d": -0.018},
+    {"name": "Raydium",        "tvl":  1_420_000_000.0, "chain": "Solana",    "category": "DEX",            "change1d": 0.038,  "change7d":  0.095},
+]
+_DT_MOCK_CHAINS: dict = {
+    "Ethereum": 54_910_000_000.0,
+    "Tron":      7_690_000_000.0,
+    "BSC":       7_695_000_000.0,
+    "Solana":    6_080_000_000.0,
+    "Arbitrum":  4_940_000_000.0,
+    "Base":      3_200_000_000.0,
+    "Optimism":  2_110_000_000.0,
+    "Avalanche": 1_340_000_000.0,
+    "Polygon":   1_200_000_000.0,
+    "Others":    5_835_000_000.0,
+}
+
+
+def _dt_tvl_change_pct(current: float, previous: float) -> float:
+    """Percentage change from previous to current TVL. Returns 0 when previous=0."""
+    if previous <= 0:
+        return 0.0
+    return float(round((current - previous) / previous * 100.0, 4))
+
+
+def _dt_chain_dominance(chain_tvls: dict) -> dict:
+    """Normalise chain TVL values to percentage shares. Returns {} when total=0."""
+    total = sum(chain_tvls.values())
+    if total <= 0:
+        return {}
+    return {
+        chain: float(round(tvl / total * 100.0, 4))
+        for chain, tvl in chain_tvls.items()
+    }
+
+
+def _dt_momentum_signal(tvl_series: list) -> str:
+    """
+    Classify TVL momentum from a time-ordered series.
+    Computes 7-day change % from the series endpoints.
+    accelerating: change > +5% | declining: change < -5% | stable: otherwise
+    """
+    if len(tvl_series) < 2:
+        return "stable"
+    start = tvl_series[0]
+    end   = tvl_series[-1]
+    if start <= 0:
+        return "stable"
+    change_pct = (end - start) / start * 100.0
+    if change_pct > _DT_ACCEL_THR:
+        return "accelerating"
+    if change_pct < _DT_DECL_THR:
+        return "declining"
+    return "stable"
+
+
+def _dt_rank_protocols(protocols: list, n: int) -> list:
+    """Return top n protocols sorted by tvl_usd descending."""
+    if not protocols:
+        return []
+    ranked = sorted(protocols, key=lambda p: float(p.get("tvl_usd", 0)), reverse=True)
+    return ranked[:n]
+
+
+def _dt_format_tvl(usd: float) -> str:
+    """Format USD value as human-readable string: $1.5B, $250M, $500K."""
+    if usd >= 1_000_000_000:
+        return f"${usd / 1_000_000_000:.2f}B"
+    if usd >= 1_000_000:
+        return f"${usd / 1_000_000:.1f}M"
+    if usd >= 1_000:
+        return f"${usd / 1_000:.1f}K"
+    return f"${usd:.0f}"
+
+
+def _dt_category_breakdown(protocols: list) -> dict:
+    """Sum TVL by category across all protocols. Skips entries without 'category'."""
+    breakdown: dict = {}
+    for p in protocols:
+        cat = p.get("category")
+        if not cat:
+            continue
+        tvl = float(p.get("tvl_usd", 0))
+        breakdown[cat] = breakdown.get(cat, 0.0) + tvl
+    return breakdown
+
+
+def _dt_dominance_others(chain_pcts: dict, threshold: float = _DT_DOM_THRESHOLD) -> dict:
+    """
+    Collapse chains below threshold % into an "Others" bucket.
+    Returns {} for empty input. No "Others" key if nothing collapses.
+    """
+    if not chain_pcts:
+        return {}
+    result: dict = {}
+    others: float = 0.0
+    for chain, pct in chain_pcts.items():
+        if chain == "Others":
+            others += pct
+        elif pct >= threshold:
+            result[chain] = pct
+        else:
+            others += pct
+    if others > 0:
+        result["Others"] = round(others, 4)
+    return result
+
+
+async def compute_defi_tvl_tracker() -> dict:
+    """
+    DeFi TVL tracker: top protocols, chain dominance, momentum, sparkline.
+    Fetches from DeFi Llama; falls back to realistic mock data on error.
+    """
+    import aiohttp  # noqa: PLC0415
+    import asyncio as _asyncio  # noqa: PLC0415
+
+    raw_protocols: list = []
+    raw_chains:    list = []
+    raw_history:   list = []
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=12)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async def _get(url: str):
+                try:
+                    async with session.get(url) as r:
+                        return await r.json(content_type=None)
+                except Exception:
+                    return None
+
+            proto_data, chains_data, hist_data = await _asyncio.gather(
+                _get(_DT_PROTOCOLS_URL),
+                _get(_DT_CHAINS_URL),
+                _get(_DT_HISTORY_URL),
+            )
+
+        if isinstance(proto_data, list):
+            raw_protocols = proto_data
+        if isinstance(chains_data, list):
+            raw_chains = chains_data
+        if isinstance(hist_data, list):
+            raw_history = hist_data
+
+    except Exception:
+        pass
+
+    # ── Build protocol list ──────────────────────────────────────────────────
+    if raw_protocols:
+        protocols_norm = []
+        for p in raw_protocols:
+            tvl = float(p.get("tvl", 0) or 0)
+            if tvl <= 0:
+                continue
+            c1d = float(p.get("change_1d", 0) or 0)
+            c7d = float(p.get("change_7d", 0) or 0)
+            protocols_norm.append({
+                "name":           p.get("name", "Unknown"),
+                "tvl_usd":        tvl,
+                "chain":          p.get("chain", "Multi") or "Multi",
+                "category":       p.get("category", "Other") or "Other",
+                "change_24h_pct": round(c1d * 100, 2),
+                "change_7d_pct":  round(c7d * 100, 2),
+            })
+    else:
+        # Mock fallback
+        protocols_norm = [
+            {
+                "name":           p["name"],
+                "tvl_usd":        p["tvl"],
+                "chain":          p["chain"],
+                "category":       p["category"],
+                "change_24h_pct": round(p["change1d"] * 100, 2),
+                "change_7d_pct":  round(p["change7d"] * 100, 2),
+            }
+            for p in _DT_MOCK_PROTOCOLS
+        ]
+
+    top_protocols = _dt_rank_protocols(protocols_norm, _DT_TOP_N)
+    total_tvl = sum(p["tvl_usd"] for p in protocols_norm)
+
+    # ── Chain dominance ──────────────────────────────────────────────────────
+    if raw_chains:
+        chain_tvl_map: dict = {}
+        for c in raw_chains:
+            name = c.get("name", "Unknown")
+            tvl  = float(c.get("tvl", 0) or 0)
+            if tvl > 0:
+                chain_tvl_map[name] = tvl
+        chain_pcts = _dt_chain_dominance(chain_tvl_map)
+    else:
+        chain_pcts = _dt_chain_dominance(_DT_MOCK_CHAINS)
+
+    chain_dom = _dt_dominance_others(chain_pcts, _DT_DOM_THRESHOLD)
+
+    # ── Historical TVL ───────────────────────────────────────────────────────
+    if raw_history:
+        hist_vals = [float(h.get("tvl", 0)) for h in raw_history[-30:] if h.get("tvl")]
+        hist_out  = [
+            {"date": h.get("date", f"day-{i+1}"), "tvl_usd": float(h.get("tvl", 0))}
+            for i, h in enumerate(raw_history[-30:])
+        ]
+    else:
+        # Mock: 30 days of realistic data around current total
+        import random as _random  # noqa: PLC0415
+        _random.seed(42)
+        base = 90_000_000_000.0
+        hist_vals = []
+        for i in range(30):
+            base *= 1 + _random.uniform(-0.02, 0.025)
+            hist_vals.append(round(base, 0))
+        hist_out = [
+            {"date": f"day-{i+1}", "tvl_usd": v}
+            for i, v in enumerate(hist_vals)
+        ]
+
+    # ── Momentum & changes ───────────────────────────────────────────────────
+    momentum = _dt_momentum_signal(hist_vals)
+    tvl_24h_ago = hist_vals[-2] if len(hist_vals) >= 2 else total_tvl
+    tvl_7d_ago  = hist_vals[-8] if len(hist_vals) >= 8 else total_tvl
+    change_24h  = _dt_tvl_change_pct(total_tvl, tvl_24h_ago)
+    change_7d   = _dt_tvl_change_pct(total_tvl, tvl_7d_ago)
+
+    # ── Description ──────────────────────────────────────────────────────────
+    eth_dom = chain_dom.get("Ethereum", 0)
+    desc = (
+        f"DeFi TVL {_dt_format_tvl(total_tvl)} — "
+        f"{momentum} momentum, ETH dominance {eth_dom:.0f}%"
+    )
+
+    return {
+        "total_tvl_usd":      round(total_tvl, 2),
+        "tvl_change_24h_pct": round(change_24h, 2),
+        "tvl_change_7d_pct":  round(change_7d, 2),
+        "momentum":            momentum,
+        "protocols":           top_protocols,
+        "chain_dominance":     chain_dom,
+        "history":             hist_out,
+        "description":         desc,
     }
 
 
