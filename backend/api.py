@@ -5502,6 +5502,24 @@ async def market_regime_endpoint(symbol: Optional[str] = None):
     return JSONResponse(data)
 
 
+@router.get("/gamma-exposure")
+@cache_result(ttl_seconds=60)
+async def gamma_exposure_endpoint(symbol: Optional[str] = None):
+    """
+    Options Gamma Exposure (GEX): synthetic options chain with net dealer gamma per strike.
+
+    Computes zero-gamma flip point, positive/negative gamma zones, and GEX signal.
+    Data is seeded-mock (deterministic per symbol, no live API). Cache TTL: 60s.
+
+    Query params:
+        symbol: trading pair (default: BTCUSDT)
+    """
+    from gamma_exposure import compute_gamma_exposure
+    target = symbol or "BTCUSDT"
+    data = compute_gamma_exposure(target)
+    return JSONResponse(data)
+
+
 @router.get("/whale-flow")
 @cache_result(ttl_seconds=60)
 async def whale_flow_endpoint(symbol: Optional[str] = None):

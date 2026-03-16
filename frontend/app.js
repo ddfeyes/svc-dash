@@ -2557,6 +2557,8 @@ async function refresh() {
     await Promise.all([safe(refreshOptionsFlowTracker)]);
     // Batch 32: whale wallet flow tracker (Wave 23)
     await Promise.all([safe(renderWhaleFlow)]);
+    // Batch 33: options gamma exposure (Wave 23)
+    await Promise.all([safe(renderGammaExposure)]);
   } finally {
     _refreshRunning = false;
   }
@@ -3977,6 +3979,142 @@ async function renderWhaleFlow() {
     }
   } catch (err) {
     console.error('Error rendering whale flow:', err);
+    if (el) el.innerHTML = 'Error';
+  }
+}
+
+
+// ── Options Gamma Exposure (GEX) ──────────────────────────────────────────────
+async function renderGammaExposure() {
+  const el    = document.getElementById('gamma-exposure-content');
+  const badge = document.getElementById('gamma-exposure-badge');
+  if (!el) return;
+
+  try {
+    const sym = activeSymbol || 'BTCUSDT';
+    const res = await fetch(`/api/gamma-exposure?symbol=${sym}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+
+    const {
+      spot,
+      strikes,
+      net_gamma_by_strike,
+      flip_point,
+      total_net_gex,
+      gex_signal,
+      positive_gamma_zone,
+      negative_gamma_zone,
+    } = data;
+
+    // Signal colors and labels
+    const signalColor = (s) =>
+      s === 'pinning'    ? '#f39c12' :
+      s === 'amplifying' ? '#e74c3c' :
+      '#4a9eff';
+
+    const signalLabel = (s) =>
+      s === 'pinning'    ? '📍 Pinning' :
+      s === 'amplifying' ? '⚡ Amplifying' :
+      '≈ Neutral';
+
+    // Format price (abbreviate large numbers)
+    const fmtPrice = (v) => {
+      if (v >= 1000) return `$${(v / 1000).toFixed(1)}k`;
+      return `$${v.toFixed(0)}`;
+    };
+
+    // Format GEX value
+    const fmtGex = (v) => {
+      const abs = Math.abs(v);
+      const sign = v >= 0 ? '+' : '-';
+      if (abs >= 1000) return `${sign}${(abs / 1000).toFixed(2)}k`;
+      return `${sign}${abs.toFixed(3)}`;
+    };
+
+    // Build bar chart: one bar per strike, colored by sign
+    const maxAbsGex = Math.max(...net_gamma_by_strike.map(e => Math.abs(e.net_dealer_gamma)), 1e-10);
+    const BAR_MAX_H = 36; // max bar height in pixels
+    const barWidth = Math.floor(100 / net_gamma_by_strike.length);
+
+    const bars = net_gamma_by_strike.map((entry) => {
+      const { strike, net_dealer_gamma } = entry;
+      const barH = Math.max(2, Math.round((Math.abs(net_dealer_gamma) / maxAbsGex) * BAR_MAX_H));
+      const isPos = net_dealer_gamma >= 0;
+      const barColor = isPos ? '#27ae60' : '#e74c3c';
+      const isFlip = flip_point !== null && Math.abs(strike - flip_point) < (strikes[1] - strikes[0]) * 0.6;
+      const flipMark = isFlip ? `border: 1px solid #f39c12;` : '';
+      const strikeLabel = fmtPrice(strike);
+      const isAtm = Math.abs(strike - spot) === Math.min(...strikes.map(s => Math.abs(s - spot)));
+
+      return `
+        <div style="display:flex;flex-direction:column;align-items:center;width:${barWidth}%;gap:1px;"
+             title="${strikeLabel}: ${fmtGex(net_dealer_gamma)}${isFlip ? ' ← flip' : ''}">
+          <div style="
+            width:10px;
+            height:${barH}px;
+            background:${barColor};
+            border-radius:2px;
+            ${flipMark}
+            ${isAtm ? 'outline:1px solid #4a9eff;' : ''}
+          "></div>
+        </div>`;
+    }).join('');
+
+    // Flip point annotation
+    const flipStr = flip_point !== null
+      ? `<span style="color:#f39c12;font-weight:bold;">${fmtPrice(flip_point)}</span>`
+      : '<span style="color:#555;">N/A</span>';
+
+    // Gamma zones
+    const posMin = positive_gamma_zone.min;
+    const posMax = positive_gamma_zone.max;
+    const negMin = negative_gamma_zone.min;
+    const negMax = negative_gamma_zone.max;
+    const posStr = posMin !== null ? `${fmtPrice(posMin)}–${fmtPrice(posMax)}` : 'None';
+    const negStr = negMin !== null ? `${fmtPrice(negMin)}–${fmtPrice(negMax)}` : 'None';
+
+    el.innerHTML = `
+      <div style="display:flex;align-items:flex-end;gap:1px;height:${BAR_MAX_H + 4}px;padding:2px 0;margin-bottom:6px;">
+        ${bars}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;font-size:10px;margin-bottom:4px;">
+        <div style="text-align:center;">
+          <div style="color:#f39c12;font-weight:bold;">${flipStr}</div>
+          <div style="color:#888;font-size:9px;">Flip Point</div>
+        </div>
+        <div style="text-align:center;">
+          <div style="color:${total_net_gex >= 0 ? '#27ae60' : '#e74c3c'};font-weight:bold;">${fmtGex(total_net_gex)}</div>
+          <div style="color:#888;font-size:9px;">Net GEX</div>
+        </div>
+        <div style="text-align:center;">
+          <div style="color:#4a9eff;font-weight:bold;">${fmtPrice(spot)}</div>
+          <div style="color:#888;font-size:9px;">Spot</div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:9px;margin-bottom:4px;">
+        <div>
+          <span style="color:#27ae60;">▣ Pos zone: </span>
+          <span style="color:#aaa;">${posStr}</span>
+        </div>
+        <div>
+          <span style="color:#e74c3c;">▣ Neg zone: </span>
+          <span style="color:#aaa;">${negStr}</span>
+        </div>
+      </div>
+    `;
+
+    if (badge) {
+      badge.textContent = signalLabel(gex_signal);
+      badge.style.background = signalColor(gex_signal);
+      badge.style.color = '#fff';
+      badge.style.fontSize = '10px';
+      badge.style.padding = '2px 6px';
+      badge.style.display = 'inline-block';
+      badge.style.borderRadius = '3px';
+    }
+  } catch (err) {
+    console.error('Error rendering gamma exposure:', err);
     if (el) el.innerHTML = 'Error';
   }
 }
