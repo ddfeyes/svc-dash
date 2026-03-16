@@ -2092,6 +2092,76 @@ async function renderLiqHeatmap() {
   el.innerHTML = html;
 }
 
+// ── Net Taker Delta ───────────────────────────────────────────────────────────
+async function renderNetTakerDelta() {
+  const el    = document.getElementById('net-taker-delta-content');
+  const badge = document.getElementById('net-taker-delta-badge');
+  if (!el) return;
+
+  // Fetch for all symbols in parallel
+  const symbols = getSymbols();
+  const results = await Promise.all(
+    symbols.map(sym =>
+      apiFetch(`/net-taker-delta?symbol=${encodeURIComponent(sym)}&window=3600`)
+        .then(d => d ? { symbol: sym, total_net: d.total_net, total_buy: d.total_buy, total_sell: d.total_sell } : null)
+        .catch(() => null)
+    )
+  );
+
+  const rows = results.filter(Boolean);
+  if (!rows.length) { setErr('net-taker-delta-content'); return; }
+
+  // Sort by total_net descending for ranking
+  rows.sort((a, b) => b.total_net - a.total_net);
+  rows.forEach((r, i) => { r.rank = i + 1; });
+
+  // Badge reflects top symbol's direction
+  const top = rows[0];
+  if (badge) {
+    let label = 'neutral', cls = 'badge-blue';
+    if (top.total_net > 0)      { label = 'buying';  cls = 'badge-green'; }
+    else if (top.total_net < 0) { label = 'selling'; cls = 'badge-red'; }
+    badge.textContent = label;
+    badge.className   = `card-badge ${cls}`;
+    badge.style.display = '';
+  }
+
+  function fmtVol(v) {
+    const abs = Math.abs(v);
+    if (abs >= 1_000_000) return `${(v / 1_000_000).toFixed(2)}M`;
+    if (abs >= 1_000)     return `${(v / 1_000).toFixed(1)}k`;
+    return v.toFixed(2);
+  }
+
+  const rowsHtml = rows.map(r => {
+    const total = r.total_buy + r.total_sell;
+    const buyPct = total > 0 ? Math.round(r.total_buy / total * 100) : 50;
+    const netPos = r.total_net >= 0;
+    const netColor = netPos ? 'var(--green)' : 'var(--red)';
+    const netSign  = netPos ? '+' : '';
+    return `<tr>
+      <td style="color:var(--muted);font-size:10px;">#${r.rank}</td>
+      <td style="font-size:11px;">${r.symbol.replace('USDT','')}</td>
+      <td style="font-size:11px;color:${netColor};text-align:right;">${netSign}${fmtVol(r.total_net)}</td>
+      <td style="width:60px;padding-left:6px;">
+        <div style="background:var(--red);height:6px;border-radius:3px;position:relative;">
+          <div style="background:var(--green);width:${buyPct}%;height:100%;border-radius:3px 0 0 3px;"></div>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:11px;">
+    <thead><tr>
+      <th style="color:var(--muted);text-align:left;font-size:10px;padding-bottom:4px;">#</th>
+      <th style="color:var(--muted);text-align:left;font-size:10px;">Symbol</th>
+      <th style="color:var(--muted);text-align:right;font-size:10px;">Net Δ</th>
+      <th style="color:var(--muted);font-size:10px;padding-left:6px;">Buy/Sell</th>
+    </tr></thead>
+    <tbody>${rowsHtml}</tbody>
+  </table>`;
+}
+
 // ── Top Movers ────────────────────────────────────────────────────────────────
 async function renderTopMovers() {
   const data = await apiFetch('/top-movers');
@@ -2200,6 +2270,7 @@ async function refresh() {
     safe(renderObWalls),
     safe(renderTopMovers),
     safe(renderLiqHeatmap),
+    safe(renderNetTakerDelta),
   ]);
 }
 
