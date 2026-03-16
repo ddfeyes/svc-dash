@@ -72,6 +72,7 @@ from metrics import (
     compute_layer2_metrics,
     compute_nft_market_pulse,
     compute_cross_chain_bridge_monitor,
+    compute_protocol_fee_capture,
 )
 
 router = APIRouter(prefix="/api")
@@ -5326,4 +5327,11 @@ async def holder_distribution_endpoint():
 async def cross_chain_bridge_monitor_endpoint():
     """Cross-chain bridge monitor: flows across ETH/BSC/ARB/OP/BASE, top bridges, anomaly detection."""
     data = await compute_cross_chain_bridge_monitor()
+    return JSONResponse(data)
+
+
+@router.get("/protocol-fee-capture")
+async def protocol_fee_capture_endpoint():
+    """Protocol fee capture: top-20 DeFi fee revenue, P/S ratios, growth rates, fee-leader signal."""
+    data = await compute_protocol_fee_capture()
     return JSONResponse(data)

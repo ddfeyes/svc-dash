@@ -2502,6 +2502,8 @@ async function refresh() {
     // Batch 16: derivatives heatmap
         // Batch 25: holder distribution card
         // Batch 26: cross-chain bridge monitor
+    // Batch 27: protocol fee capture
+    await Promise.all([safe(renderProtocolFeeCapture)]);
   } finally {
     _refreshRunning = false;
   }
@@ -2747,6 +2749,65 @@ async function renderTokenVelocityNvt() {
 
 // ── Derivatives Heatmap ───────────────────────────────────────────────────────
 // ── Holder Distribution ───────────────────────────────────────────────────
+// ── Protocol Fee Capture ─────────────────────────────────────────────────────
+async function renderProtocolFeeCapture() {
+  const el    = document.getElementById('protocol-fee-capture-content');
+  const badge = document.getElementById('protocol-fee-capture-badge');
+  if (!el) return;
+  const data = await apiFetch('/protocol-fee-capture');
+  if (!data) { el.innerHTML = '<div style="color:var(--red);font-size:11px;">Error loading</div>'; return; }
+
+  const protos  = data.protocols || [];
+  const signal  = data.fee_leader_signal || 'neutral';
+  const total   = data.total_defi_fees_24h || 0;
+  const topName = data.top_protocol || '';
+
+  const sigCol = signal === 'dominant' ? 'var(--green)' : signal === 'fragmented' ? 'var(--yellow)' : 'var(--muted)';
+  if (badge) {
+    badge.textContent = signal.toUpperCase();
+    badge.style.background = sigCol;
+    badge.style.color = '#000';
+    badge.style.display = 'inline-block';
+  }
+
+  const fmtFee = v => {
+    if (v >= 1e6) return '$' + (v / 1e6).toFixed(2) + 'M';
+    if (v >= 1e3) return '$' + (v / 1e3).toFixed(1) + 'K';
+    return '$' + v.toFixed(0);
+  };
+
+  const top5 = protos.slice(0, 5);
+  const maxFee = top5[0] ? top5[0].fee_24h : 1;
+
+  const rows = top5.map((p, i) => {
+    const barW = Math.round((p.fee_24h / maxFee) * 100);
+    const growthCol = p.growth_rate_7d >= 0 ? 'var(--green)' : 'var(--red)';
+    const growthStr = (p.growth_rate_7d >= 0 ? '+' : '') + p.growth_rate_7d.toFixed(1) + '%';
+    const isTop = p.name === topName;
+    return `<div style="margin-bottom:5px">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">
+        <span style="font-size:9px;color:var(--muted);width:14px;text-align:right">${i + 1}</span>
+        <span style="font-size:10px;color:${isTop ? 'var(--green)' : 'var(--fg)'};width:72px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.name}</span>
+        <div style="flex:1;background:var(--border);height:6px;border-radius:3px">
+          <div style="width:${barW}%;background:${isTop ? 'var(--green)' : 'var(--accent)'};height:100%;border-radius:3px"></div>
+        </div>
+        <span style="font-size:10px;color:var(--fg);min-width:52px;text-align:right">${fmtFee(p.fee_24h)}</span>
+        <span style="font-size:9px;color:${growthCol};min-width:40px;text-align:right">${growthStr}</span>
+        <span style="font-size:9px;color:var(--muted);min-width:36px;text-align:right">P/S ${p.ps_ratio.toFixed(0)}x</span>
+      </div>
+    </div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="font-size:10px;color:var(--muted);margin-bottom:6px;display:flex;gap:10px;flex-wrap:wrap">
+      <span>total 24h: <b style="color:var(--fg)">${fmtFee(total)}</b></span>
+      <span>leader: <b style="color:var(--green)">${topName}</b></span>
+      <span>signal: <b style="color:${sigCol}">${signal}</b></span>
+    </div>
+    ${rows}
+    <div style="font-size:9px;color:var(--muted);margin-top:4px">top-5 of 20 · sorted by 24h fee revenue · P/S = mktcap / annualized fees</div>`;
+}
+
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 async function init() {
   const safeInit = (fn) => { try { fn(); } catch(e) { console.warn('Chart init failed:', e.message); } };

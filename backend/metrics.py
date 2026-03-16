@@ -8537,3 +8537,125 @@ async def compute_cross_chain_bridge_monitor() -> dict:
         "zscore":           float(zscore),
         "description":      desc,
     }
+
+
+# ── Protocol Fee Capture ───────────────────────────────────────────────────────
+
+_PFC_PROTOCOLS = [
+    # name,       fee_24h_usd,  market_cap_usd
+    ("Uniswap",     3_850_000,   5_200_000_000),
+    ("Aave",        1_420_000,   1_800_000_000),
+    ("Lido",        2_100_000,   2_400_000_000),
+    ("GMX",           980_000,     620_000_000),
+    ("Curve",         760_000,     420_000_000),
+    ("MakerDAO",      640_000,   1_100_000_000),
+    ("Compound",      310_000,     520_000_000),
+    ("dYdX",          430_000,     380_000_000),
+    ("Synthetix",     260_000,     280_000_000),
+    ("Balancer",      195_000,     210_000_000),
+    ("Convex",        175_000,     260_000_000),
+    ("1inch",         140_000,     190_000_000),
+    ("Sushiswap",     120_000,     130_000_000),
+    ("Frax",          105_000,     180_000_000),
+    ("Pendle",         88_000,     140_000_000),
+    ("Yearn",          72_000,     160_000_000),
+    ("Velodrome",      65_000,      90_000_000),
+    ("Radiant",        58_000,      75_000_000),
+    ("Gains",          48_000,      65_000_000),
+    ("Camelot",        42_000,      55_000_000),
+]
+
+# 7-day growth rates (%) seeded per protocol
+_PFC_GROWTH_7D = {
+    "Uniswap":    12.40,
+    "Aave":        8.20,
+    "Lido":       15.60,
+    "GMX":        22.30,
+    "Curve":      -3.10,
+    "MakerDAO":    5.80,
+    "Compound":   -1.50,
+    "dYdX":       18.70,
+    "Synthetix":   4.20,
+    "Balancer":   -2.40,
+    "Convex":      6.90,
+    "1inch":       3.30,
+    "Sushiswap":  -5.60,
+    "Frax":        9.10,
+    "Pendle":     31.20,
+    "Yearn":      -0.80,
+    "Velodrome":  11.50,
+    "Radiant":    -4.30,
+    "Gains":       7.60,
+    "Camelot":    14.80,
+}
+
+# 7d/30d multipliers relative to 24h (slightly randomised but seeded)
+_PFC_7D_MULT = {
+    "Uniswap":   7.3, "Aave": 7.1, "Lido": 7.4, "GMX": 6.8, "Curve": 7.0,
+    "MakerDAO":  7.2, "Compound": 6.9, "dYdX": 7.5, "Synthetix": 7.0,
+    "Balancer":  6.8, "Convex": 7.1, "1inch": 7.2, "Sushiswap": 6.7,
+    "Frax":      7.0, "Pendle": 7.6, "Yearn": 6.9, "Velodrome": 7.3,
+    "Radiant":   6.8, "Gains": 7.1, "Camelot": 7.2,
+}
+_PFC_30D_MULT = {
+    "Uniswap":   30.4, "Aave": 30.1, "Lido": 31.0, "GMX": 29.5, "Curve": 29.8,
+    "MakerDAO":  30.6, "Compound": 29.3, "dYdX": 31.2, "Synthetix": 29.9,
+    "Balancer":  29.1, "Convex": 30.3, "1inch": 30.5, "Sushiswap": 28.9,
+    "Frax":      30.0, "Pendle": 31.8, "Yearn": 29.4, "Velodrome": 30.7,
+    "Radiant":   29.0, "Gains": 30.2, "Camelot": 30.9,
+}
+
+
+def _pfc_ps_ratio(market_cap: float, fee_30d: float) -> float:
+    """P/S = market_cap / annualized_fee_revenue (fee_30d * 12)."""
+    annualized = fee_30d * 12
+    if annualized <= 0:
+        return 0.0
+    return round(market_cap / annualized, 2)
+
+
+def _pfc_fee_leader_signal(top_share: float) -> str:
+    if top_share > 0.35:
+        return "dominant"
+    if top_share < 0.20:
+        return "fragmented"
+    return "neutral"
+
+
+async def compute_protocol_fee_capture(symbol: str = None) -> dict:
+    """
+    Protocol fee capture dashboard card.
+
+    Returns seeded 24h/7d/30d fee revenue for top-20 DeFi protocols,
+    P/S ratios, 7d growth rates, competitive ranking, and a fee-leader signal.
+    """
+    protocols = []
+    for name, fee_24h_raw, mcap in _PFC_PROTOCOLS:
+        fee_24h = round(float(fee_24h_raw), 2)
+        fee_7d  = round(fee_24h * _PFC_7D_MULT[name], 2)
+        fee_30d = round(fee_24h * _PFC_30D_MULT[name], 2)
+        ps      = _pfc_ps_ratio(float(mcap), fee_30d)
+        growth  = round(float(_PFC_GROWTH_7D[name]), 2)
+        protocols.append({
+            "name":          name,
+            "fee_24h":       fee_24h,
+            "fee_7d":        fee_7d,
+            "fee_30d":       fee_30d,
+            "ps_ratio":      ps,
+            "growth_rate_7d": growth,
+        })
+
+    # Sort by 24h fee descending (competitive rank)
+    protocols.sort(key=lambda p: p["fee_24h"], reverse=True)
+
+    top_protocol = protocols[0]["name"]
+    total_24h = round(sum(p["fee_24h"] for p in protocols), 2)
+    top_share = protocols[0]["fee_24h"] / total_24h if total_24h > 0 else 0.0
+    signal = _pfc_fee_leader_signal(top_share)
+
+    return {
+        "protocols":          protocols,
+        "top_protocol":       top_protocol,
+        "total_defi_fees_24h": total_24h,
+        "fee_leader_signal":  signal,
+    }
