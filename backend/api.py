@@ -77,6 +77,7 @@ from metrics import (
     compute_smart_money_index,
     compute_cross_correlation_signal,
     compute_funding_term_structure,
+    compute_liquidation_heatmap,
 )
 
 router = APIRouter(prefix="/api")
@@ -179,9 +180,8 @@ async def ws_alerts(ws: WebSocket):
 @router.get("/ws-stats")
 async def ws_stats():
     """Return WebSocket connection stats: connection count, message rate, uptime."""
-    connections = (
-        sum(len(v) for v in manager._connections.values())
-        + len(alert_manager._clients)
+    connections = sum(len(v) for v in manager._connections.values()) + len(
+        alert_manager._clients
     )
     uptime_sec = time.time() - _ws_start_time
     messages_per_sec = _ws_msg_count / uptime_sec if uptime_sec > 0 else 0.0
@@ -541,7 +541,7 @@ async def funding_momentum(
     deduped = sorted(seen.values(), key=lambda r: r["ts"])
 
     # Use up to `periods` most recent deduped samples
-    window = deduped[-(periods + 1):]
+    window = deduped[-(periods + 1) :]
     if len(window) < 2:
         window = deduped
 
@@ -607,17 +607,17 @@ async def cascade_predictor_endpoint(
 async def funding_term_structure(symbol: Optional[str] = None):
     """
     Funding rate term structure analysis (#105).
-    
+
     Returns 1d, 7d, 30d average funding rates, shape (normal/inverted/flat),
     exhaustion score, and trend.
-    
+
     Performance:
     - Single symbol: <200ms
     - All symbols: <500ms
-    
+
     Query params:
     - symbol: optional, default all symbols (returns dict of results)
-    
+
     Response:
     {
         "status": "ok",
@@ -634,8 +634,9 @@ async def funding_term_structure(symbol: Optional[str] = None):
     }
     """
     import time
+
     start = time.time()
-    
+
     if symbol:
         # Single symbol
         syms = get_symbols()
@@ -652,11 +653,11 @@ async def funding_term_structure(symbol: Optional[str] = None):
         syms = get_symbols()
         if not syms:
             return {"status": "ok", "all_symbols": {}}
-        
+
         # Compute in parallel with timeout
         tasks = [compute_funding_term_structure(symbol=sym) for sym in syms]
         results = await asyncio.gather(*tasks)
-        
+
         all_data = {sym: data for sym, data in zip(syms, results)}
         return {
             "status": "ok",
@@ -2198,8 +2199,7 @@ async def correlations_heatmap():
 
     # Fetch enough candles to compute 20 returns (need 21 closes)
     candle_tasks = [
-        get_ohlcv(interval_seconds=60, window_seconds=2400, symbol=sym)
-        for sym in syms
+        get_ohlcv(interval_seconds=60, window_seconds=2400, symbol=sym) for sym in syms
     ]
     all_candles = await asyncio.gather(*candle_tasks, return_exceptions=True)
 
@@ -5101,17 +5101,17 @@ async def top_movers_endpoint():
     movers = []
     for sym in symbols:
         # Fetch enough trades to cover the 24h window
-        trades = await get_recent_trades(
-            since=now - 86400 - 60, symbol=sym, limit=5000
-        )
+        trades = await get_recent_trades(since=now - 86400 - 60, symbol=sym, limit=5000)
         if not trades:
-            movers.append({
-                "symbol": sym,
-                "price": None,
-                "change_1h": None,
-                "change_4h": None,
-                "change_24h": None,
-            })
+            movers.append(
+                {
+                    "symbol": sym,
+                    "price": None,
+                    "change_1h": None,
+                    "change_4h": None,
+                    "change_24h": None,
+                }
+            )
             continue
 
         # Current price = most recent trade
@@ -5124,7 +5124,11 @@ async def top_movers_endpoint():
             boundary_trades = [t for t in trades if float(t["ts"]) <= cutoff]
             if boundary_trades:
                 past_price = float(boundary_trades[0]["price"])
-                row[key] = round((current_price - past_price) / past_price * 100, 4) if past_price else None
+                row[key] = (
+                    round((current_price - past_price) / past_price * 100, 4)
+                    if past_price
+                    else None
+                )
             else:
                 row[key] = None
         movers.append(row)
@@ -5175,9 +5179,7 @@ async def trade_size_percentiles(symbol: Optional[str] = None):
         }
 
     sizes = sorted(float(t["qty"]) for t in trades)
-    usd_sizes = sorted(
-        float(t["price"]) * float(t["qty"]) for t in trades
-    )
+    usd_sizes = sorted(float(t["price"]) * float(t["qty"]) for t in trades)
     n = len(sizes)
 
     return {
@@ -5231,11 +5233,11 @@ async def liquidation_heatmap_endpoint(
         step = (price_max - price_min) / buckets
         bkt_list = [
             {
-                "price_low":  round(price_min + i * step, 10),
+                "price_low": round(price_min + i * step, 10),
                 "price_high": round(price_min + (i + 1) * step, 10),
-                "long_usd":   0.0,
-                "short_usd":  0.0,
-                "total_usd":  0.0,
+                "long_usd": 0.0,
+                "short_usd": 0.0,
+                "total_usd": 0.0,
             }
             for i in range(buckets)
         ]
@@ -5253,19 +5255,21 @@ async def liquidation_heatmap_endpoint(
 
         # Round for clean JSON
         for b in bkt_list:
-            b["long_usd"]  = round(b["long_usd"],  2)
+            b["long_usd"] = round(b["long_usd"], 2)
             b["short_usd"] = round(b["short_usd"], 2)
             b["total_usd"] = round(b["total_usd"], 2)
 
         result[sym] = {
-            "buckets":        bkt_list,
-            "price_min":      round(price_min, 10),
-            "price_max":      round(price_max, 10),
-            "total_usd":      round(sum(float(l.get("value") or 0) for l in liqs), 2),
+            "buckets": bkt_list,
+            "price_min": round(price_min, 10),
+            "price_max": round(price_max, 10),
+            "total_usd": round(sum(float(l.get("value") or 0) for l in liqs), 2),
             "n_liquidations": len(liqs),
         }
 
-    return JSONResponse({"status": "ok", "ts": now, "window_s": window_s, "symbols": result})
+    return JSONResponse(
+        {"status": "ok", "ts": now, "window_s": window_s, "symbols": result}
+    )
 
 
 @router.get("/momentum-rank")
@@ -5302,11 +5306,11 @@ async def momentum_rank_endpoint():
         )
         direction = "bull" if score > 0.1 else "bear" if score < -0.1 else "neutral"
         return {
-            "symbol":   sym,
-            "score":    score,
-            "pct_5m":   pcts["5m"],
-            "pct_15m":  pcts["15m"],
-            "pct_1h":   pcts["1h"],
+            "symbol": sym,
+            "score": score,
+            "pct_5m": pcts["5m"],
+            "pct_15m": pcts["15m"],
+            "pct_1h": pcts["1h"],
             "direction": direction,
         }
 
@@ -5354,10 +5358,14 @@ async def miner_reserve_endpoint():
 async def macro_liquidity_endpoint():
     """Macro liquidity: M2 proxy, Fed balance sheet, USD/BTC divergence, regime score."""
     data = await compute_macro_liquidity_indicator()
+
+
 @router.get("/token-velocity-nvt")
 async def token_velocity_nvt_endpoint():
     """Token velocity + NVT signal: on-chain BTC valuation using tx volume / market cap."""
     data = await compute_token_velocity_nvt()
+
+
 @router.get("/protocol-revenue-card")
 async def protocol_revenue_endpoint():
     """Protocol revenue: top 10 DeFi protocols by revenue, P/E ratio, growth momentum."""
@@ -5433,4 +5441,20 @@ async def smart_money_index_endpoint():
 async def volatility_regime_detector_endpoint():
     """Volatility regime detector: classifies market into low/medium/high/extreme vol regimes."""
     data = await compute_volatility_regime_detector()
+    return JSONResponse(data)
+
+
+@router.get("/liquidation-heatmap-matrix")
+async def liquidation_heatmap_matrix_endpoint(
+    symbol: str = Query(default="BANANAS31USDT"),
+    zone_threshold: int = Query(default=10, ge=1, le=100),
+):
+    """
+    2-D liquidation heatmap: 50 price levels × 288 time buckets (24 h window,
+    5-minute intervals).  Returns heatmap_matrix, zones, peak_price_level,
+    peak_time, price_levels, and summary stats.
+    """
+    data = await compute_liquidation_heatmap(
+        symbol=symbol, zone_threshold=zone_threshold
+    )
     return JSONResponse(data)

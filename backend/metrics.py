@@ -1,4 +1,5 @@
 import random as _random
+
 """Computed metrics: CVD, volume imbalance, OI momentum, phase classifier — multi-symbol."""
 
 import asyncio
@@ -4487,7 +4488,9 @@ async def compute_oi_weighted_price(symbol: str = None, limit: int = 50) -> Dict
       - short_heavy: price < OI-weight by >1% (shorts overextended)
       - neutral:     within +/-1%
     """
-    oi_rows = await get_oi_history(limit=limit, since=time.time() - 86400, symbol=symbol)
+    oi_rows = await get_oi_history(
+        limit=limit, since=time.time() - 86400, symbol=symbol
+    )
 
     if not oi_rows:
         return {
@@ -4628,7 +4631,7 @@ async def compute_realized_volatility_bands(
         return {**_empty, "n_candles": n_candles, "description": "Too few candles"}
 
     # Use last window+1 candles -> window log-returns
-    subset = sorted_candles[-(window + 1):]
+    subset = sorted_candles[-(window + 1) :]
     closes = [c["close"] for c in subset]
 
     log_returns = []
@@ -4714,7 +4717,11 @@ async def detect_ob_walls(
     if not snapshots:
         latest = await get_latest_orderbook(symbol=symbol, limit=1)
         if not latest:
-            return {"walls": [], "liquidation_risk": "low", "description": "No orderbook data"}
+            return {
+                "walls": [],
+                "liquidation_risk": "low",
+                "description": "No orderbook data",
+            }
         snapshots = latest
 
     # Pre-parse all snapshots into {price: qty} dicts for fast lookup
@@ -4725,15 +4732,21 @@ async def detect_ob_walls(
             raw_asks = _json.loads(snap.get("asks", "[]"))
         except Exception:
             raw_bids, raw_asks = [], []
-        parsed.append({
-            "ts": snap["ts"],
-            "bids": {float(p): float(q) for p, q in raw_bids},
-            "asks": {float(p): float(q) for p, q in raw_asks},
-            "mid_price": snap.get("mid_price"),
-        })
+        parsed.append(
+            {
+                "ts": snap["ts"],
+                "bids": {float(p): float(q) for p, q in raw_bids},
+                "asks": {float(p): float(q) for p, q in raw_asks},
+                "mid_price": snap.get("mid_price"),
+            }
+        )
 
     if not parsed:
-        return {"walls": [], "liquidation_risk": "low", "description": "No orderbook data"}
+        return {
+            "walls": [],
+            "liquidation_risk": "low",
+            "description": "No orderbook data",
+        }
 
     current = parsed[-1]
     current_ts = current["ts"]
@@ -4742,7 +4755,11 @@ async def detect_ob_walls(
     # Compute median size across all levels in current snapshot
     all_sizes = list(current["bids"].values()) + list(current["asks"].values())
     if not all_sizes:
-        return {"walls": [], "liquidation_risk": "low", "description": "Empty orderbook"}
+        return {
+            "walls": [],
+            "liquidation_risk": "low",
+            "description": "Empty orderbook",
+        }
 
     all_sizes_sorted = sorted(all_sizes)
     n = len(all_sizes_sorted)
@@ -4785,17 +4802,21 @@ async def detect_ob_walls(
             else 0.0
         )
 
-        walls_output.append({
-            "price": price,
-            "size": round(current_size, 6),
-            "side": info["side"],
-            "age_sec": age_sec,
-            "decay_pct": round(decay_pct, 2),
-        })
+        walls_output.append(
+            {
+                "price": price,
+                "size": round(current_size, 6),
+                "side": info["side"],
+                "age_sec": age_sec,
+                "decay_pct": round(decay_pct, 2),
+            }
+        )
 
     # Sort: bid walls price desc, ask walls price asc
     bid_walls = sorted(
-        [w for w in walls_output if w["side"] == "bid"], key=lambda w: w["price"], reverse=True
+        [w for w in walls_output if w["side"] == "bid"],
+        key=lambda w: w["price"],
+        reverse=True,
     )
     ask_walls = sorted(
         [w for w in walls_output if w["side"] == "ask"], key=lambda w: w["price"]
@@ -4807,11 +4828,13 @@ async def detect_ob_walls(
     if mid_price > 0 and walls_output:
         bid_dists = [
             abs(w["price"] - mid_price) / mid_price * 100
-            for w in walls_output if w["side"] == "bid"
+            for w in walls_output
+            if w["side"] == "bid"
         ]
         ask_dists = [
             abs(w["price"] - mid_price) / mid_price * 100
-            for w in walls_output if w["side"] == "ask"
+            for w in walls_output
+            if w["side"] == "ask"
         ]
         closest_bid = min(bid_dists, default=100.0)
         closest_ask = min(ask_dists, default=100.0)
@@ -4837,6 +4860,7 @@ _CAC_BENCHMARKS = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT")
 
 def _cac_log_returns(prices: List[float]) -> List[float]:
     import math as _m
+
     rets = []
     for i in range(1, len(prices)):
         if prices[i - 1] > 0 and prices[i] > 0:
@@ -4848,6 +4872,7 @@ def _cac_log_returns(prices: List[float]) -> List[float]:
 
 def _cac_pearson(x: List[float], y: List[float]) -> Optional[float]:
     import math as _m
+
     n = min(len(x), len(y))
     if n < 2:
         return None
@@ -4937,10 +4962,7 @@ async def compute_cross_asset_corr(
                     if resp.status != 200:
                         return {}
                     data = await resp.json()
-                    return {
-                        int(row[0] // 1000): float(row[4])
-                        for row in data
-                    }
+                    return {int(row[0] // 1000): float(row[4]) for row in data}
         except Exception:
             return {}
 
@@ -4953,9 +4975,7 @@ async def compute_cross_asset_corr(
             bench_price_maps[b] = r
 
     # ── align on common timestamps and compute returns ────────────────────────
-    def _aligned_returns(
-        pm_a: Dict[int, float], pm_b: Dict[int, float]
-    ) -> tuple:
+    def _aligned_returns(pm_a: Dict[int, float], pm_b: Dict[int, float]) -> tuple:
         common = sorted(set(pm_a.keys()) & set(pm_b.keys()))
         pa = [pm_a[t] for t in common]
         pb = [pm_b[t] for t in common]
@@ -5022,7 +5042,7 @@ async def compute_cross_asset_corr(
         sp = max(all_pairs, key=lambda t: t[2])
         wp = min(all_pairs, key=lambda t: t[2])
         strongest_pair = {"symbol": sp[0], "benchmark": sp[1], "corr": round(sp[2], 4)}
-        weakest_pair   = {"symbol": wp[0], "benchmark": wp[1], "corr": round(wp[2], 4)}
+        weakest_pair = {"symbol": wp[0], "benchmark": wp[1], "corr": round(wp[2], 4)}
 
     desc = (
         f"{strongest_pair['symbol']} shows strongest correlation "
@@ -5052,26 +5072,75 @@ async def compute_cross_asset_corr(
 # Data: CryptoCompare news + social stats (free, no API key).
 
 _SS_BULLISH_KEYWORDS: list = [
-    "moon", "rally", "breakout", "accumulation", "buy", "bull", "surge",
-    "pump", "ath", "breakout", "support", "adoption", "upgrade", "launch",
-    "partnership", "bullish", "recovery", "rebound", "growth", "gain",
-    "profit", "long", "hodl", "squeeze", "uptrend", "milestone",
+    "moon",
+    "rally",
+    "breakout",
+    "accumulation",
+    "buy",
+    "bull",
+    "surge",
+    "pump",
+    "ath",
+    "breakout",
+    "support",
+    "adoption",
+    "upgrade",
+    "launch",
+    "partnership",
+    "bullish",
+    "recovery",
+    "rebound",
+    "growth",
+    "gain",
+    "profit",
+    "long",
+    "hodl",
+    "squeeze",
+    "uptrend",
+    "milestone",
 ]
 _SS_BEARISH_KEYWORDS: list = [
-    "crash", "dump", "sell", "bear", "drop", "decline", "loss", "panic",
-    "collapse", "fear", "liquidation", "short", "resistance", "downtrend",
-    "hack", "exploit", "scam", "fraud", "ban", "regulation", "fine",
-    "bankruptcy", "delist", "bearish", "correction", "plunge", "tank",
+    "crash",
+    "dump",
+    "sell",
+    "bear",
+    "drop",
+    "decline",
+    "loss",
+    "panic",
+    "collapse",
+    "fear",
+    "liquidation",
+    "short",
+    "resistance",
+    "downtrend",
+    "hack",
+    "exploit",
+    "scam",
+    "fraud",
+    "ban",
+    "regulation",
+    "fine",
+    "bankruptcy",
+    "delist",
+    "bearish",
+    "correction",
+    "plunge",
+    "tank",
 ]
 
 # CryptoCompare social stats for BTC (coinId=1182)
-_SS_CC_SOCIAL: str = "https://min-api.cryptocompare.com/data/social/coin/latest?coinId=1182"
-_SS_CC_NEWS:   str = "https://min-api.cryptocompare.com/data/v2/news/?lang=EN&categories=BTC,ETH"
+_SS_CC_SOCIAL: str = (
+    "https://min-api.cryptocompare.com/data/social/coin/latest?coinId=1182"
+)
+_SS_CC_NEWS: str = (
+    "https://min-api.cryptocompare.com/data/v2/news/?lang=EN&categories=BTC,ETH"
+)
 
 # Volume proxy normalisation ceilings (empirical baselines)
-_SS_POSTS_CEIL:    float = 200.0    # reddit posts/hour
+_SS_POSTS_CEIL: float = 200.0  # reddit posts/hour
 _SS_COMMENTS_CEIL: float = 2_000.0  # reddit comments/hour
-_SS_TWITTER_CEIL:  float = 5_000_000.0  # twitter engagement points
+_SS_TWITTER_CEIL: float = 5_000_000.0  # twitter engagement points
 
 
 def _ss_keyword_score(
@@ -5117,7 +5186,7 @@ def _ss_momentum(scores: list) -> float:
     if len(scores) < 2:
         return 0.0
     mid = len(scores) // 2
-    prior  = sum(scores[:mid]) / mid
+    prior = sum(scores[:mid]) / mid
     recent = sum(scores[mid:]) / len(scores[mid:])
     return float(round(recent - prior, 4))
 
@@ -5130,7 +5199,7 @@ def _ss_trend(scores: list) -> str:
     xs = list(range(n))
     mean_x = sum(xs) / n
     mean_y = sum(scores) / n
-    num   = sum((xs[i] - mean_x) * (scores[i] - mean_y) for i in range(n))
+    num = sum((xs[i] - mean_x) * (scores[i] - mean_y) for i in range(n))
     denom = sum((xs[i] - mean_x) ** 2 for i in range(n))
     if denom == 0:
         return "stable"
@@ -5148,9 +5217,9 @@ def _ss_volume_proxy(
     twitter_points: int,
 ) -> float:
     """Weighted composite social volume proxy, 0-100."""
-    p_norm = min(float(posts_per_hour)    / _SS_POSTS_CEIL,    1.0) * 100.0
+    p_norm = min(float(posts_per_hour) / _SS_POSTS_CEIL, 1.0) * 100.0
     c_norm = min(float(comments_per_hour) / _SS_COMMENTS_CEIL, 1.0) * 100.0
-    t_norm = min(float(twitter_points)    / _SS_TWITTER_CEIL,  1.0) * 100.0
+    t_norm = min(float(twitter_points) / _SS_TWITTER_CEIL, 1.0) * 100.0
     # weights: posts 20%, comments 30%, twitter 50%
     proxy = 0.20 * p_norm + 0.30 * c_norm + 0.50 * t_norm
     return float(round(proxy, 4))
@@ -5177,15 +5246,13 @@ def _ss_zscore(current: float, history: list) -> float:
     if len(history) == 1:
         return 0.0
     variance = sum((x - mean) ** 2 for x in history) / len(history)
-    std = variance ** 0.5
+    std = variance**0.5
     if std < 0.01:
         diff = current - mean
         if abs(diff) < 0.01:
             return 0.0
         return 3.0 if diff > 0 else -3.0
     return float(round((current - mean) / std, 4))
-
-
 
 
 # ── Token Velocity + NVT Ratio ─────────────────────────────────────────────────
@@ -5200,9 +5267,9 @@ def _ss_zscore(current: float, history: list) -> float:
 #   CoinGecko        — market cap + price history
 
 _TV_OVERBOUGHT: float = 150.0
-_TV_OVERSOLD:   float = 45.0
-_TV_FAIR_CAP:   float = 90.0
-_TV_MA_WINDOW:  int   = 28
+_TV_OVERSOLD: float = 45.0
+_TV_FAIR_CAP: float = 90.0
+_TV_MA_WINDOW: int = 28
 
 _TV_BLOCKCHAIN_VOL: str = (
     "https://api.blockchain.info/charts/estimated-transaction-volume-usd"
@@ -5279,14 +5346,13 @@ def _tv_zscore(current: float, history: list) -> float:
     if len(history) == 1:
         return 0.0
     variance = sum((x - mean) ** 2 for x in history) / len(history)
-    std = variance ** 0.5
+    std = variance**0.5
     if std < 0.0001:
         diff = current - mean
         if abs(diff) < 0.0001:
             return 0.0
         return 3.0 if diff > 0 else -3.0
     return float(round((current - mean) / std, 4))
-
 
 
 async def compute_social_sentiment() -> dict:
@@ -5298,9 +5364,9 @@ async def compute_social_sentiment() -> dict:
     import aiohttp  # noqa: PLC0415
 
     news_articles: list = []
-    reddit_posts_ph:    int = 0
+    reddit_posts_ph: int = 0
     reddit_comments_ph: int = 0
-    twitter_pts:        int = 0
+    twitter_pts: int = 0
 
     try:
         timeout = aiohttp.ClientTimeout(total=10)
@@ -5314,6 +5380,7 @@ async def compute_social_sentiment() -> dict:
                     return {}
 
             import asyncio as _asyncio
+
             news_data, social_data = await _asyncio.gather(
                 _get(_SS_CC_NEWS),
                 _get(_SS_CC_SOCIAL),
@@ -5323,16 +5390,16 @@ async def compute_social_sentiment() -> dict:
         raw_articles = news_data.get("Data", []) if isinstance(news_data, dict) else []
         for art in raw_articles[:30]:
             title = art.get("title", "") or ""
-            body  = art.get("body",  "") or ""
+            body = art.get("body", "") or ""
             news_articles.append(title + " " + body[:200])
 
         # Parse social
         sdata = social_data.get("Data", {}) if isinstance(social_data, dict) else {}
-        reddit  = sdata.get("Reddit",  {}) or {}
+        reddit = sdata.get("Reddit", {}) or {}
         twitter = sdata.get("Twitter", {}) or {}
-        reddit_posts_ph    = int(reddit.get("posts_per_hour",    0) or 0)
+        reddit_posts_ph = int(reddit.get("posts_per_hour", 0) or 0)
         reddit_comments_ph = int(reddit.get("comments_per_hour", 0) or 0)
-        twitter_pts        = int(twitter.get("points", 0) or 0)
+        twitter_pts = int(twitter.get("points", 0) or 0)
     except Exception:
         pass
 
@@ -5367,21 +5434,22 @@ async def compute_social_sentiment() -> dict:
 
     # Volume proxy
     vol_proxy = _ss_volume_proxy(reddit_posts_ph, reddit_comments_ph, twitter_pts)
-    buzz      = _ss_buzz_level(vol_proxy)
+    buzz = _ss_buzz_level(vol_proxy)
 
     # Blend: 70% keyword sentiment, 30% volume boost
     composite = round(kw_score * 0.70 + vol_proxy * 0.30, 2)
-    label     = _ss_sentiment_label(composite)
+    label = _ss_sentiment_label(composite)
 
     # Historical context (synthetic from variance in article scores)
     hist_scores = [
         round(_ss_normalize_score(s, -1.0, 1.0) * 0.70 + vol_proxy * 0.30, 2)
-        for s in raw_scores[-7:] if raw_scores
+        for s in raw_scores[-7:]
+        if raw_scores
     ] or []
 
-    trend    = _ss_trend(hist_scores or [composite])
+    trend = _ss_trend(hist_scores or [composite])
     momentum = _ss_momentum(hist_scores or [composite, composite])
-    zscore   = _ss_zscore(composite, hist_scores) if hist_scores else 0.0
+    zscore = _ss_zscore(composite, hist_scores) if hist_scores else 0.0
 
     history_out = [
         {"date": f"article-{i+1}", "score": s, "label": _ss_sentiment_label(s)}
@@ -5391,13 +5459,19 @@ async def compute_social_sentiment() -> dict:
     # Top keywords
     top_bull = [k for k, _ in sorted(top_bull_hits.items(), key=lambda x: -x[1])[:3]]
     top_bear = [k for k, _ in sorted(top_bear_hits.items(), key=lambda x: -x[1])[:3]]
-    dominant = "bullish" if bull_count > bear_count else (
-        "bearish" if bear_count > bull_count else "neutral"
+    dominant = (
+        "bullish"
+        if bull_count > bear_count
+        else ("bearish" if bear_count > bull_count else "neutral")
     )
 
-    direction_word = {"very_bullish": "Very Bullish", "bullish": "Bullish",
-                      "neutral": "Neutral", "bearish": "Bearish",
-                      "very_bearish": "Very Bearish"}.get(label, "Neutral")
+    direction_word = {
+        "very_bullish": "Very Bullish",
+        "bullish": "Bullish",
+        "neutral": "Neutral",
+        "bearish": "Bearish",
+        "very_bearish": "Very Bearish",
+    }.get(label, "Neutral")
     desc = (
         f"{direction_word}: social sentiment score {composite:.0f}/100 — "
         f"{dominant} signals dominant"
@@ -5405,37 +5479,37 @@ async def compute_social_sentiment() -> dict:
 
     return {
         "sentiment": {
-            "score":     composite,
-            "label":     label,
+            "score": composite,
+            "label": label,
             "direction": trend,
-            "momentum":  round(momentum, 2),
+            "momentum": round(momentum, 2),
         },
         "social_volume": {
-            "reddit_posts_per_hour":    reddit_posts_ph,
+            "reddit_posts_per_hour": reddit_posts_ph,
             "reddit_comments_per_hour": reddit_comments_ph,
-            "twitter_points":           twitter_pts,
-            "volume_proxy":             round(vol_proxy, 2),
-            "buzz":                     buzz,
+            "twitter_points": twitter_pts,
+            "volume_proxy": round(vol_proxy, 2),
+            "buzz": buzz,
         },
         "keywords": {
             "bullish_count": bull_count,
             "bearish_count": bear_count,
             "neutral_count": neut_count,
-            "dominant":      dominant,
-            "top_bullish":   top_bull,
-            "top_bearish":   top_bear,
+            "dominant": dominant,
+            "top_bullish": top_bull,
+            "top_bearish": top_bear,
         },
-        "history":     history_out,
-        "zscore":      round(zscore, 4),
+        "history": history_out,
+        "zscore": round(zscore, 4),
         "description": desc,
     }
 
 
 # ── Miner Reserve Indicator ───────────────────────────────────────────────────
 
-_MR_RESERVE_WINDOW: int = 30          # rolling days
+_MR_RESERVE_WINDOW: int = 30  # rolling days
 _MR_SPI_HIGH_THRESHOLD: float = 25.0  # SPI% above which is considered high pressure
-_MR_SPI_LOW_THRESHOLD: float = 5.0   # SPI% below which is considered low pressure
+_MR_SPI_LOW_THRESHOLD: float = 5.0  # SPI% below which is considered low pressure
 _MR_TREND_THRESHOLD_PCT: float = 2.0  # % change needed to call accumulating/depleting
 _MR_BLOCKCHAIN_INFO: str = "https://api.blockchain.info/charts"
 
@@ -5496,7 +5570,7 @@ def _mr_outflow_zscore(current_outflow: float, history: list) -> float:
     n = len(history)
     mean = sum(history) / n
     variance = sum((v - mean) ** 2 for v in history) / n
-    std = variance ** 0.5
+    std = variance**0.5
     if std < 1.0:
         diff = current_outflow - mean
         if abs(diff) < 1.0:
@@ -5612,7 +5686,7 @@ async def compute_miner_reserve() -> dict:
     revenue_list = [r["revenue_usd"] for r in revenues]
     history: list = []
     for i, row in enumerate(revenues):
-        window = revenue_list[max(0, i - _MR_RESERVE_WINDOW + 1): i + 1]
+        window = revenue_list[max(0, i - _MR_RESERVE_WINDOW + 1) : i + 1]
         reserve_proxy = _mr_rolling_reserve(window)
         spi = _mr_sell_pressure_index(row["revenue_usd"], reserve_proxy)
         history.append(
@@ -5665,14 +5739,15 @@ async def compute_miner_reserve() -> dict:
         "hash_rate": round(current_hashrate, 2),
         "hash_rate_change_30d_pct": round(hr_change_pct, 4),
         "outflow_zscore": outflow_zscore,
-        "depletion_rate_days": depletion_days if depletion_days != float("inf") else 9999.0,
+        "depletion_rate_days": (
+            depletion_days if depletion_days != float("inf") else 9999.0
+        ),
         "history": history[-30:],
         "description": desc,
     }
 
-
-# Layer 2 Metrics helpers  (_l2_)
-# ==============================================def _l2_tvl_share(chains: dict) -> dict:
+    # Layer 2 Metrics helpers  (_l2_)
+    # ==============================================def _l2_tvl_share(chains: dict) -> dict:
     """Return each chain's % share of total TVL. Empty dict if input empty."""
     if not chains:
         return {}
@@ -5717,9 +5792,9 @@ def _l2_momentum_score(
     Centred at 0 change → 50; ±10% TVL or ±0.5 tx growth spans the range.
     """
     # Normalize each component to [-1, 1] then shift to [0, 1]
-    c24  = max(-1.0, min(1.0, tvl_change_24h  / 5.0))    # ±5% → ±1
-    c7d  = max(-1.0, min(1.0, tvl_change_7d   / 15.0))   # ±15% → ±1
-    ctx  = max(-1.0, min(1.0, tx_growth        / 0.5))    # ±50% → ±1
+    c24 = max(-1.0, min(1.0, tvl_change_24h / 5.0))  # ±5% → ±1
+    c7d = max(-1.0, min(1.0, tvl_change_7d / 15.0))  # ±15% → ±1
+    ctx = max(-1.0, min(1.0, tx_growth / 0.5))  # ±50% → ±1
 
     composite = c24 * 0.30 + c7d * 0.50 + ctx * 0.20
     return float(min(100.0, max(0.0, (composite + 1.0) / 2.0 * 100.0)))
@@ -5747,7 +5822,9 @@ def _l2_rank_chains(chains: dict) -> list:
     """Return list of (name, data) tuples sorted by tvl_usd descending."""
     if not chains:
         return []
-    return sorted(chains.items(), key=lambda item: item[1].get("tvl_usd", 0), reverse=True)
+    return sorted(
+        chains.items(), key=lambda item: item[1].get("tvl_usd", 0), reverse=True
+    )
 
 
 def _l2_tvl_change_pct(current: float, previous: float) -> float:
@@ -5756,9 +5833,8 @@ def _l2_tvl_change_pct(current: float, previous: float) -> float:
         return 0.0
     return float((current - previous) / previous * 100.0)
 
-
-# =====================================================# Gas Fee Predictor helpers  (_gf_)
-# ==============================================def _gf_base_fee_trend(fees: list) -> str:
+    # =====================================================# Gas Fee Predictor helpers  (_gf_)
+    # ==============================================def _gf_base_fee_trend(fees: list) -> str:
     """
     Linear regression slope over fee history.
     Returns 'rising' / 'falling' / 'stable' (|slope| < 0.5 Gwei/period).
@@ -5809,8 +5885,8 @@ def _gf_zscore(current: float, history: list) -> float:
     if len(history) < 2:
         return 0.0
     mean = sum(history) / len(history)
-    var  = sum((x - mean) ** 2 for x in history) / len(history)
-    std  = var ** 0.5
+    var = sum((x - mean) ** 2 for x in history) / len(history)
+    std = var**0.5
     if std == 0.0:
         return 0.0
     return float((current - mean) / std)
@@ -5822,15 +5898,16 @@ async def compute_token_velocity_nvt() -> dict:
     Fetches 60 days of on-chain tx volume (blockchain.info) and market cap
     (CoinGecko), computes velocity, NVT ratio, and NVT signal (28d MA).
     """
-    import aiohttp   # noqa: PLC0415
+    import aiohttp  # noqa: PLC0415
     import asyncio as _asyncio  # noqa: PLC0415
 
-    tx_volumes: list = []    # list of (timestamp_ms, usd_value)
-    market_caps: list = []   # list of [timestamp_ms, usd_value]
+    tx_volumes: list = []  # list of (timestamp_ms, usd_value)
+    market_caps: list = []  # list of [timestamp_ms, usd_value]
 
     try:
         timeout = aiohttp.ClientTimeout(total=12)
         async with aiohttp.ClientSession(timeout=timeout) as session:
+
             async def _get(url: str) -> dict:
                 try:
                     async with session.get(url) as r:
@@ -5844,13 +5921,13 @@ async def compute_token_velocity_nvt() -> dict:
             )
 
         # blockchain.info: {"values": [{"x": unix_ts, "y": usd_volume}, ...]}
-        for pt in (bc_data.get("values") or []):
+        for pt in bc_data.get("values") or []:
             y = pt.get("y") or 0
             if y > 0:
                 tx_volumes.append(float(y))
 
         # CoinGecko: {"market_caps": [[ts_ms, value], ...]}
-        for pt in (cg_data.get("market_caps") or []):
+        for pt in cg_data.get("market_caps") or []:
             if len(pt) >= 2 and pt[1]:
                 market_caps.append(float(pt[1]))
 
@@ -5865,29 +5942,26 @@ async def compute_token_velocity_nvt() -> dict:
 
     # Align series to same length (take last N of each)
     n = min(len(tx_volumes), len(market_caps), 60)
-    tx_vols  = tx_volumes[-n:]
+    tx_vols = tx_volumes[-n:]
     mkt_caps = market_caps[-n:]
 
     # Current values (latest)
-    tx_vol_now  = tx_vols[-1]  if tx_vols  else 0.0
+    tx_vol_now = tx_vols[-1] if tx_vols else 0.0
     mkt_cap_now = mkt_caps[-1] if mkt_caps else 0.0
 
     # 28d MA of tx volume
     ma28 = _tv_moving_average(tx_vols, _TV_MA_WINDOW)
 
     # NVT metrics
-    nvt_ratio  = _tv_nvt_ratio(mkt_cap_now, tx_vol_now)
+    nvt_ratio = _tv_nvt_ratio(mkt_cap_now, tx_vol_now)
     nvt_signal = _tv_nvt_signal(mkt_cap_now, ma28)
-    nvt_label  = _tv_nvt_label(nvt_signal)
+    nvt_label = _tv_nvt_label(nvt_signal)
 
     # Velocity series
-    vel_series = [
-        _tv_velocity(tx_vols[i], mkt_caps[i])
-        for i in range(len(tx_vols))
-    ]
-    vel_now  = vel_series[-1] if vel_series else 0.0
-    vel_7d   = _tv_moving_average(vel_series, 7)
-    vel_30d  = _tv_moving_average(vel_series, 30)
+    vel_series = [_tv_velocity(tx_vols[i], mkt_caps[i]) for i in range(len(tx_vols))]
+    vel_now = vel_series[-1] if vel_series else 0.0
+    vel_7d = _tv_moving_average(vel_series, 7)
+    vel_30d = _tv_moving_average(vel_series, 30)
     vel_trend = _tv_velocity_trend(vel_7d, vel_30d)
 
     # NVT signal history (daily)
@@ -5902,19 +5976,21 @@ async def compute_token_velocity_nvt() -> dict:
     # Build history output (last 30 days)
     history_out = []
     for i in range(max(0, len(tx_vols) - 30), len(tx_vols)):
-        history_out.append({
-            "date":       f"day-{i + 1}",
-            "velocity":   round(vel_series[i], 6) if i < len(vel_series) else 0.0,
-            "nvt_ratio":  round(_tv_nvt_ratio(mkt_caps[i], tx_vols[i]), 2),
-            "nvt_signal": round(nvt_hist[i], 2) if i < len(nvt_hist) else 0.0,
-        })
+        history_out.append(
+            {
+                "date": f"day-{i + 1}",
+                "velocity": round(vel_series[i], 6) if i < len(vel_series) else 0.0,
+                "nvt_ratio": round(_tv_nvt_ratio(mkt_caps[i], tx_vols[i]), 2),
+                "nvt_signal": round(nvt_hist[i], 2) if i < len(nvt_hist) else 0.0,
+            }
+        )
 
     # Description
     zone_map = {
         "overbought": "Overbought",
-        "neutral":    "Neutral",
+        "neutral": "Neutral",
         "fair_value": "Fair Value",
-        "oversold":   "Oversold",
+        "oversold": "Oversold",
     }
     desc = (
         f"NVT {zone_map.get(nvt_label, 'Neutral')}: "
@@ -5924,28 +6000,27 @@ async def compute_token_velocity_nvt() -> dict:
 
     return {
         "velocity": {
-            "current":      round(vel_now, 6),
-            "trend":        vel_trend,
-            "velocity_7d":  round(vel_7d,  6),
+            "current": round(vel_now, 6),
+            "trend": vel_trend,
+            "velocity_7d": round(vel_7d, 6),
             "velocity_30d": round(vel_30d, 6),
         },
         "nvt": {
-            "ratio":                 round(nvt_ratio,  2),
-            "signal":                round(nvt_signal, 2),
-            "label":                 nvt_label,
-            "zscore":                round(nvt_zscore, 4),
-            "overbought_threshold":  int(_TV_OVERBOUGHT),
-            "oversold_threshold":    int(_TV_OVERSOLD),
+            "ratio": round(nvt_ratio, 2),
+            "signal": round(nvt_signal, 2),
+            "label": nvt_label,
+            "zscore": round(nvt_zscore, 4),
+            "overbought_threshold": int(_TV_OVERBOUGHT),
+            "oversold_threshold": int(_TV_OVERSOLD),
         },
-        "history":          history_out,
-        "market_cap_usd":   round(mkt_cap_now, 2),
-        "tx_volume_24h_usd": round(tx_vol_now,  2),
-        "description":      desc,
+        "history": history_out,
+        "market_cap_usd": round(mkt_cap_now, 2),
+        "tx_volume_24h_usd": round(tx_vol_now, 2),
+        "description": desc,
     }
 
-
-# Layer 2 Metrics helpers  (_l2_)
-# ==============================================def _l2_tvl_share(chains: dict) -> dict:
+    # Layer 2 Metrics helpers  (_l2_)
+    # ==============================================def _l2_tvl_share(chains: dict) -> dict:
     """Return each chain's % share of total TVL. Empty dict if input empty."""
     if not chains:
         return {}
@@ -5990,9 +6065,9 @@ def _l2_momentum_score(
     Centred at 0 change -> 50; +/-10% TVL or +/-0.5 tx growth spans the range.
     """
     # Normalize each component to [-1, 1] then shift to [0, 1]
-    c24  = max(-1.0, min(1.0, tvl_change_24h  / 5.0))    # +/-5% -> +/-1
-    c7d  = max(-1.0, min(1.0, tvl_change_7d   / 15.0))   # +/-15% -> +/-1
-    ctx  = max(-1.0, min(1.0, tx_growth        / 0.5))    # +/-50% -> +/-1
+    c24 = max(-1.0, min(1.0, tvl_change_24h / 5.0))  # +/-5% -> +/-1
+    c7d = max(-1.0, min(1.0, tvl_change_7d / 15.0))  # +/-15% -> +/-1
+    ctx = max(-1.0, min(1.0, tx_growth / 0.5))  # +/-50% -> +/-1
 
     composite = c24 * 0.30 + c7d * 0.50 + ctx * 0.20
     return float(min(100.0, max(0.0, (composite + 1.0) / 2.0 * 100.0)))
@@ -6020,20 +6095,28 @@ def _l2_rank_chains(chains: dict) -> list:
     """Return list of (name, data) tuples sorted by tvl_usd descending."""
     if not chains:
         return []
-    return sorted(chains.items(), key=lambda item: item[1].get("tvl_usd", 0), reverse=True)
+    return sorted(
+        chains.items(), key=lambda item: item[1].get("tvl_usd", 0), reverse=True
+    )
 
 
 def _l2_tvl_change_pct(current: float, previous: float) -> float:
     """Percentage change from previous to current TVL."""
+
+
 # ╔══════════════════════════════════════════════════════════════════════════╗
 # =====================================================# ╔══════════════════════════════════════════════════════════════════════════╗
 # ║  NFT MARKET PULSE                                                       ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
+
 def _nft_floor_change_pct(current: float, previous: float) -> float:
     """% change in floor price from previous to current."""
+
+
 # ║  MACRO LIQUIDITY INDICATOR                                              ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
+
 
 def _ml_m2_growth_rate(current: float, previous: float) -> float:
     """% change in M2 money supply proxy from previous to current period."""
@@ -6061,6 +6144,7 @@ def _nft_btc_correlation(index_series: list, btc_series: list) -> float:
     if len(index_series) != len(btc_series) or len(index_series) < 2:
         return 0.0
     import math
+
     n = len(index_series)
     mean_i = sum(index_series) / n
     mean_b = sum(btc_series) / n
@@ -6095,6 +6179,7 @@ def _nft_trend_direction(prices: list) -> str:
     if len(prices) < 2:
         return "stable"
     import math
+
     n = len(prices)
     xs = list(range(n))
     mean_x = (n - 1) / 2.0
@@ -6114,6 +6199,8 @@ def _nft_trend_direction(prices: list) -> str:
 
 def _nft_volume_zscore(current: float, history: list) -> float:
     """Z-score of current volume vs history."""
+
+
 def _ml_fed_balance_delta(current: float, previous: float) -> float:
     """Absolute change in Fed balance sheet size (positive = expanding)."""
     return float(current - previous)
@@ -6145,12 +6232,13 @@ def _ml_regime_score(
       BTC rising       -> bullish (normalised over +/-20%)
     Equal weights (25% each).
     """
+
     def _clamp(v: float) -> float:
         return max(-1.0, min(1.0, v))
 
-    n_m2  = _clamp(m2_growth      / 10.0)
-    n_fed = _clamp(fed_delta_pct  /  5.0)
-    n_usd = _clamp(-usd_change_pct /  5.0)   # USD weak = risk-on
+    n_m2 = _clamp(m2_growth / 10.0)
+    n_fed = _clamp(fed_delta_pct / 5.0)
+    n_usd = _clamp(-usd_change_pct / 5.0)  # USD weak = risk-on
     n_btc = _clamp(btc_change_pct / 20.0)
 
     composite = (n_m2 + n_fed + n_usd + n_btc) / 4.0
@@ -6174,7 +6262,9 @@ def _ml_moving_average(values: list, window: int) -> float:
     return float(sum(tail) / len(tail))
 
 
-def _ml_liquidity_trend(current_score: float, ma_score: float, threshold: float = 3.0) -> str:
+def _ml_liquidity_trend(
+    current_score: float, ma_score: float, threshold: float = 3.0
+) -> str:
     """Liquidity trend vs its moving average: expanding / contracting / stable."""
     if current_score > ma_score + threshold:
         return "expanding"
@@ -6188,9 +6278,10 @@ def _ml_zscore(current: float, history: list) -> float:
     if len(history) < 2:
         return 0.0
     import math
+
     mean = sum(history) / len(history)
     std = math.sqrt(sum((v - mean) ** 2 for v in history) / len(history))
-    std  = math.sqrt(sum((v - mean) ** 2 for v in history) / len(history))
+    std = math.sqrt(sum((v - mean) ** 2 for v in history) / len(history))
     if std == 0:
         return 0.0
     return float((current - mean) / std)
@@ -6207,42 +6298,52 @@ async def compute_macro_liquidity_indicator() -> dict:
     # Using plausible mock anchored to recent macro conditions
 
     # M2 proxy: ~$21.5T growing slowly
-    M2_CURRENT  = 21_500_000_000_000.0
-    M2_YOY_PREV = 20_820_000_000_000.0   # ~3.2% lower 1yr ago
-    M2_MOM_PREV = 21_414_000_000_000.0   # ~0.4% lower 1mo ago
+    M2_CURRENT = 21_500_000_000_000.0
+    M2_YOY_PREV = 20_820_000_000_000.0  # ~3.2% lower 1yr ago
+    M2_MOM_PREV = 21_414_000_000_000.0  # ~0.4% lower 1mo ago
 
     # Fed balance sheet: ~$7.8T, shrinking (QT)
-    FED_CURRENT   = 7_800_000_000_000.0
-    FED_PREV_30D  = 7_850_000_000_000.0
+    FED_CURRENT = 7_800_000_000_000.0
+    FED_PREV_30D = 7_850_000_000_000.0
 
     # DXY proxy
-    DXY_CURRENT  = 104.2
-    DXY_30D_AGO  = 105.5
-    DXY_90D_AGO  = 107.0
+    DXY_CURRENT = 104.2
+    DXY_30D_AGO = 105.5
+    DXY_90D_AGO = 107.0
 
     # BTC 30-day change
-    BTC_CHANGE_30D = 16.5   # +16.5% in 30d
+    BTC_CHANGE_30D = 16.5  # +16.5% in 30d
 
     # ── Compute current metrics ─────────────────────────────────────────────
     m2_growth_yoy = _ml_m2_growth_rate(M2_CURRENT, M2_YOY_PREV)
     m2_growth_mom = _ml_m2_growth_rate(M2_CURRENT, M2_MOM_PREV)
     m2_trend_scores = [m2_growth_yoy * (0.85 + 0.05 * i) for i in range(7)]
-    m2_trend = "expanding" if m2_growth_yoy > 0 else "contracting" if m2_growth_yoy < -0.5 else "stable"
+    m2_trend = (
+        "expanding"
+        if m2_growth_yoy > 0
+        else "contracting" if m2_growth_yoy < -0.5 else "stable"
+    )
 
-    fed_delta      = _ml_fed_balance_delta(FED_CURRENT, FED_PREV_30D)
-    fed_delta_pct  = _ml_m2_growth_rate(FED_CURRENT, FED_PREV_30D)
-    fed_trend      = "expanding" if fed_delta > 0 else "contracting" if fed_delta < 0 else "stable"
+    fed_delta = _ml_fed_balance_delta(FED_CURRENT, FED_PREV_30D)
+    fed_delta_pct = _ml_m2_growth_rate(FED_CURRENT, FED_PREV_30D)
+    fed_trend = (
+        "expanding" if fed_delta > 0 else "contracting" if fed_delta < 0 else "stable"
+    )
 
     dxy_change_30d = _ml_m2_growth_rate(DXY_CURRENT, DXY_30D_AGO)
     dxy_change_90d = _ml_m2_growth_rate(DXY_CURRENT, DXY_90D_AGO)
-    dxy_trend      = "weakening" if dxy_change_30d < -0.5 else "strengthening" if dxy_change_30d > 0.5 else "stable"
+    dxy_trend = (
+        "weakening"
+        if dxy_change_30d < -0.5
+        else "strengthening" if dxy_change_30d > 0.5 else "stable"
+    )
     btc_divergence = _ml_usd_btc_divergence(dxy_change_30d, BTC_CHANGE_30D)
 
     regime_score = _ml_regime_score(
-        m2_growth    = m2_growth_yoy,
-        fed_delta_pct= fed_delta_pct,
-        usd_change_pct = dxy_change_30d,
-        btc_change_pct = BTC_CHANGE_30D,
+        m2_growth=m2_growth_yoy,
+        fed_delta_pct=fed_delta_pct,
+        usd_change_pct=dxy_change_30d,
+        btc_change_pct=BTC_CHANGE_30D,
     )
     regime_label = _ml_regime_label(regime_score)
 
@@ -6262,19 +6363,23 @@ async def compute_macro_liquidity_indicator() -> dict:
         label_i = _ml_regime_label(score_i)
 
         m2_i = M2_YOY_PREV + (M2_CURRENT - M2_YOY_PREV) * frac * 0.8
-        g_i  = _ml_m2_growth_rate(m2_i, M2_YOY_PREV * 0.97)
+        g_i = _ml_m2_growth_rate(m2_i, M2_YOY_PREV * 0.97)
 
-        history_90d.append({"date": day.isoformat(), "score": round(score_i, 1), "label": label_i})
-        m2_history_90d.append({
-            "date": day.isoformat(),
-            "proxy_usd": round(m2_i, 0),
-            "growth_yoy_pct": round(g_i, 2),
-        })
+        history_90d.append(
+            {"date": day.isoformat(), "score": round(score_i, 1), "label": label_i}
+        )
+        m2_history_90d.append(
+            {
+                "date": day.isoformat(),
+                "proxy_usd": round(m2_i, 0),
+                "growth_yoy_pct": round(g_i, 2),
+            }
+        )
         score_history.append(score_i)
 
-    ma_90d  = _ml_moving_average(score_history, 13)
+    ma_90d = _ml_moving_average(score_history, 13)
     liq_trend = _ml_liquidity_trend(regime_score, ma_90d)
-    zs      = _ml_zscore(regime_score, score_history[:-1])
+    zs = _ml_zscore(regime_score, score_history[:-1])
 
     desc = (
         f"{regime_label.replace('_', '-').title()}: macro liquidity {liq_trend}"
@@ -6283,40 +6388,39 @@ async def compute_macro_liquidity_indicator() -> dict:
 
     return {
         "m2": {
-            "current_proxy_usd":   round(M2_CURRENT, 0),
+            "current_proxy_usd": round(M2_CURRENT, 0),
             "growth_rate_yoy_pct": round(m2_growth_yoy, 2),
             "growth_rate_mom_pct": round(m2_growth_mom, 2),
-            "trend":               m2_trend,
-            "history_90d":         m2_history_90d,
+            "trend": m2_trend,
+            "history_90d": m2_history_90d,
         },
         "fed_balance_sheet": {
-            "current_usd":   round(FED_CURRENT, 0),
+            "current_usd": round(FED_CURRENT, 0),
             "delta_30d_usd": round(fed_delta, 0),
-            "delta_pct":     round(fed_delta_pct, 3),
-            "trend":         fed_trend,
+            "delta_pct": round(fed_delta_pct, 3),
+            "trend": fed_trend,
         },
         "usd_index": {
-            "current":        DXY_CURRENT,
+            "current": DXY_CURRENT,
             "change_30d_pct": round(dxy_change_30d, 2),
             "change_90d_pct": round(dxy_change_90d, 2),
-            "trend":          dxy_trend,
+            "trend": dxy_trend,
             "btc_divergence": round(btc_divergence, 2),
         },
         "regime": {
-            "score":   round(regime_score, 1),
-            "label":   regime_label,
-            "ma_90d":  round(ma_90d, 1),
-            "trend":   liq_trend,
-            "zscore":  round(zs, 3),
+            "score": round(regime_score, 1),
+            "label": regime_label,
+            "ma_90d": round(ma_90d, 1),
+            "trend": liq_trend,
+            "zscore": round(zs, 3),
         },
         "history_90d": history_90d,
         "description": desc,
         "description": desc,
     }
 
-
-# =====================================================# Validator Activity helpers  (_va_)
-# ==============================================def _va_effectiveness_rate(attested: int, total: int) -> float:
+    # =====================================================# Validator Activity helpers  (_va_)
+    # ==============================================def _va_effectiveness_rate(attested: int, total: int) -> float:
     """Attestation effectiveness: attested / total * 100, clamped [0, 100]."""
     if total <= 0:
         return 0.0
@@ -6360,6 +6464,7 @@ def _va_staking_apy(total_staked_eth: float) -> float:
     if total_staked_eth <= 0:
         return 0.0
     import math
+
     # Empirical constant derived from mainnet: ~3.85% APY at 32M ETH staked
     # APY ∝ 1/sqrt(staked), calibrated so APY(32M) ≈ 3.85%
     K = 3.85 * math.sqrt(32_000_000.0)
@@ -6441,11 +6546,11 @@ async def compute_validator_activity() -> dict:
 
     # ── Attempt live data from beaconcha.in ──────────────────────────────────
     active_validators = 0
-    pending_entry     = 0
-    pending_exit      = 0
-    effectiveness     = 0.0
-    current_epoch     = 0
-    fetch_ok          = False
+    pending_entry = 0
+    pending_exit = 0
+    effectiveness = 0.0
+    current_epoch = 0
+    fetch_ok = False
 
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
@@ -6456,9 +6561,9 @@ async def compute_validator_activity() -> dict:
             if resp.status_code == 200:
                 d = resp.json().get("data", {})
                 active_validators = int(d.get("validatorscount", 0))
-                pending_entry     = int(d.get("eligibleether", 0)) // 32
-                current_epoch     = int(d.get("epoch", 0))
-                effectiveness     = float(d.get("globalparticipationrate", 0.0)) * 100.0
+                pending_entry = int(d.get("eligibleether", 0)) // 32
+                current_epoch = int(d.get("epoch", 0))
+                effectiveness = float(d.get("globalparticipationrate", 0.0)) * 100.0
                 if active_validators > 0:
                     fetch_ok = True
     except Exception:
@@ -6466,22 +6571,22 @@ async def compute_validator_activity() -> dict:
 
     if not fetch_ok:
         active_validators = 1_023_456
-        pending_entry     = 4_200
-        pending_exit      = 380
-        current_epoch     = 310_450
-        effectiveness     = 96.8
+        pending_entry = 4_200
+        pending_exit = 380
+        current_epoch = 310_450
+        effectiveness = 96.8
 
     # ── Simulated data points ────────────────────────────────────────────────
     random.seed(17)
-    slashed_30d    = random.randint(5, 25)
+    slashed_30d = random.randint(5, 25)
     last_slash_days = random.randint(1, 15)
-    total_staked    = active_validators * 32.0   # 32 ETH per validator
+    total_staked = active_validators * 32.0  # 32 ETH per validator
 
     # ── Queue ────────────────────────────────────────────────────────────────
     queue_pressure = _va_queue_pressure(pending_entry, pending_exit)
     # churn limit: max 8 activations per epoch (approx)
     churn_per_epoch = max(4, active_validators // 65_536)
-    wait_epochs     = (pending_entry // churn_per_epoch) if churn_per_epoch else 0
+    wait_epochs = (pending_entry // churn_per_epoch) if churn_per_epoch else 0
 
     # ── Slashing ─────────────────────────────────────────────────────────────
     slash_rate = _va_slashing_rate(slashed_30d, active_validators)
@@ -6492,32 +6597,39 @@ async def compute_validator_activity() -> dict:
 
     # ── Health ───────────────────────────────────────────────────────────────
     health = _va_health_label(effectiveness, slashed_30d)
-    participation = _va_participation_score(effectiveness, pending_entry + pending_exit, active_validators)
+    participation = _va_participation_score(
+        effectiveness, pending_entry + pending_exit, active_validators
+    )
 
     health_score = participation * 0.7 + (100.0 - min(100.0, slashed_30d * 2.0)) * 0.3
 
     # ── 30-day history (daily snapshots) ─────────────────────────────────────
     today = datetime.date.today()
     history_30d = []
-    v = active_validators - 3_356   # 30d ago approx
+    v = active_validators - 3_356  # 30d ago approx
     e = effectiveness
     for i in range(30):
         day = today - datetime.timedelta(days=29 - i)
-        v   += random.randint(0, 300)
-        e   += random.gauss(0, 0.15)
-        e    = max(94.0, min(99.0, e))
-        history_30d.append({
-            "date":              day.isoformat(),
-            "active":            v,
-            "effectiveness_pct": round(e, 2),
-        })
-    history_30d[-1]["active"]            = active_validators
+        v += random.randint(0, 300)
+        e += random.gauss(0, 0.15)
+        e = max(94.0, min(99.0, e))
+        history_30d.append(
+            {
+                "date": day.isoformat(),
+                "active": v,
+                "effectiveness_pct": round(e, 2),
+            }
+        )
+    history_30d[-1]["active"] = active_validators
     history_30d[-1]["effectiveness_pct"] = round(effectiveness, 2)
 
     # ── Trend ────────────────────────────────────────────────────────────────
     trend = _va_validator_trend([h["active"] for h in history_30d])
     change_30d_pct = round(
-        (active_validators - history_30d[0]["active"]) / max(history_30d[0]["active"], 1) * 100, 2
+        (active_validators - history_30d[0]["active"])
+        / max(history_30d[0]["active"], 1)
+        * 100,
+        2,
     )
 
     # ── Description ──────────────────────────────────────────────────────────
@@ -6529,31 +6641,31 @@ async def compute_validator_activity() -> dict:
 
     return {
         "validators": {
-            "active":          active_validators,
-            "pending_entry":   pending_entry,
-            "pending_exit":    pending_exit,
-            "slashed_30d":     slashed_30d,
-            "change_30d_pct":  change_30d_pct,
+            "active": active_validators,
+            "pending_entry": pending_entry,
+            "pending_exit": pending_exit,
+            "slashed_30d": slashed_30d,
+            "change_30d_pct": change_30d_pct,
         },
         "attestation": {
-            "effectiveness_pct":   round(effectiveness, 2),
+            "effectiveness_pct": round(effectiveness, 2),
             "participation_score": round(participation, 1),
-            "epoch":               current_epoch,
+            "epoch": current_epoch,
         },
         "queue": {
-            "entry_count":  pending_entry,
-            "exit_count":   pending_exit,
-            "pressure":     queue_pressure,
-            "wait_epochs":  wait_epochs,
+            "entry_count": pending_entry,
+            "exit_count": pending_exit,
+            "pressure": queue_pressure,
+            "wait_epochs": wait_epochs,
         },
         "slashing": {
-            "count_30d":       slashed_30d,
-            "rate_per_1k":     round(slash_rate, 4),
+            "count_30d": slashed_30d,
+            "rate_per_1k": round(slash_rate, 4),
             "last_event_days": last_slash_days,
         },
         "apy": {
-            "estimated_pct":     round(apy, 2),
-            "total_staked_eth":  int(total_staked),
+            "estimated_pct": round(apy, 2),
+            "total_staked_eth": int(total_staked),
             "annual_rewards_eth": round(annual_rewards, 0),
         },
         "health": {
@@ -6561,7 +6673,7 @@ async def compute_validator_activity() -> dict:
             "score": round(health_score, 1),
         },
         "history_30d": history_30d,
-        "description":  desc,
+        "description": desc,
     }
 
 
@@ -6571,41 +6683,125 @@ async def compute_validator_activity() -> dict:
 # Data: DeFi Llama public API (free, no auth) with realistic mock fallback.
 
 _DT_PROTOCOLS_URL: str = "https://api.llama.fi/protocols"
-_DT_HISTORY_URL:   str = "https://api.llama.fi/v2/historicalChainTvl"
-_DT_CHAINS_URL:    str = "https://api.llama.fi/chains"
-_DT_TOP_N:         int = 10
-_DT_DOM_THRESHOLD: float = 3.0   # % below which a chain collapses into "Others"
+_DT_HISTORY_URL: str = "https://api.llama.fi/v2/historicalChainTvl"
+_DT_CHAINS_URL: str = "https://api.llama.fi/chains"
+_DT_TOP_N: int = 10
+_DT_DOM_THRESHOLD: float = 3.0  # % below which a chain collapses into "Others"
 
 # Momentum thresholds: 7d TVL change
-_DT_ACCEL_THR: float =  5.0   # % gain
-_DT_DECL_THR:  float = -5.0   # % loss
+_DT_ACCEL_THR: float = 5.0  # % gain
+_DT_DECL_THR: float = -5.0  # % loss
 
 # Realistic mock data for when the API is unavailable
 _DT_MOCK_PROTOCOLS: list = [
-    {"name": "Lido",           "tvl": 28_100_000_000.0, "chain": "Ethereum",  "category": "Liquid Staking", "change1d": 0.012,  "change7d": 0.035},
-    {"name": "AAVE",           "tvl": 12_300_000_000.0, "chain": "Multi",     "category": "Lending",        "change1d": 0.005,  "change7d": -0.021},
-    {"name": "Uniswap",        "tvl":  6_540_000_000.0, "chain": "Ethereum",  "category": "DEX",            "change1d": 0.031,  "change7d":  0.010},
-    {"name": "Curve Finance",  "tvl":  5_820_000_000.0, "chain": "Multi",     "category": "DEX",            "change1d": -0.003, "change7d": -0.042},
-    {"name": "MakerDAO",       "tvl":  5_210_000_000.0, "chain": "Ethereum",  "category": "CDP",            "change1d": 0.008,  "change7d":  0.005},
-    {"name": "JustLend",       "tvl":  4_720_000_000.0, "chain": "Tron",      "category": "Lending",        "change1d": 0.015,  "change7d":  0.028},
-    {"name": "Kamino",         "tvl":  3_180_000_000.0, "chain": "Solana",    "category": "Lending",        "change1d": 0.042,  "change7d":  0.081},
-    {"name": "EigenLayer",     "tvl":  3_010_000_000.0, "chain": "Ethereum",  "category": "Restaking",      "change1d": 0.000,  "change7d": -0.012},
-    {"name": "PancakeSwap",    "tvl":  2_150_000_000.0, "chain": "BSC",       "category": "DEX",            "change1d": 0.019,  "change7d":  0.033},
-    {"name": "GMX",            "tvl":  1_820_000_000.0, "chain": "Arbitrum",  "category": "Derivatives",    "change1d": 0.027,  "change7d":  0.059},
-    {"name": "Compound",       "tvl":  1_650_000_000.0, "chain": "Ethereum",  "category": "Lending",        "change1d": -0.002, "change7d": -0.018},
-    {"name": "Raydium",        "tvl":  1_420_000_000.0, "chain": "Solana",    "category": "DEX",            "change1d": 0.038,  "change7d":  0.095},
+    {
+        "name": "Lido",
+        "tvl": 28_100_000_000.0,
+        "chain": "Ethereum",
+        "category": "Liquid Staking",
+        "change1d": 0.012,
+        "change7d": 0.035,
+    },
+    {
+        "name": "AAVE",
+        "tvl": 12_300_000_000.0,
+        "chain": "Multi",
+        "category": "Lending",
+        "change1d": 0.005,
+        "change7d": -0.021,
+    },
+    {
+        "name": "Uniswap",
+        "tvl": 6_540_000_000.0,
+        "chain": "Ethereum",
+        "category": "DEX",
+        "change1d": 0.031,
+        "change7d": 0.010,
+    },
+    {
+        "name": "Curve Finance",
+        "tvl": 5_820_000_000.0,
+        "chain": "Multi",
+        "category": "DEX",
+        "change1d": -0.003,
+        "change7d": -0.042,
+    },
+    {
+        "name": "MakerDAO",
+        "tvl": 5_210_000_000.0,
+        "chain": "Ethereum",
+        "category": "CDP",
+        "change1d": 0.008,
+        "change7d": 0.005,
+    },
+    {
+        "name": "JustLend",
+        "tvl": 4_720_000_000.0,
+        "chain": "Tron",
+        "category": "Lending",
+        "change1d": 0.015,
+        "change7d": 0.028,
+    },
+    {
+        "name": "Kamino",
+        "tvl": 3_180_000_000.0,
+        "chain": "Solana",
+        "category": "Lending",
+        "change1d": 0.042,
+        "change7d": 0.081,
+    },
+    {
+        "name": "EigenLayer",
+        "tvl": 3_010_000_000.0,
+        "chain": "Ethereum",
+        "category": "Restaking",
+        "change1d": 0.000,
+        "change7d": -0.012,
+    },
+    {
+        "name": "PancakeSwap",
+        "tvl": 2_150_000_000.0,
+        "chain": "BSC",
+        "category": "DEX",
+        "change1d": 0.019,
+        "change7d": 0.033,
+    },
+    {
+        "name": "GMX",
+        "tvl": 1_820_000_000.0,
+        "chain": "Arbitrum",
+        "category": "Derivatives",
+        "change1d": 0.027,
+        "change7d": 0.059,
+    },
+    {
+        "name": "Compound",
+        "tvl": 1_650_000_000.0,
+        "chain": "Ethereum",
+        "category": "Lending",
+        "change1d": -0.002,
+        "change7d": -0.018,
+    },
+    {
+        "name": "Raydium",
+        "tvl": 1_420_000_000.0,
+        "chain": "Solana",
+        "category": "DEX",
+        "change1d": 0.038,
+        "change7d": 0.095,
+    },
 ]
 _DT_MOCK_CHAINS: dict = {
     "Ethereum": 54_910_000_000.0,
-    "Tron":      7_690_000_000.0,
-    "BSC":       7_695_000_000.0,
-    "Solana":    6_080_000_000.0,
-    "Arbitrum":  4_940_000_000.0,
-    "Base":      3_200_000_000.0,
-    "Optimism":  2_110_000_000.0,
+    "Tron": 7_690_000_000.0,
+    "BSC": 7_695_000_000.0,
+    "Solana": 6_080_000_000.0,
+    "Arbitrum": 4_940_000_000.0,
+    "Base": 3_200_000_000.0,
+    "Optimism": 2_110_000_000.0,
     "Avalanche": 1_340_000_000.0,
-    "Polygon":   1_200_000_000.0,
-    "Others":    5_835_000_000.0,
+    "Polygon": 1_200_000_000.0,
+    "Others": 5_835_000_000.0,
 }
 
 
@@ -6622,8 +6818,7 @@ def _dt_chain_dominance(chain_tvls: dict) -> dict:
     if total <= 0:
         return {}
     return {
-        chain: float(round(tvl / total * 100.0, 4))
-        for chain, tvl in chain_tvls.items()
+        chain: float(round(tvl / total * 100.0, 4)) for chain, tvl in chain_tvls.items()
     }
 
 
@@ -6636,7 +6831,7 @@ def _dt_momentum_signal(tvl_series: list) -> str:
     if len(tvl_series) < 2:
         return "stable"
     start = tvl_series[0]
-    end   = tvl_series[-1]
+    end = tvl_series[-1]
     if start <= 0:
         return "stable"
     change_pct = (end - start) / start * 100.0
@@ -6678,7 +6873,9 @@ def _dt_category_breakdown(protocols: list) -> dict:
     return breakdown
 
 
-def _dt_dominance_others(chain_pcts: dict, threshold: float = _DT_DOM_THRESHOLD) -> dict:
+def _dt_dominance_others(
+    chain_pcts: dict, threshold: float = _DT_DOM_THRESHOLD
+) -> dict:
     """
     Collapse chains below threshold % into an "Others" bucket.
     Returns {} for empty input. No "Others" key if nothing collapses.
@@ -6708,12 +6905,13 @@ async def compute_defi_tvl_tracker() -> dict:
     import asyncio as _asyncio  # noqa: PLC0415
 
     raw_protocols: list = []
-    raw_chains:    list = []
-    raw_history:   list = []
+    raw_chains: list = []
+    raw_history: list = []
 
     try:
         timeout = aiohttp.ClientTimeout(total=12)
         async with aiohttp.ClientSession(timeout=timeout) as session:
+
             async def _get(url: str):
                 try:
                     async with session.get(url) as r:
@@ -6746,24 +6944,26 @@ async def compute_defi_tvl_tracker() -> dict:
                 continue
             c1d = float(p.get("change_1d", 0) or 0)
             c7d = float(p.get("change_7d", 0) or 0)
-            protocols_norm.append({
-                "name":           p.get("name", "Unknown"),
-                "tvl_usd":        tvl,
-                "chain":          p.get("chain", "Multi") or "Multi",
-                "category":       p.get("category", "Other") or "Other",
-                "change_24h_pct": round(c1d * 100, 2),
-                "change_7d_pct":  round(c7d * 100, 2),
-            })
+            protocols_norm.append(
+                {
+                    "name": p.get("name", "Unknown"),
+                    "tvl_usd": tvl,
+                    "chain": p.get("chain", "Multi") or "Multi",
+                    "category": p.get("category", "Other") or "Other",
+                    "change_24h_pct": round(c1d * 100, 2),
+                    "change_7d_pct": round(c7d * 100, 2),
+                }
+            )
     else:
         # Mock fallback
         protocols_norm = [
             {
-                "name":           p["name"],
-                "tvl_usd":        p["tvl"],
-                "chain":          p["chain"],
-                "category":       p["category"],
+                "name": p["name"],
+                "tvl_usd": p["tvl"],
+                "chain": p["chain"],
+                "category": p["category"],
                 "change_24h_pct": round(p["change1d"] * 100, 2),
-                "change_7d_pct":  round(p["change7d"] * 100, 2),
+                "change_7d_pct": round(p["change7d"] * 100, 2),
             }
             for p in _DT_MOCK_PROTOCOLS
         ]
@@ -6776,7 +6976,7 @@ async def compute_defi_tvl_tracker() -> dict:
         chain_tvl_map: dict = {}
         for c in raw_chains:
             name = c.get("name", "Unknown")
-            tvl  = float(c.get("tvl", 0) or 0)
+            tvl = float(c.get("tvl", 0) or 0)
             if tvl > 0:
                 chain_tvl_map[name] = tvl
         chain_pcts = _dt_chain_dominance(chain_tvl_map)
@@ -6788,13 +6988,14 @@ async def compute_defi_tvl_tracker() -> dict:
     # ── Historical TVL ───────────────────────────────────────────────────────
     if raw_history:
         hist_vals = [float(h.get("tvl", 0)) for h in raw_history[-30:] if h.get("tvl")]
-        hist_out  = [
+        hist_out = [
             {"date": h.get("date", f"day-{i+1}"), "tvl_usd": float(h.get("tvl", 0))}
             for i, h in enumerate(raw_history[-30:])
         ]
     else:
         # Mock: 30 days of realistic data around current total
         import random as _random  # noqa: PLC0415
+
         _random.seed(42)
         base = 90_000_000_000.0
         hist_vals = []
@@ -6802,16 +7003,15 @@ async def compute_defi_tvl_tracker() -> dict:
             base *= 1 + _random.uniform(-0.02, 0.025)
             hist_vals.append(round(base, 0))
         hist_out = [
-            {"date": f"day-{i+1}", "tvl_usd": v}
-            for i, v in enumerate(hist_vals)
+            {"date": f"day-{i+1}", "tvl_usd": v} for i, v in enumerate(hist_vals)
         ]
 
     # ── Momentum & changes ───────────────────────────────────────────────────
     momentum = _dt_momentum_signal(hist_vals)
     tvl_24h_ago = hist_vals[-2] if len(hist_vals) >= 2 else total_tvl
-    tvl_7d_ago  = hist_vals[-8] if len(hist_vals) >= 8 else total_tvl
-    change_24h  = _dt_tvl_change_pct(total_tvl, tvl_24h_ago)
-    change_7d   = _dt_tvl_change_pct(total_tvl, tvl_7d_ago)
+    tvl_7d_ago = hist_vals[-8] if len(hist_vals) >= 8 else total_tvl
+    change_24h = _dt_tvl_change_pct(total_tvl, tvl_24h_ago)
+    change_7d = _dt_tvl_change_pct(total_tvl, tvl_7d_ago)
 
     # ── Description ──────────────────────────────────────────────────────────
     eth_dom = chain_dom.get("Ethereum", 0)
@@ -6821,14 +7021,14 @@ async def compute_defi_tvl_tracker() -> dict:
     )
 
     return {
-        "total_tvl_usd":      round(total_tvl, 2),
+        "total_tvl_usd": round(total_tvl, 2),
         "tvl_change_24h_pct": round(change_24h, 2),
-        "tvl_change_7d_pct":  round(change_7d, 2),
-        "momentum":            momentum,
-        "protocols":           top_protocols,
-        "chain_dominance":     chain_dom,
-        "history":             hist_out,
-        "description":         desc,
+        "tvl_change_7d_pct": round(change_7d, 2),
+        "momentum": momentum,
+        "protocols": top_protocols,
+        "chain_dominance": chain_dom,
+        "history": hist_out,
+        "description": desc,
     }
 
 
@@ -6880,9 +7080,9 @@ async def compute_gas_fee_predictor() -> dict:
     import math
 
     # ── Attempt live data from Etherscan gas oracle ─────────────────────────
-    base_fee  = 0.0
+    base_fee = 0.0
     eth_price = 0.0
-    fetch_ok  = False
+    fetch_ok = False
 
     try:
         async with httpx.AsyncClient(timeout=6.0) as client:
@@ -6893,15 +7093,15 @@ async def compute_gas_fee_predictor() -> dict:
             if resp.status_code == 200:
                 result = resp.json().get("result", {})
                 if isinstance(result, dict) and "suggestBaseFee" in result:
-                    base_fee  = float(result.get("suggestBaseFee", 0))
+                    base_fee = float(result.get("suggestBaseFee", 0))
                     eth_price = float(result.get("UsdPrice", 3000))
-                    fetch_ok  = True
+                    fetch_ok = True
     except Exception:
         pass
 
     # ── Mock / fallback ──────────────────────────────────────────────────────
     if not fetch_ok or base_fee <= 0:
-        base_fee  = 42.5
+        base_fee = 42.5
         eth_price = 3_200.0
 
     # ── Build 7-day hourly history (168 points) ──────────────────────────────
@@ -6912,14 +7112,14 @@ async def compute_gas_fee_predictor() -> dict:
         f += random.gauss(0, 1.5)
         f = max(5.0, min(200.0, f))
         hist_fees.append(round(f, 2))
-    hist_fees[-1] = base_fee   # anchor last point to current
+    hist_fees[-1] = base_fee  # anchor last point to current
 
-    ma24   = _gf_moving_average(hist_fees, 24)
-    ma168  = _gf_moving_average(hist_fees, 168)
+    ma24 = _gf_moving_average(hist_fees, 24)
+    ma168 = _gf_moving_average(hist_fees, 168)
 
     # ── Trend ────────────────────────────────────────────────────────────────
-    trend_dir   = _gf_base_fee_trend(hist_fees[-24:])
-    slope_ph    = 0.0
+    trend_dir = _gf_base_fee_trend(hist_fees[-24:])
+    slope_ph = 0.0
     if len(hist_fees) >= 2:
         recent = hist_fees[-6:]
         n = len(recent)
@@ -6945,16 +7145,16 @@ async def compute_gas_fee_predictor() -> dict:
     # ── Total fees (base + priority) ─────────────────────────────────────────
     TRANSFER_GAS = 21_000
     t_slow = round(base_fee + p10, 2)
-    t_std  = round(base_fee + p50, 2)
+    t_std = round(base_fee + p50, 2)
     t_fast = round(base_fee + p90, 2)
 
     slow_usd = round(_gf_fee_usd(TRANSFER_GAS, t_slow, eth_price), 4)
-    std_usd  = round(_gf_fee_usd(TRANSFER_GAS, t_std,  eth_price), 4)
+    std_usd = round(_gf_fee_usd(TRANSFER_GAS, t_std, eth_price), 4)
     fast_usd = round(_gf_fee_usd(TRANSFER_GAS, t_fast, eth_price), 4)
 
     # ── Spike detection (z-score vs 24h window) ───────────────────────────────
     window_24h = hist_fees[-24:]
-    zs    = round(_gf_zscore(base_fee, window_24h), 3)
+    zs = round(_gf_zscore(base_fee, window_24h), 3)
     label = _gf_spike_label(zs)
 
     # percentile rank
@@ -6967,13 +7167,15 @@ async def compute_gas_fee_predictor() -> dict:
     for i in range(7):
         day_idx = i * 24
         fee_val = hist_fees[min(day_idx, len(hist_fees) - 1)]
-        ma_val  = ma24[min(day_idx, len(ma24) - 1)]
+        ma_val = ma24[min(day_idx, len(ma24) - 1)]
         ts = (today - datetime.timedelta(days=6 - i)).strftime("%Y-%m-%dT%H:00:00")
-        history_7d.append({
-            "timestamp":    ts,
-            "base_fee_gwei": round(fee_val, 2),
-            "ma_gwei":       round(ma_val, 2),
-        })
+        history_7d.append(
+            {
+                "timestamp": ts,
+                "base_fee_gwei": round(fee_val, 2),
+                "ma_gwei": round(ma_val, 2),
+            }
+        )
 
     # ── Description ──────────────────────────────────────────────────────────
     label_display = label.capitalize()
@@ -6984,33 +7186,34 @@ async def compute_gas_fee_predictor() -> dict:
 
     return {
         "current": {
-            "base_fee_gwei":       round(base_fee, 2),
-            "priority_slow_gwei":  p10,
-            "priority_std_gwei":   p50,
-            "priority_fast_gwei":  p90,
-            "next_block_gwei":     next_block,
-            "total_slow_gwei":     t_slow,
-            "total_std_gwei":      t_std,
-            "total_fast_gwei":     t_fast,
-            "total_slow_usd":      slow_usd,
-            "total_std_usd":       std_usd,
-            "total_fast_usd":      fast_usd,
+            "base_fee_gwei": round(base_fee, 2),
+            "priority_slow_gwei": p10,
+            "priority_std_gwei": p50,
+            "priority_fast_gwei": p90,
+            "next_block_gwei": next_block,
+            "total_slow_gwei": t_slow,
+            "total_std_gwei": t_std,
+            "total_fast_gwei": t_fast,
+            "total_slow_usd": slow_usd,
+            "total_std_usd": std_usd,
+            "total_fast_usd": fast_usd,
         },
         "spike": {
-            "zscore":     zs,
-            "label":      label,
-            "threshold":  2.0,
+            "zscore": zs,
+            "label": label,
+            "threshold": 2.0,
             "percentile": pct_rank,
         },
         "trend": {
-            "direction":           trend_dir,
+            "direction": trend_dir,
             "slope_gwei_per_hour": slope_ph,
-            "ma_24h_gwei":         round(ma24[-1], 2),
-            "ma_7d_gwei":          round(ma168[-1], 2),
+            "ma_24h_gwei": round(ma24[-1], 2),
+            "ma_7d_gwei": round(ma168[-1], 2),
         },
         "history_7d": history_7d,
         "description": desc,
     }
+
 
 async def compute_layer2_metrics() -> dict:
     """
@@ -7029,33 +7232,43 @@ async def compute_layer2_metrics() -> dict:
     # Baseline mock data (realistic mid-2025 values)
     MOCK = {
         "Arbitrum": {
-            "tvl_now":  18_500_000_000, "tvl_prev_24h": 18_280_000_000,
+            "tvl_now": 18_500_000_000,
+            "tvl_prev_24h": 18_280_000_000,
             "tvl_prev_7d": 17_700_000_000,
-            "tx_24h": 950_000, "avg_gas_usd": 0.04,
+            "tx_24h": 950_000,
+            "avg_gas_usd": 0.04,
         },
         "Optimism": {
-            "tvl_now":   7_200_000_000, "tvl_prev_24h":  7_142_000_000,
-            "tvl_prev_7d":  7_050_000_000,
-            "tx_24h": 420_000, "avg_gas_usd": 0.05,
+            "tvl_now": 7_200_000_000,
+            "tvl_prev_24h": 7_142_000_000,
+            "tvl_prev_7d": 7_050_000_000,
+            "tx_24h": 420_000,
+            "avg_gas_usd": 0.05,
         },
         "Base": {
-            "tvl_now":   4_800_000_000, "tvl_prev_24h":  4_682_000_000,
-            "tvl_prev_7d":  4_436_000_000,
-            "tx_24h": 680_000, "avg_gas_usd": 0.03,
+            "tvl_now": 4_800_000_000,
+            "tvl_prev_24h": 4_682_000_000,
+            "tvl_prev_7d": 4_436_000_000,
+            "tx_24h": 680_000,
+            "avg_gas_usd": 0.03,
         },
         "Polygon": {
-            "tvl_now":   1_100_000_000, "tvl_prev_24h":  1_106_000_000,
-            "tvl_prev_7d":  1_113_000_000,
-            "tx_24h": 310_000, "avg_gas_usd": 0.02,
+            "tvl_now": 1_100_000_000,
+            "tvl_prev_24h": 1_106_000_000,
+            "tvl_prev_7d": 1_113_000_000,
+            "tx_24h": 310_000,
+            "avg_gas_usd": 0.02,
         },
         "zkSync": {
-            "tvl_now":     820_000_000, "tvl_prev_24h":    817_000_000,
-            "tvl_prev_7d":   812_000_000,
-            "tx_24h":  95_000, "avg_gas_usd": 0.06,
+            "tvl_now": 820_000_000,
+            "tvl_prev_24h": 817_000_000,
+            "tvl_prev_7d": 812_000_000,
+            "tx_24h": 95_000,
+            "avg_gas_usd": 0.06,
         },
     }
 
-    L1_GAS_USD = 1.50   # approximate ETH L1 transfer cost
+    L1_GAS_USD = 1.50  # approximate ETH L1 transfer cost
 
     # ── Attempt DeFi Llama data ───────────────────────────────────────────────
     fetch_ok = False
@@ -7063,7 +7276,9 @@ async def compute_layer2_metrics() -> dict:
         async with httpx.AsyncClient(timeout=8.0) as client:
             resp = await client.get("https://api.llama.fi/v2/chains")
             if resp.status_code == 200:
-                llama_data = {item["name"]: item for item in resp.json() if isinstance(item, dict)}
+                llama_data = {
+                    item["name"]: item for item in resp.json() if isinstance(item, dict)
+                }
                 for chain in L2_CHAINS:
                     if chain in llama_data:
                         tvl = float(llama_data[chain].get("tvl", 0))
@@ -7080,76 +7295,78 @@ async def compute_layer2_metrics() -> dict:
 
     for name in L2_CHAINS:
         m = MOCK[name]
-        tvl_now     = m["tvl_now"]
-        tvl_24h     = m["tvl_prev_24h"]
-        tvl_7d      = m["tvl_prev_7d"]
-        tx_24h      = m["tx_24h"]
-        avg_gas     = m["avg_gas_usd"]
+        tvl_now = m["tvl_now"]
+        tvl_24h = m["tvl_prev_24h"]
+        tvl_7d = m["tvl_prev_7d"]
+        tx_24h = m["tx_24h"]
+        avg_gas = m["avg_gas_usd"]
 
-        ch24_pct    = round(_l2_tvl_change_pct(tvl_now, tvl_24h), 2)
-        ch7d_pct    = round(_l2_tvl_change_pct(tvl_now, tvl_7d),  2)
+        ch24_pct = round(_l2_tvl_change_pct(tvl_now, tvl_24h), 2)
+        ch7d_pct = round(_l2_tvl_change_pct(tvl_now, tvl_7d), 2)
         bridge_flow = tvl_now - tvl_24h
-        direction   = _l2_bridge_flow_direction(bridge_flow)
+        direction = _l2_bridge_flow_direction(bridge_flow)
         gas_savings = round(_l2_gas_savings_pct(L1_GAS_USD, avg_gas), 2)
 
         # tx growth proxy: 7d TVL change correlates with tx activity
         tx_growth = (tvl_now - tvl_7d) / max(tvl_7d, 1)
-        momentum  = round(_l2_momentum_score(ch24_pct, ch7d_pct, tx_growth), 1)
+        momentum = round(_l2_momentum_score(ch24_pct, ch7d_pct, tx_growth), 1)
 
         chains_out[name] = {
-            "tvl_usd":            round(tvl_now, 0),
+            "tvl_usd": round(tvl_now, 0),
             "tvl_change_24h_pct": ch24_pct,
-            "tvl_change_7d_pct":  ch7d_pct,
+            "tvl_change_7d_pct": ch7d_pct,
             "bridge_flow_24h_usd": round(bridge_flow, 0),
-            "bridge_direction":   direction,
-            "tx_count_24h":       tx_24h,
-            "avg_gas_usd":        avg_gas,
-            "gas_savings_pct":    gas_savings,
-            "momentum":           momentum,
+            "bridge_direction": direction,
+            "tx_count_24h": tx_24h,
+            "avg_gas_usd": avg_gas,
+            "gas_savings_pct": gas_savings,
+            "momentum": momentum,
         }
 
-        total_tvl          += tvl_now
+        total_tvl += tvl_now
         total_bridge_inflow += max(0, bridge_flow)
-        total_tx            += tx_24h
+        total_tx += tx_24h
 
     # ── Aggregate ─────────────────────────────────────────────────────────────
     prev_total_tvl = sum(MOCK[c]["tvl_prev_24h"] for c in L2_CHAINS)
-    total_ch24     = round(_l2_tvl_change_pct(total_tvl, prev_total_tvl), 2)
+    total_ch24 = round(_l2_tvl_change_pct(total_tvl, prev_total_tvl), 2)
     avg_gas_savings = round(
         sum(chains_out[c]["gas_savings_pct"] for c in L2_CHAINS) / len(L2_CHAINS), 2
     )
-    ranked      = _l2_rank_chains(chains_out)
-    top_chain   = ranked[0][0] if ranked else L2_CHAINS[0]
-    l1_tx_24h   = 1_200_000   # approximate Ethereum L1 daily tx
-    l1_ratio    = round(l1_tx_24h / max(total_tx, 1), 4)
+    ranked = _l2_rank_chains(chains_out)
+    top_chain = ranked[0][0] if ranked else L2_CHAINS[0]
+    l1_tx_24h = 1_200_000  # approximate Ethereum L1 daily tx
+    l1_ratio = round(l1_tx_24h / max(total_tx, 1), 4)
 
     # ── Momentum summary ─────────────────────────────────────────────────────
     agg_momentum = round(
         sum(chains_out[c]["momentum"] for c in L2_CHAINS) / len(L2_CHAINS), 1
     )
     momentum_label = _l2_growth_label(agg_momentum)
-    leader  = max(chains_out, key=lambda c: chains_out[c]["momentum"])
+    leader = max(chains_out, key=lambda c: chains_out[c]["momentum"])
     laggard = min(chains_out, key=lambda c: chains_out[c]["momentum"])
 
     # ── 7-day history (synthetic daily snapshots) ─────────────────────────────
-    today     = datetime.date.today()
+    today = datetime.date.today()
     history_7d = []
-    base_tvl   = total_tvl * 0.94
+    base_tvl = total_tvl * 0.94
     for i in range(7):
-        day     = today - datetime.timedelta(days=6 - i)
+        day = today - datetime.timedelta(days=6 - i)
         day_tvl = base_tvl * (1 + i * 0.01) + random.gauss(0, total_tvl * 0.002)
         day_mom = 50.0 + i * 1.5 + random.gauss(0, 2)
-        history_7d.append({
-            "date":          day.isoformat(),
-            "total_tvl_usd": round(day_tvl, 0),
-            "momentum":      round(day_mom, 1),
-        })
+        history_7d.append(
+            {
+                "date": day.isoformat(),
+                "total_tvl_usd": round(day_tvl, 0),
+                "momentum": round(day_mom, 1),
+            }
+        )
     history_7d[-1]["total_tvl_usd"] = round(total_tvl, 0)
-    history_7d[-1]["momentum"]      = agg_momentum
+    history_7d[-1]["momentum"] = agg_momentum
 
     # ── TVL shares for description ────────────────────────────────────────────
     tvl_map = {c: chains_out[c]["tvl_usd"] for c in L2_CHAINS}
-    shares  = _l2_tvl_share(tvl_map)
+    shares = _l2_tvl_share(tvl_map)
     top_share = round(shares.get(top_chain, 0), 1)
 
     desc = (
@@ -7164,11 +7381,46 @@ async def compute_layer2_metrics() -> dict:
     L1_TX_24H = 1_200_000  # approximate L1 tx/day
 
     CHAIN_DEFAULTS = {
-        "Arbitrum": {"tvl": 18_500_000_000, "d24": 1.2, "d7": 4.5, "bridge": 120_000_000, "tx": 950_000, "gas": 0.04},
-        "Optimism": {"tvl": 7_200_000_000, "d24": 0.8, "d7": 2.1, "bridge": 45_000_000, "tx": 420_000, "gas": 0.05},
-        "Base":     {"tvl": 4_800_000_000, "d24": 2.5, "d7": 8.2, "bridge": 85_000_000, "tx": 680_000, "gas": 0.03},
-        "Polygon":  {"tvl": 1_100_000_000, "d24": -0.5, "d7": -1.2, "bridge": -15_000_000, "tx": 310_000, "gas": 0.02},
-        "zkSync":   {"tvl":   820_000_000, "d24": 0.3, "d7": 1.0, "bridge": 8_000_000, "tx": 95_000, "gas": 0.06},
+        "Arbitrum": {
+            "tvl": 18_500_000_000,
+            "d24": 1.2,
+            "d7": 4.5,
+            "bridge": 120_000_000,
+            "tx": 950_000,
+            "gas": 0.04,
+        },
+        "Optimism": {
+            "tvl": 7_200_000_000,
+            "d24": 0.8,
+            "d7": 2.1,
+            "bridge": 45_000_000,
+            "tx": 420_000,
+            "gas": 0.05,
+        },
+        "Base": {
+            "tvl": 4_800_000_000,
+            "d24": 2.5,
+            "d7": 8.2,
+            "bridge": 85_000_000,
+            "tx": 680_000,
+            "gas": 0.03,
+        },
+        "Polygon": {
+            "tvl": 1_100_000_000,
+            "d24": -0.5,
+            "d7": -1.2,
+            "bridge": -15_000_000,
+            "tx": 310_000,
+            "gas": 0.02,
+        },
+        "zkSync": {
+            "tvl": 820_000_000,
+            "d24": 0.3,
+            "d7": 1.0,
+            "bridge": 8_000_000,
+            "tx": 95_000,
+            "gas": 0.06,
+        },
     }
 
     chain_data: dict[str, dict] = {}
@@ -7205,16 +7457,28 @@ async def compute_layer2_metrics() -> dict:
         }
 
     total_tvl = sum(c["tvl_usd"] for c in chain_data.values())
-    total_bridge = sum(c["bridge_flow_24h_usd"] for c in chain_data.values() if c["bridge_flow_24h_usd"] > 0)
+    total_bridge = sum(
+        c["bridge_flow_24h_usd"]
+        for c in chain_data.values()
+        if c["bridge_flow_24h_usd"] > 0
+    )
     total_tx = sum(c["tx_count_24h"] for c in chain_data.values())
-    avg_gas_savings = sum(c["gas_savings_pct"] for c in chain_data.values()) / len(chain_data)
-    ranked = _l2_rank_chains({n: {"tvl_usd": c["tvl_usd"]} for n, c in chain_data.items()})
+    avg_gas_savings = sum(c["gas_savings_pct"] for c in chain_data.values()) / len(
+        chain_data
+    )
+    ranked = _l2_rank_chains(
+        {n: {"tvl_usd": c["tvl_usd"]} for n, c in chain_data.items()}
+    )
     top_chain = ranked[0][0] if ranked else "Arbitrum"
     laggard = ranked[-1][0] if ranked else "zkSync"
 
     # Aggregate momentum
-    total_d24 = sum(c["tvl_change_24h_pct"] * c["tvl_usd"] for c in chain_data.values()) / max(total_tvl, 1)
-    total_d7 = sum(c["tvl_change_7d_pct"] * c["tvl_usd"] for c in chain_data.values()) / max(total_tvl, 1)
+    total_d24 = sum(
+        c["tvl_change_24h_pct"] * c["tvl_usd"] for c in chain_data.values()
+    ) / max(total_tvl, 1)
+    total_d7 = sum(
+        c["tvl_change_7d_pct"] * c["tvl_usd"] for c in chain_data.values()
+    ) / max(total_tvl, 1)
     agg_tx_growth = total_tx / L1_TX_24H
     agg_momentum = _l2_momentum_score(total_d24, total_d7, agg_tx_growth)
     growth_label = _l2_growth_label(agg_momentum)
@@ -7230,11 +7494,13 @@ async def compute_layer2_metrics() -> dict:
         scale = 0.96 + 0.04 * (i / 6)
         day_tvl = total_tvl * scale * (1 + random.uniform(-0.005, 0.005))
         day_momentum = agg_momentum * scale
-        history_7d.append({
-            "date": day.isoformat(),
-            "total_tvl_usd": round(day_tvl, 0),
-            "momentum": round(day_momentum, 1),
-        })
+        history_7d.append(
+            {
+                "date": day.isoformat(),
+                "total_tvl_usd": round(day_tvl, 0),
+                "momentum": round(day_momentum, 1),
+            }
+        )
 
     desc = (
         f"{growth_label.replace('_', ' ').capitalize()}: "
@@ -7269,33 +7535,53 @@ async def compute_nft_market_pulse() -> dict:
     # Top 5 collections with mock baseline data
     COLLECTIONS = {
         "Bored Ape Yacht Club": {
-            "floor": 12.5, "vol": 450.0, "wash": 0.156,
-            "listings": 1200, "sales": 45,
-            "d24": -2.3, "d7": 5.1,
+            "floor": 12.5,
+            "vol": 450.0,
+            "wash": 0.156,
+            "listings": 1200,
+            "sales": 45,
+            "d24": -2.3,
+            "d7": 5.1,
             "history_floors": [11.8, 12.0, 11.9, 12.1, 12.3, 12.4, 12.5],
         },
         "CryptoPunks": {
-            "floor": 42.0, "vol": 1260.0, "wash": 0.167,
-            "listings": 900, "sales": 30,
-            "d24": 0.5, "d7": 2.4,
+            "floor": 42.0,
+            "vol": 1260.0,
+            "wash": 0.167,
+            "listings": 900,
+            "sales": 30,
+            "d24": 0.5,
+            "d7": 2.4,
             "history_floors": [41.0, 41.2, 41.4, 41.5, 41.7, 41.9, 42.0],
         },
         "Azuki": {
-            "floor": 5.8, "vol": 290.0, "wash": 0.155,
-            "listings": 1800, "sales": 32,
-            "d24": -1.7, "d7": -3.2,
+            "floor": 5.8,
+            "vol": 290.0,
+            "wash": 0.155,
+            "listings": 1800,
+            "sales": 32,
+            "d24": -1.7,
+            "d7": -3.2,
             "history_floors": [6.0, 5.95, 5.9, 5.88, 5.85, 5.82, 5.8],
         },
         "Pudgy Penguins": {
-            "floor": 8.3, "vol": 415.0, "wash": 0.157,
-            "listings": 600, "sales": 50,
-            "d24": 3.1, "d7": 7.5,
+            "floor": 8.3,
+            "vol": 415.0,
+            "wash": 0.157,
+            "listings": 600,
+            "sales": 50,
+            "d24": 3.1,
+            "d7": 7.5,
             "history_floors": [7.7, 7.8, 7.9, 8.0, 8.1, 8.2, 8.3],
         },
         "Doodles": {
-            "floor": 2.1, "vol": 84.0, "wash": 0.167,
-            "listings": 2200, "sales": 22,
-            "d24": -0.9, "d7": -1.4,
+            "floor": 2.1,
+            "vol": 84.0,
+            "wash": 0.167,
+            "listings": 2200,
+            "sales": 22,
+            "d24": -0.9,
+            "d7": -1.4,
             "history_floors": [2.13, 2.12, 2.11, 2.11, 2.10, 2.10, 2.1],
         },
     }
@@ -7339,18 +7625,23 @@ async def compute_nft_market_pulse() -> dict:
         for i in range(7)
     ]
     btc_corr = _nft_btc_correlation(idx_7d_series, btc_7d)
-    idx_prev = _nft_bluechip_index({n: d["history_floors"][0] for n, d in COLLECTIONS.items()})
+    idx_prev = _nft_bluechip_index(
+        {n: d["history_floors"][0] for n, d in COLLECTIONS.items()}
+    )
     idx_change_24h = _nft_floor_change_pct(idx_value, idx_prev)
     idx_trend = _nft_trend_direction(idx_7d_series)
 
     # Market aggregate
     total_vol = sum(d["vol"] for d in COLLECTIONS.values())
-    total_adj = sum(_nft_wash_adjusted_volume(d["vol"], d["wash"]) for d in COLLECTIONS.values())
+    total_adj = sum(
+        _nft_wash_adjusted_volume(d["vol"], d["wash"]) for d in COLLECTIONS.values()
+    )
     wash_pct = (total_vol - total_adj) / total_vol * 100 if total_vol else 0.0
     vol_history = [total_vol * (0.9 + 0.02 * i) for i in range(6)]
     vol_z = _nft_volume_zscore(total_vol, vol_history)
     avg_lsr = sum(
-        _nft_listing_sales_ratio(d["listings"], d["sales"]) for d in COLLECTIONS.values()
+        _nft_listing_sales_ratio(d["listings"], d["sales"])
+        for d in COLLECTIONS.values()
     ) / len(COLLECTIONS)
     mkt_liq = _nft_liquidity_label(avg_lsr)
 
@@ -7360,11 +7651,13 @@ async def compute_nft_market_pulse() -> dict:
         day_floors = {n: d["history_floors"][i] for n, d in COLLECTIONS.items()}
         day_idx = _nft_bluechip_index(day_floors)
         day_vol = sum(d["vol"] * (0.95 + 0.05 * (i / 6)) for d in COLLECTIONS.values())
-        history_7d.append({
-            "date": dates_7d[i],
-            "index_value": round(day_idx, 1),
-            "total_volume_eth": round(day_vol, 1),
-        })
+        history_7d.append(
+            {
+                "date": dates_7d[i],
+                "index_value": round(day_idx, 1),
+                "total_volume_eth": round(day_vol, 1),
+            }
+        )
 
     desc = f"NFT market: blue-chip index {idx_trend} — {mkt_liq} liquidity"
 
@@ -7389,9 +7682,8 @@ async def compute_nft_market_pulse() -> dict:
         "description": desc,
     }
 
-
-# BTC Dominance Tracker helpers  (_bd_)
-# ==============================================def _bd_dominance_pct(asset_market_cap: float, total_market_cap: float) -> float:
+    # BTC Dominance Tracker helpers  (_bd_)
+    # ==============================================def _bd_dominance_pct(asset_market_cap: float, total_market_cap: float) -> float:
     """Return asset's % share of total market cap, clamped to [0, 100]."""
     if total_market_cap <= 0:
         return 0.0
@@ -7458,8 +7750,8 @@ def _bd_correlation(dom_series: list, alt_series: list) -> float:
     mx = sum(xs) / n
     my = sum(ys) / n
     num = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
-    dx  = sum((x - mx) ** 2 for x in xs) ** 0.5
-    dy  = sum((y - my) ** 2 for y in ys) ** 0.5
+    dx = sum((x - mx) ** 2 for x in xs) ** 0.5
+    dy = sum((y - my) ** 2 for y in ys) ** 0.5
     if dx == 0 or dy == 0:
         return 0.0
     return float(max(-1.0, min(1.0, num / (dx * dy))))
@@ -7494,29 +7786,32 @@ async def compute_btc_dominance() -> dict:
                 btc_dom = float(mcp.get("btc", 52.4))
                 eth_dom = float(mcp.get("eth", 17.2))
                 alts_dom = round(100.0 - btc_dom - eth_dom, 2)
-                total_cap = float(gd.get("total_market_cap", {}).get("usd", 2_002_000_000_000))
-                btc_cap   = total_cap * btc_dom / 100.0
-                eth_cap   = total_cap * eth_dom / 100.0
-                alts_cap  = total_cap * alts_dom / 100.0
-                fetch_ok  = True
+                total_cap = float(
+                    gd.get("total_market_cap", {}).get("usd", 2_002_000_000_000)
+                )
+                btc_cap = total_cap * btc_dom / 100.0
+                eth_cap = total_cap * eth_dom / 100.0
+                alts_cap = total_cap * alts_dom / 100.0
+                fetch_ok = True
     except Exception:
         pass
 
     if not fetch_ok:
         # Realistic mock values
-        btc_dom   = 52.4
-        eth_dom   = 17.2
-        alts_dom  = 30.4
+        btc_dom = 52.4
+        eth_dom = 17.2
+        alts_dom = 30.4
         total_cap = 2_002_000_000_000
-        btc_cap   = 1_049_048_000_000
-        eth_cap   =   344_344_000_000
-        alts_cap  =   608_608_000_000
+        btc_cap = 1_049_048_000_000
+        eth_cap = 344_344_000_000
+        alts_cap = 608_608_000_000
 
     btc_dom_prev_24h = btc_dom - 0.3
-    btc_dom_prev_7d  = btc_dom - 1.1
+    btc_dom_prev_7d = btc_dom - 1.1
 
     # ── Build 90-day synthetic sparkline ────────────────────────────────────
     import math, random
+
     random.seed(42)
     today = datetime.date.today()
     sparkline_doms = []
@@ -7532,14 +7827,18 @@ async def compute_btc_dominance() -> dict:
     sparkline = []
     for i, dom_val in enumerate(sparkline_doms):
         day = today - datetime.timedelta(days=89 - i)
-        sparkline.append({
-            "date":   day.isoformat(),
-            "btc_dom": dom_val,
-            "ma30":    round(ma30[i], 2),
-        })
+        sparkline.append(
+            {
+                "date": day.isoformat(),
+                "btc_dom": dom_val,
+                "ma30": round(ma30[i], 2),
+            }
+        )
 
     # ── Regime & direction ───────────────────────────────────────────────────
-    last_week_dom = sparkline_doms[-8] if len(sparkline_doms) >= 8 else sparkline_doms[0]
+    last_week_dom = (
+        sparkline_doms[-8] if len(sparkline_doms) >= 8 else sparkline_doms[0]
+    )
     if btc_dom > last_week_dom + 0.5:
         direction = "rising"
     elif btc_dom < last_week_dom - 0.5:
@@ -7570,7 +7869,7 @@ async def compute_btc_dominance() -> dict:
 
     # ── Description ─────────────────────────────────────────────────────────
     regime_display = regime_label.replace("_", " ").title()
-    dir_display    = direction.capitalize()
+    dir_display = direction.capitalize()
     desc = (
         f"{regime_display}: BTC dominance {btc_dom:.1f}% — "
         f"{dir_display}, {'approaching BTC season territory' if btc_dom > 50 else 'alts gaining ground'}"
@@ -7578,40 +7877,42 @@ async def compute_btc_dominance() -> dict:
 
     return {
         "btc": {
-            "dominance_pct":   round(btc_dom, 2),
-            "change_24h_pct":  round(_bd_change_pct(btc_dom, btc_dom_prev_24h), 2),
-            "change_7d_pct":   round(_bd_change_pct(btc_dom, btc_dom_prev_7d), 2),
-            "market_cap_usd":  round(btc_cap, 0),
+            "dominance_pct": round(btc_dom, 2),
+            "change_24h_pct": round(_bd_change_pct(btc_dom, btc_dom_prev_24h), 2),
+            "change_7d_pct": round(_bd_change_pct(btc_dom, btc_dom_prev_7d), 2),
+            "market_cap_usd": round(btc_cap, 0),
         },
         "eth": {
-            "dominance_pct":   round(eth_dom, 2),
-            "change_24h_pct":  round(_bd_change_pct(eth_dom, eth_dom + 0.1), 2),
-            "change_7d_pct":   round(_bd_change_pct(eth_dom, eth_dom + 0.4), 2),
-            "market_cap_usd":  round(eth_cap, 0),
+            "dominance_pct": round(eth_dom, 2),
+            "change_24h_pct": round(_bd_change_pct(eth_dom, eth_dom + 0.1), 2),
+            "change_7d_pct": round(_bd_change_pct(eth_dom, eth_dom + 0.4), 2),
+            "market_cap_usd": round(eth_cap, 0),
         },
         "alts": {
-            "dominance_pct":   round(alts_dom, 2),
-            "change_24h_pct":  round(_bd_change_pct(alts_dom, alts_dom + 0.2), 2),
-            "change_7d_pct":   round(_bd_change_pct(alts_dom, alts_dom + 0.7), 2),
-            "market_cap_usd":  round(alts_cap, 0),
+            "dominance_pct": round(alts_dom, 2),
+            "change_24h_pct": round(_bd_change_pct(alts_dom, alts_dom + 0.2), 2),
+            "change_7d_pct": round(_bd_change_pct(alts_dom, alts_dom + 0.7), 2),
+            "market_cap_usd": round(alts_cap, 0),
         },
         "regime": {
-            "label":            regime_label,
+            "label": regime_label,
             "btc_season_index": round(btc_season_index, 1),
             "alt_season_index": round(alt_season_index, 1),
-            "direction":        direction,
+            "direction": direction,
         },
         "correlation": {
             "btc_dom_vs_alt_index": round(corr, 4),
-            "window_days":          30,
-            "interpretation":       interp,
+            "window_days": 30,
+            "interpretation": interp,
         },
         "sparkline": sparkline,
     }
 
+
 # ╔══════════════════════════════════════════════════════════════════════════╗
 # ║  LEVERAGE RATIO HEATMAP                                                 ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
+
 
 def _lv_leverage_ratio(oi_usd: float, market_cap_usd: float) -> float:
     """Leverage ratio: OI as % of market cap.  Returns 0.0 if mcap is zero."""
@@ -7652,8 +7953,9 @@ def _lv_zscore(current: float, history: list) -> float:
     if len(history) < 2:
         return 0.0
     import math
+
     mean = sum(history) / len(history)
-    std  = math.sqrt(sum((v - mean) ** 2 for v in history) / len(history))
+    std = math.sqrt(sum((v - mean) ** 2 for v in history) / len(history))
     if std == 0:
         return 0.0
     return float((current - mean) / std)
@@ -7706,28 +8008,31 @@ async def compute_leverage_ratio_heatmap() -> dict:
     # Baseline data — OI from typical Binance/Bybit/OKX combined estimates
     ASSETS = {
         "BTC": {
-            "oi": 18_500_000_000, "mcap": 1_200_000_000_000,
+            "oi": 18_500_000_000,
+            "mcap": 1_200_000_000_000,
             # 30-day history of leverage ratios (weekly snapshots)
             "history_lv": [1.22, 1.28, 1.33, 1.38, 1.42, 1.47, 1.54],
         },
         "ETH": {
-            "oi":  9_800_000_000, "mcap":   380_000_000_000,
+            "oi": 9_800_000_000,
+            "mcap": 380_000_000_000,
             "history_lv": [2.45, 2.48, 2.51, 2.53, 2.55, 2.57, 2.58],
         },
         "SOL": {
-            "oi":  4_200_000_000, "mcap":    75_000_000_000,
+            "oi": 4_200_000_000,
+            "mcap": 75_000_000_000,
             "history_lv": [4.20, 4.40, 4.60, 4.80, 5.10, 5.35, 5.60],
         },
         "BNB": {
-            "oi":  1_800_000_000, "mcap":    85_000_000_000,
+            "oi": 1_800_000_000,
+            "mcap": 85_000_000_000,
             "history_lv": [2.25, 2.22, 2.19, 2.17, 2.15, 2.13, 2.12],
         },
     }
 
     # Date labels for the 7 weekly snapshots covering last 30 days
     dates = [
-        (today - datetime.timedelta(days=30 - i * 5)).isoformat()
-        for i in range(7)
+        (today - datetime.timedelta(days=30 - i * 5)).isoformat() for i in range(7)
     ]
 
     assets_out = {}
@@ -7735,18 +8040,16 @@ async def compute_leverage_ratio_heatmap() -> dict:
 
     for name, d in ASSETS.items():
         current_lv = _lv_leverage_ratio(d["oi"], d["mcap"])
-        hist_lv    = d["history_lv"]
+        hist_lv = d["history_lv"]
 
         # Percentile vs 90-day synthetic extension
         extended = [
-            lv * (0.85 + 0.03 * i)
-            for i in range(10)
-            for lv in [hist_lv[0] * 0.9]
+            lv * (0.85 + 0.03 * i) for i in range(10) for lv in [hist_lv[0] * 0.9]
         ] + hist_lv
-        pct  = _lv_percentile_rank(current_lv, extended)
+        pct = _lv_percentile_rank(current_lv, extended)
         risk = _lv_deleverage_risk(pct)
-        rs   = _lv_risk_score(current_lv, pct)
-        zs   = _lv_zscore(current_lv, hist_lv[:-1])
+        rs = _lv_risk_score(current_lv, pct)
+        zs = _lv_zscore(current_lv, hist_lv[:-1])
         trend = _lv_trend(hist_lv)
         color = _lv_heatmap_color(pct)
 
@@ -7760,26 +8063,24 @@ async def compute_leverage_ratio_heatmap() -> dict:
         ]
 
         assets_out[name] = {
-            "oi_usd":          d["oi"],
-            "market_cap_usd":  d["mcap"],
-            "leverage_ratio":  round(current_lv, 3),
+            "oi_usd": d["oi"],
+            "market_cap_usd": d["mcap"],
+            "leverage_ratio": round(current_lv, 3),
             "percentile_rank": round(pct, 1),
-            "risk_signal":     risk,
-            "risk_score":      round(rs, 1),
-            "zscore":          round(zs, 3),
-            "trend":           trend,
-            "heatmap_color":   color,
-            "history_30d":     history_30d,
+            "risk_signal": risk,
+            "risk_score": round(rs, 1),
+            "zscore": round(zs, 3),
+            "trend": trend,
+            "heatmap_color": color,
+            "history_30d": history_30d,
         }
         sector_ratios[name] = current_lv
 
     # Sector aggregates
-    avg_lv  = _lv_sector_avg(sector_ratios)
+    avg_lv = _lv_sector_avg(sector_ratios)
     avg_pct = _lv_sector_avg({n: assets_out[n]["percentile_rank"] for n in assets_out})
     max_risk = max(assets_out, key=lambda n: assets_out[n]["risk_score"])
-    deleverage_count = sum(
-        1 for a in assets_out.values() if a["risk_signal"] == "high"
-    )
+    deleverage_count = sum(1 for a in assets_out.values() if a["risk_signal"] == "high")
     sector_rs = _lv_sector_avg({n: assets_out[n]["risk_score"] for n in assets_out})
 
     # Sector 30-day history
@@ -7804,16 +8105,15 @@ async def compute_leverage_ratio_heatmap() -> dict:
     return {
         "assets": assets_out,
         "sector": {
-            "avg_leverage_ratio":    round(avg_lv, 3),
-            "avg_percentile":        round(avg_pct, 1),
-            "max_risk_asset":        max_risk,
+            "avg_leverage_ratio": round(avg_lv, 3),
+            "avg_percentile": round(avg_pct, 1),
+            "max_risk_asset": max_risk,
             "deleverage_risk_count": deleverage_count,
-            "sector_risk_score":     round(sector_rs, 1),
+            "sector_risk_score": round(sector_rs, 1),
         },
         "history_30d": history_30d,
         "description": desc,
     }
-
 
     std = math.sqrt(sum((v - mean) ** 2 for v in history) / len(history))
     if std == 0:
@@ -7828,42 +8128,57 @@ async def compute_staking_yield_tracker() -> dict:
     # Baseline protocol data (mock; could be enriched from staking-rewards API)
     PROTOCOLS = {
         "ETH": {
-            "apy": 3.85, "inflation": 0.6,
-            "staked": 32_000_000, "supply": 120_000_000,
-            "validators": 980_000, "prev_validators": 959_800,
+            "apy": 3.85,
+            "inflation": 0.6,
+            "staked": 32_000_000,
+            "supply": 120_000_000,
+            "validators": 980_000,
+            "prev_validators": 959_800,
             # validator stake distribution: 32 ETH each → near-equal → low HHI
             "concentration": 42.0,
             "apy_history": [3.95, 3.92, 3.90, 3.88, 3.87, 3.86, 3.85],
             "tvs_usd": 3.85 / 100 * 32_000_000 * 3500,  # rough
         },
         "SOL": {
-            "apy": 7.20, "inflation": 5.0,
-            "staked": 390_000_000, "supply": 600_000_000,
-            "validators": 1_700, "prev_validators": 1_680,
+            "apy": 7.20,
+            "inflation": 5.0,
+            "staked": 390_000_000,
+            "supply": 600_000_000,
+            "validators": 1_700,
+            "prev_validators": 1_680,
             "concentration": 68.0,
             "apy_history": [6.90, 6.95, 7.00, 7.05, 7.10, 7.15, 7.20],
             "tvs_usd": 7.2 / 100 * 390_000_000 * 200,
         },
         "ADA": {
-            "apy": 3.30, "inflation": 0.0,
-            "staked": 23_000_000_000, "supply": 37_000_000_000,
-            "validators": 3_200, "prev_validators": 3_184,
+            "apy": 3.30,
+            "inflation": 0.0,
+            "staked": 23_000_000_000,
+            "supply": 37_000_000_000,
+            "validators": 3_200,
+            "prev_validators": 3_184,
             "concentration": 22.0,
             "apy_history": [3.35, 3.34, 3.33, 3.32, 3.31, 3.30, 3.30],
             "tvs_usd": 3.3 / 100 * 23_000_000_000 * 0.45,
         },
         "DOT": {
-            "apy": 12.0, "inflation": 8.0,
-            "staked": 750_000_000, "supply": 1_450_000_000,
-            "validators": 297, "prev_validators": 297,
+            "apy": 12.0,
+            "inflation": 8.0,
+            "staked": 750_000_000,
+            "supply": 1_450_000_000,
+            "validators": 297,
+            "prev_validators": 297,
             "concentration": 55.0,
             "apy_history": [13.0, 12.8, 12.6, 12.4, 12.2, 12.1, 12.0],
             "tvs_usd": 12.0 / 100 * 750_000_000 * 8.0,
         },
         "AVAX": {
-            "apy": 8.50, "inflation": 3.5,
-            "staked": 440_000_000, "supply": 760_000_000,
-            "validators": 1_400, "prev_validators": 1_375,
+            "apy": 8.50,
+            "inflation": 3.5,
+            "staked": 440_000_000,
+            "supply": 760_000_000,
+            "validators": 1_400,
+            "prev_validators": 1_375,
             "concentration": 35.0,
             "apy_history": [8.30, 8.32, 8.35, 8.38, 8.42, 8.46, 8.50],
             "tvs_usd": 8.5 / 100 * 440_000_000 * 38.0,
@@ -7873,26 +8188,27 @@ async def compute_staking_yield_tracker() -> dict:
     today = datetime.date.today()
     # 30-day history dates (7 sample points)
     dates_30d = [
-        (today - datetime.timedelta(days=30 - i * 5)).isoformat()
-        for i in range(7)
+        (today - datetime.timedelta(days=30 - i * 5)).isoformat() for i in range(7)
     ]
 
     protocols_out = {}
     for name, d in PROTOCOLS.items():
         real_yld = _sy_real_yield(d["apy"], d["inflation"])
-        y_label  = _sy_yield_label(real_yld)
-        s_ratio  = _sy_stake_ratio(d["staked"], d["supply"])
-        vg       = _sy_validator_growth(d["validators"], d["prev_validators"])
-        cr       = d["concentration"]
-        r_label  = _sy_risk_label(cr)
-        trend    = _sy_apy_trend(d["apy_history"])
+        y_label = _sy_yield_label(real_yld)
+        s_ratio = _sy_stake_ratio(d["staked"], d["supply"])
+        vg = _sy_validator_growth(d["validators"], d["prev_validators"])
+        cr = d["concentration"]
+        r_label = _sy_risk_label(cr)
+        trend = _sy_apy_trend(d["apy_history"])
         apy_change = _sy_real_yield(d["apy_history"][-1], d["apy_history"][0])
 
         history_30d = [
             {
                 "date": dates_30d[i],
                 "apy": round(d["apy_history"][i], 3),
-                "real_yield": round(_sy_real_yield(d["apy_history"][i], d["inflation"]), 3),
+                "real_yield": round(
+                    _sy_real_yield(d["apy_history"][i], d["inflation"]), 3
+                ),
             }
             for i in range(len(d["apy_history"]))
         ]
@@ -7913,7 +8229,9 @@ async def compute_staking_yield_tracker() -> dict:
 
     # Aggregate
     avg_apy = sum(d["apy"] for d in PROTOCOLS.values()) / len(PROTOCOLS)
-    real_yields = {n: _sy_real_yield(d["apy"], d["inflation"]) for n, d in PROTOCOLS.items()}
+    real_yields = {
+        n: _sy_real_yield(d["apy"], d["inflation"]) for n, d in PROTOCOLS.items()
+    }
     avg_real = sum(real_yields.values()) / len(real_yields)
     best_yield = max(real_yields, key=real_yields.get)
     concentration_scores = {n: d["concentration"] for n, d in PROTOCOLS.items()}
@@ -7931,7 +8249,9 @@ async def compute_staking_yield_tracker() -> dict:
                 sum(
                     _sy_real_yield(d["apy_history"][i], d["inflation"])
                     for d in PROTOCOLS.values()
-                ) / len(PROTOCOLS), 3
+                )
+                / len(PROTOCOLS),
+                3,
             ),
         }
         for i in range(7)
@@ -7961,6 +8281,7 @@ async def compute_staking_yield_tracker() -> dict:
 # ╔══════════════════════════════════════════════════════════════════════════╗
 # ║  LEVERAGE RATIO HEATMAP                                                 ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
+
 
 def _lv_leverage_ratio(oi_usd: float, market_cap_usd: float) -> float:
     """Leverage ratio: OI as % of market cap.  Returns 0.0 if mcap is zero."""
@@ -8001,8 +8322,9 @@ def _lv_zscore(current: float, history: list) -> float:
     if len(history) < 2:
         return 0.0
     import math
+
     mean = sum(history) / len(history)
-    std  = math.sqrt(sum((v - mean) ** 2 for v in history) / len(history))
+    std = math.sqrt(sum((v - mean) ** 2 for v in history) / len(history))
     if std == 0:
         return 0.0
     return float((current - mean) / std)
@@ -8054,26 +8376,29 @@ async def compute_leverage_ratio_heatmap() -> dict:
 
     ASSETS = {
         "BTC": {
-            "oi": 18_500_000_000, "mcap": 1_200_000_000_000,
+            "oi": 18_500_000_000,
+            "mcap": 1_200_000_000_000,
             "history_lv": [1.22, 1.28, 1.33, 1.38, 1.42, 1.47, 1.54],
         },
         "ETH": {
-            "oi":  9_800_000_000, "mcap":   380_000_000_000,
+            "oi": 9_800_000_000,
+            "mcap": 380_000_000_000,
             "history_lv": [2.45, 2.48, 2.51, 2.53, 2.55, 2.57, 2.58],
         },
         "SOL": {
-            "oi":  4_200_000_000, "mcap":    75_000_000_000,
+            "oi": 4_200_000_000,
+            "mcap": 75_000_000_000,
             "history_lv": [4.20, 4.40, 4.60, 4.80, 5.10, 5.35, 5.60],
         },
         "BNB": {
-            "oi":  1_800_000_000, "mcap":    85_000_000_000,
+            "oi": 1_800_000_000,
+            "mcap": 85_000_000_000,
             "history_lv": [2.25, 2.22, 2.19, 2.17, 2.15, 2.13, 2.12],
         },
     }
 
     dates = [
-        (today - datetime.timedelta(days=30 - i * 5)).isoformat()
-        for i in range(7)
+        (today - datetime.timedelta(days=30 - i * 5)).isoformat() for i in range(7)
     ]
 
     assets_out = {}
@@ -8081,16 +8406,14 @@ async def compute_leverage_ratio_heatmap() -> dict:
 
     for name, d in ASSETS.items():
         current_lv = _lv_leverage_ratio(d["oi"], d["mcap"])
-        hist_lv    = d["history_lv"]
+        hist_lv = d["history_lv"]
 
         # Extended history for percentile (synthetic 90d baseline)
-        extended = [
-            hist_lv[0] * (0.75 + 0.03 * i) for i in range(10)
-        ] + hist_lv
-        pct   = _lv_percentile_rank(current_lv, extended)
-        risk  = _lv_deleverage_risk(pct)
-        rs    = _lv_risk_score(current_lv, pct)
-        zs    = _lv_zscore(current_lv, hist_lv[:-1])
+        extended = [hist_lv[0] * (0.75 + 0.03 * i) for i in range(10)] + hist_lv
+        pct = _lv_percentile_rank(current_lv, extended)
+        risk = _lv_deleverage_risk(pct)
+        rs = _lv_risk_score(current_lv, pct)
+        zs = _lv_zscore(current_lv, hist_lv[:-1])
         trend = _lv_trend(hist_lv)
         color = _lv_heatmap_color(pct)
 
@@ -8104,25 +8427,23 @@ async def compute_leverage_ratio_heatmap() -> dict:
         ]
 
         assets_out[name] = {
-            "oi_usd":          d["oi"],
-            "market_cap_usd":  d["mcap"],
-            "leverage_ratio":  round(current_lv, 3),
+            "oi_usd": d["oi"],
+            "market_cap_usd": d["mcap"],
+            "leverage_ratio": round(current_lv, 3),
             "percentile_rank": round(pct, 1),
-            "risk_signal":     risk,
-            "risk_score":      round(rs, 1),
-            "zscore":          round(zs, 3),
-            "trend":           trend,
-            "heatmap_color":   color,
-            "history_30d":     history_30d,
+            "risk_signal": risk,
+            "risk_score": round(rs, 1),
+            "zscore": round(zs, 3),
+            "trend": trend,
+            "heatmap_color": color,
+            "history_30d": history_30d,
         }
         sector_ratios[name] = current_lv
 
-    avg_lv  = _lv_sector_avg(sector_ratios)
+    avg_lv = _lv_sector_avg(sector_ratios)
     avg_pct = _lv_sector_avg({n: assets_out[n]["percentile_rank"] for n in assets_out})
     max_risk = max(assets_out, key=lambda n: assets_out[n]["risk_score"])
-    deleverage_count = sum(
-        1 for a in assets_out.values() if a["risk_signal"] == "high"
-    )
+    deleverage_count = sum(1 for a in assets_out.values() if a["risk_signal"] == "high")
     sector_rs = _lv_sector_avg({n: assets_out[n]["risk_score"] for n in assets_out})
 
     history_30d = [
@@ -8146,11 +8467,11 @@ async def compute_leverage_ratio_heatmap() -> dict:
     return {
         "assets": assets_out,
         "sector": {
-            "avg_leverage_ratio":    round(avg_lv, 3),
-            "avg_percentile":        round(avg_pct, 1),
-            "max_risk_asset":        max_risk,
+            "avg_leverage_ratio": round(avg_lv, 3),
+            "avg_percentile": round(avg_pct, 1),
+            "max_risk_asset": max_risk,
             "deleverage_risk_count": deleverage_count,
-            "sector_risk_score":     round(sector_rs, 1),
+            "sector_risk_score": round(sector_rs, 1),
         },
         "history_30d": history_30d,
         "description": desc,
@@ -8163,11 +8484,11 @@ async def compute_leverage_ratio_heatmap() -> dict:
 
 # Wallet size bands (USD value)
 _HD_BANDS = [
-    ("shrimp", 0,          1_000),
-    ("crab",   1_000,      10_000),
-    ("fish",   10_000,     100_000),
-    ("shark",  100_000,    1_000_000),
-    ("whale",  1_000_000,  float("inf")),
+    ("shrimp", 0, 1_000),
+    ("crab", 1_000, 10_000),
+    ("fish", 10_000, 100_000),
+    ("shark", 100_000, 1_000_000),
+    ("whale", 1_000_000, float("inf")),
 ]
 
 
@@ -8257,17 +8578,17 @@ async def compute_holder_distribution_card() -> dict:
 
     simulated_counts = {
         "shrimp": 450_000,
-        "crab":   180_000,
-        "fish":    90_000,
-        "shark":   25_000,
-        "whale":    2_500,
+        "crab": 180_000,
+        "fish": 90_000,
+        "shark": 25_000,
+        "whale": 2_500,
     }
     simulated_supply_pct = {
-        "shrimp":  2.1,
-        "crab":    5.4,
-        "fish":    8.7,
-        "shark":  18.3,
-        "whale":  65.5,
+        "shrimp": 2.1,
+        "crab": 5.4,
+        "fish": 8.7,
+        "shark": 18.3,
+        "whale": 65.5,
     }
 
     # Attempt live price fetch for freshness signal
@@ -8280,7 +8601,10 @@ async def compute_holder_distribution_card() -> dict:
             if resp.status_code == 200:
                 js = resp.json()
                 float(
-                    js.get("RAW", {}).get("BTC", {}).get("USD", {}).get("PRICE", 60_000.0)
+                    js.get("RAW", {})
+                    .get("BTC", {})
+                    .get("USD", {})
+                    .get("PRICE", 60_000.0)
                 )
     except Exception:
         pass
@@ -8289,7 +8613,7 @@ async def compute_holder_distribution_card() -> dict:
     bands = {}
     for band in BAND_NAMES:
         bands[band] = {
-            "count":      simulated_counts[band],
+            "count": simulated_counts[band],
             "pct_supply": simulated_supply_pct[band],
         }
 
@@ -8359,6 +8683,7 @@ async def compute_holder_distribution_card() -> dict:
 
 # ── Cross-Chain Arbitrage Monitor ─────────────────────────────────────────────
 
+
 async def compute_cross_chain_arb_monitor() -> Dict:
     """Cross-chain arbitrage monitor: price discrepancies for BTC/ETH/USDC across ETH/BSC/ARB/OP/BASE.
 
@@ -8385,17 +8710,17 @@ async def compute_cross_chain_arb_monitor() -> Dict:
 
     BRIDGE_ROUTES = [
         {"protocol": "Stargate", "fee_bps": 6.0, "time_sec": 180},
-        {"protocol": "Across",   "fee_bps": 4.0, "time_sec": 120},
-        {"protocol": "Hop",      "fee_bps": 5.0, "time_sec": 300},
-        {"protocol": "Celer",    "fee_bps": 3.0, "time_sec": 240},
-        {"protocol": "Synapse",  "fee_bps": 4.5, "time_sec": 210},
+        {"protocol": "Across", "fee_bps": 4.0, "time_sec": 120},
+        {"protocol": "Hop", "fee_bps": 5.0, "time_sec": 300},
+        {"protocol": "Celer", "fee_bps": 3.0, "time_sec": 240},
+        {"protocol": "Synapse", "fee_bps": 4.5, "time_sec": 210},
     ]
 
     GAS_COSTS: Dict[str, float] = {
         "ETH": 12.0,
         "BSC": 0.5,
         "ARB": 0.8,
-        "OP":  0.6,
+        "OP": 0.6,
         "BASE": 0.5,
     }
 
@@ -8455,18 +8780,20 @@ async def compute_cross_chain_arb_monitor() -> Dict:
             },
         }
 
-        all_opportunities.append({
-            "asset": asset,
-            "buy_chain": best_buy,
-            "sell_chain": best_sell,
-            "spread_bps": round(best_spread_bps, 2),
-            "fee_adjusted_profit_bps": round(fee_adj_bps, 2),
-            "bridge_route": f"{best_buy}→{best_sell} via {best_bridge['protocol']}",
-            "bridge_time_sec": best_bridge["time_sec"],
-            "is_profitable": is_profitable,
-            "trade_size_usd": trade_size_usd,
-            "fee_adjusted_profit_usd": round(fee_adj_profit, 2),
-        })
+        all_opportunities.append(
+            {
+                "asset": asset,
+                "buy_chain": best_buy,
+                "sell_chain": best_sell,
+                "spread_bps": round(best_spread_bps, 2),
+                "fee_adjusted_profit_bps": round(fee_adj_bps, 2),
+                "bridge_route": f"{best_buy}→{best_sell} via {best_bridge['protocol']}",
+                "bridge_time_sec": best_bridge["time_sec"],
+                "is_profitable": is_profitable,
+                "trade_size_usd": trade_size_usd,
+                "fee_adjusted_profit_usd": round(fee_adj_profit, 2),
+            }
+        )
 
     top_opportunities = sorted(
         all_opportunities, key=lambda x: x["fee_adjusted_profit_bps"], reverse=True
@@ -8479,13 +8806,15 @@ async def compute_cross_chain_arb_monitor() -> Dict:
         for to_chain in CHAINS:
             if from_chain == to_chain:
                 continue
-            bridge_route_matrix.append({
-                "from_chain": from_chain,
-                "to_chain": to_chain,
-                "protocol": best_bridge_global["protocol"],
-                "fee_bps": best_bridge_global["fee_bps"],
-                "time_sec": best_bridge_global["time_sec"],
-            })
+            bridge_route_matrix.append(
+                {
+                    "from_chain": from_chain,
+                    "to_chain": to_chain,
+                    "protocol": best_bridge_global["protocol"],
+                    "fee_bps": best_bridge_global["fee_bps"],
+                    "time_sec": best_bridge_global["time_sec"],
+                }
+            )
 
     # Historical arb frequency heatmap (24h × 5 chain pairs)
     CHAIN_PAIRS = ["ETH-BSC", "ETH-ARB", "ETH-OP", "ETH-BASE", "BSC-ARB"]
@@ -8535,7 +8864,6 @@ async def compute_cross_chain_arb_monitor() -> Dict:
     }
 
 
-
 # ---- restored ----
 
 _regime_classifier_state: dict = {}
@@ -8543,6 +8871,7 @@ _OFT_SEED = 20260316
 _OFT_EXCHANGES = ["deribit", "lyra"]
 _OFT_STRIKES_BTC = [60000, 65000, 70000, 75000, 80000, 85000, 90000, 95000, 100000]
 _OFT_EXPIRIES = ["28MAR26", "25APR26", "27JUN26", "26SEP26", "25DEC26"]
+
 
 def _rsi(closes: List[float], period: int = 14) -> float:
     """Compute RSI from a list of close prices using SMA of gains/losses."""
@@ -8606,6 +8935,7 @@ def _compute_oi_signal(oi_data: List[Dict], ohlcv_data: List[Dict]) -> float:
         return 0.0
 
     from collections import defaultdict
+
     exchange_oi: dict = defaultdict(list)
     for row in oi_data:
         exchange_oi[row["exchange"]].append(row["oi_value"])
@@ -8829,15 +9159,17 @@ async def compute_whale_wallet_tracker(symbol: str = None) -> dict:
         age_class = _wwt_age_class(wallet_age_days)
         is_exchange = rng.random() < 0.25
 
-        top_wallets.append({
-            "wallet_id":       wallet_id,
-            "address":         address,
-            "balance":         balance,
-            "balance_usd":     balance_usd,
-            "wallet_age_days": wallet_age_days,
-            "age_class":       age_class,
-            "is_exchange":     is_exchange,
-        })
+        top_wallets.append(
+            {
+                "wallet_id": wallet_id,
+                "address": address,
+                "balance": balance,
+                "balance_usd": balance_usd,
+                "wallet_age_days": wallet_age_days,
+                "age_class": age_class,
+                "is_exchange": is_exchange,
+            }
+        )
 
     # Sort descending by balance_usd
     top_wallets.sort(key=lambda w: w["balance_usd"], reverse=True)
@@ -8850,50 +9182,51 @@ async def compute_whale_wallet_tracker(symbol: str = None) -> dict:
         direction = rng.choice(["in", "out"])
         amount_usd = round(rng.uniform(1_000_000, 25_000_000), 2)
         ts = round(now - rng.uniform(0, 86400), 3)
-        large_moves_24h.append({
-            "wallet_id":  wid,
-            "direction":  direction,
-            "amount_usd": amount_usd,
-            "ts":         ts,
-        })
+        large_moves_24h.append(
+            {
+                "wallet_id": wid,
+                "direction": direction,
+                "amount_usd": amount_usd,
+                "ts": ts,
+            }
+        )
 
     # ── Age distribution ──────────────────────────────────────────────────────
     whale_count = sum(1 for w in top_wallets if w["age_class"] == "whale")
     shark_count = sum(1 for w in top_wallets if w["age_class"] == "shark")
-    fish_count  = sum(1 for w in top_wallets if w["age_class"] == "fish")
+    fish_count = sum(1 for w in top_wallets if w["age_class"] == "fish")
     age_distribution: dict = {
         "whale": {"count": whale_count, "pct": round(whale_count / 50 * 100, 1)},
         "shark": {"count": shark_count, "pct": round(shark_count / 50 * 100, 1)},
-        "fish":  {"count": fish_count,  "pct": round(fish_count  / 50 * 100, 1)},
+        "fish": {"count": fish_count, "pct": round(fish_count / 50 * 100, 1)},
     }
 
     # ── Exchange vs cold wallet ratio ─────────────────────────────────────────
     exchange_count = sum(1 for w in top_wallets if w["is_exchange"])
-    pct_exchange   = round(exchange_count / 50 * 100, 1)
-    pct_cold       = round((50 - exchange_count) / 50 * 100, 1)
+    pct_exchange = round(exchange_count / 50 * 100, 1)
+    pct_cold = round((50 - exchange_count) / 50 * 100, 1)
 
     # ── Net whale flow 7d: top-10 whales ─────────────────────────────────────
     top10 = top_wallets[:10]
-    net_whale_flow_7d = round(
-        sum(rng.uniform(-5_000_000, 8_000_000) for _ in top10), 2
-    )
+    net_whale_flow_7d = round(sum(rng.uniform(-5_000_000, 8_000_000) for _ in top10), 2)
 
     whale_signal = _wwt_whale_signal(net_whale_flow_7d)
 
     return {
-        "top_wallets":       top_wallets,
-        "large_moves_24h":   large_moves_24h,
-        "age_distribution":  age_distribution,
-        "pct_exchange":      pct_exchange,
-        "pct_cold":          pct_cold,
+        "top_wallets": top_wallets,
+        "large_moves_24h": large_moves_24h,
+        "age_distribution": age_distribution,
+        "pct_exchange": pct_exchange,
+        "pct_cold": pct_cold,
         "net_whale_flow_7d": net_whale_flow_7d,
-        "whale_signal":      whale_signal,
+        "whale_signal": whale_signal,
     }
 
 
 def _dex_cex_seed(offset: int = 0) -> "random.Random":
     import random
     import time
+
     return random.Random(int(time.time() / 300) + offset)
 
 
@@ -8901,6 +9234,7 @@ def _dex_cex_dominance_history(n: int = 30) -> list:
     """Return n historical DEX-dominance-ratio values (simulated)."""
     import random
     import time
+
     base = int(time.time() / 300) - n
     history = []
     for i in range(n):
@@ -8913,6 +9247,7 @@ def _dex_cex_dominance_history(n: int = 30) -> list:
 
 def _dex_cex_zscore(current: float, history: list) -> float:
     import math
+
     n = len(history)
     if n == 0:
         return 0.0
@@ -8964,14 +9299,15 @@ async def compute_dex_vs_cex_flow(
     values are stable within a refresh cycle.
     """
     import math
+
     rng = _dex_cex_seed()
 
     # ── Simulated DEX protocol volumes (USD) ──────────────────────────────────
     dex_protocols: dict = {
         "uniswap_v3": rng.uniform(8e6, 25e6),
         "uniswap_v2": rng.uniform(2e6, 8e6),
-        "curve":      rng.uniform(5e6, 18e6),
-        "balancer":   rng.uniform(1e6, 6e6),
+        "curve": rng.uniform(5e6, 18e6),
+        "balancer": rng.uniform(1e6, 6e6),
     }
     total_dex = sum(dex_protocols.values())
 
@@ -9009,24 +9345,24 @@ async def compute_dex_vs_cex_flow(
     )
 
     return {
-        "symbol":               symbol or "global",
-        "window_hours":         window_hours,
-        "dex_volume_usd":       round(total_dex, 0),
-        "cex_volume_usd":       round(cex_volume, 0),
-        "total_volume_usd":     round(total_volume, 0),
-        "dex_dominance_ratio":  round(dominance_ratio, 4),
-        "dex_dominance_pct":    round(dominance_ratio * 100, 2),
-        "divergence_zscore":    zscore,
-        "dominance_trend":      dom_trend,
-        "trend_delta":          trend_delta,
-        "price_discovery":      price_discovery,
-        "discovery_signal":     discovery_signal,
-        "protocols":            {k: round(v, 0) for k, v in dex_protocols.items()},
+        "symbol": symbol or "global",
+        "window_hours": window_hours,
+        "dex_volume_usd": round(total_dex, 0),
+        "cex_volume_usd": round(cex_volume, 0),
+        "total_volume_usd": round(total_volume, 0),
+        "dex_dominance_ratio": round(dominance_ratio, 4),
+        "dex_dominance_pct": round(dominance_ratio * 100, 2),
+        "divergence_zscore": zscore,
+        "dominance_trend": dom_trend,
+        "trend_delta": trend_delta,
+        "price_discovery": price_discovery,
+        "discovery_signal": discovery_signal,
+        "protocols": {k: round(v, 0) for k, v in dex_protocols.items()},
         "protocol_breakdown_pct": protocol_pct,
-        "dominance_history":    dom_series,
-        "mean_dominance":       round(mean_dom, 4),
-        "std_dominance":        round(std_dom, 4),
-        "description":          description,
+        "dominance_history": dom_series,
+        "mean_dominance": round(mean_dom, 4),
+        "std_dominance": round(std_dom, 4),
+        "description": description,
     }
 
 
@@ -9063,6 +9399,7 @@ def _oft_strike_bucket(strike: float, atm: float) -> str:
 def _oft_expiry_weight(days_to_expiry: int) -> float:
     """Gamma-weighted importance: near-term expiries carry higher weight."""
     import math as _math
+
     if days_to_expiry <= 0:
         return 0.0
     return round(1.0 / _math.sqrt(max(days_to_expiry, 1)), 4)
@@ -9100,7 +9437,12 @@ def _oft_aggregate_by_strike(trades: list) -> dict:
     for t in trades:
         s = t["strike"]
         if s not in strikes:
-            strikes[s] = {"call_notional": 0.0, "put_notional": 0.0, "call_oi": 0.0, "put_oi": 0.0}
+            strikes[s] = {
+                "call_notional": 0.0,
+                "put_notional": 0.0,
+                "call_oi": 0.0,
+                "put_oi": 0.0,
+            }
         if t["type"] == "call":
             strikes[s]["call_notional"] += t["notional_usd"]
             strikes[s]["call_oi"] += t["qty"]
@@ -9110,10 +9452,11 @@ def _oft_aggregate_by_strike(trades: list) -> dict:
     return strikes
 
 
-def _oft_net_gamma(call_oi: float, call_delta: float, put_oi: float, put_delta: float) -> float:
+def _oft_net_gamma(
+    call_oi: float, call_delta: float, put_oi: float, put_delta: float
+) -> float:
     """Dealer net gamma proxy: call OI * call_delta - put OI * |put_delta|."""
     return round(call_oi * call_delta - put_oi * abs(put_delta), 2)
-
 
 
 # ── Options Flow Tracker ───────────────────────────────────────────────────────
@@ -9158,7 +9501,8 @@ def _oft_dominant_expiry(skew_by_expiry: dict) -> str:
         return ""
     return max(
         skew_by_expiry,
-        key=lambda e: skew_by_expiry[e]["call_volume_usd"] + skew_by_expiry[e]["put_volume_usd"],
+        key=lambda e: skew_by_expiry[e]["call_volume_usd"]
+        + skew_by_expiry[e]["put_volume_usd"],
     )
 
 
@@ -9166,6 +9510,7 @@ def _oft_skew_percentile(ratio: float) -> float:
     """Map call/put ratio to 0-100 percentile (simulated)."""
     # 0.5 ratio → 20th pct, 1.0 → 50th, 2.0 → 80th
     import math as _math
+
     raw = 50.0 + 30.0 * _math.log(max(ratio, 0.01)) / _math.log(4)
     return round(max(0.0, min(100.0, raw)), 1)
 
@@ -9191,21 +9536,23 @@ def _oft_simulate_large_trades(seed: int = _OFT_SEED) -> list:
             notional_usd = round(notional_usd + 100_000, 2)
         side = rng.choice(["buy", "sell"])
         ts = now - rng.uniform(0, 3600 * 24)
-        trades.append({
-            "ts": round(ts, 3),
-            "exchange": exchange,
-            "instrument": _oft_make_instrument(strike, expiry, opt_type),
-            "type": opt_type,
-            "strike": strike,
-            "expiry": expiry,
-            "side": side,
-            "contracts": contracts,
-            "btc_price": round(btc_price, 2),
-            "premium_per_contract": premium_per,
-            "notional_usd": notional_usd,
-            "iv": iv,
-            "delta": delta,
-        })
+        trades.append(
+            {
+                "ts": round(ts, 3),
+                "exchange": exchange,
+                "instrument": _oft_make_instrument(strike, expiry, opt_type),
+                "type": opt_type,
+                "strike": strike,
+                "expiry": expiry,
+                "side": side,
+                "contracts": contracts,
+                "btc_price": round(btc_price, 2),
+                "premium_per_contract": premium_per,
+                "notional_usd": notional_usd,
+                "iv": iv,
+                "delta": delta,
+            }
+        )
     # Sort newest first
     trades.sort(key=lambda t: t["ts"], reverse=True)
     return trades
@@ -9244,20 +9591,22 @@ def _oft_detect_unusual_flow(trades: list) -> list:
     for t in trades:
         if _oft_unusual_threshold(t["notional_usd"], mean_n):
             severity = "critical" if t["notional_usd"] > mean_n * 6 else "high"
-            alerts.append({
-                "ts": t["ts"],
-                "instrument": t["instrument"],
-                "exchange": t["exchange"],
-                "notional_usd": t["notional_usd"],
-                "side": t["side"],
-                "type": t["type"],
-                "severity": severity,
-                "reason": (
-                    f"Unusual {t['type']} {t['side']}: "
-                    f"${t['notional_usd']:,.0f} notional "
-                    f"({t['notional_usd']/mean_n:.1f}x avg)"
-                ),
-            })
+            alerts.append(
+                {
+                    "ts": t["ts"],
+                    "instrument": t["instrument"],
+                    "exchange": t["exchange"],
+                    "notional_usd": t["notional_usd"],
+                    "side": t["side"],
+                    "type": t["type"],
+                    "severity": severity,
+                    "reason": (
+                        f"Unusual {t['type']} {t['side']}: "
+                        f"${t['notional_usd']:,.0f} notional "
+                        f"({t['notional_usd']/mean_n:.1f}x avg)"
+                    ),
+                }
+            )
     alerts.sort(key=lambda a: a["notional_usd"], reverse=True)
     return alerts
 
@@ -9268,19 +9617,32 @@ def _oft_build_strike_heatmap(trades: list) -> dict:
     for t in trades:
         k = str(t["strike"])
         if k not in hm:
-            hm[k] = {"call_notional_usd": 0.0, "put_notional_usd": 0.0, "net_flow_usd": 0.0}
+            hm[k] = {
+                "call_notional_usd": 0.0,
+                "put_notional_usd": 0.0,
+                "net_flow_usd": 0.0,
+            }
         if t["type"] == "call":
-            hm[k]["call_notional_usd"] = round(hm[k]["call_notional_usd"] + t["notional_usd"], 2)
+            hm[k]["call_notional_usd"] = round(
+                hm[k]["call_notional_usd"] + t["notional_usd"], 2
+            )
         else:
-            hm[k]["put_notional_usd"] = round(hm[k]["put_notional_usd"] + t["notional_usd"], 2)
+            hm[k]["put_notional_usd"] = round(
+                hm[k]["put_notional_usd"] + t["notional_usd"], 2
+            )
         sign = 1 if t["side"] == "buy" else -1
-        hm[k]["net_flow_usd"] = round(hm[k]["net_flow_usd"] + sign * t["notional_usd"], 2)
+        hm[k]["net_flow_usd"] = round(
+            hm[k]["net_flow_usd"] + sign * t["notional_usd"], 2
+        )
     # Add dominant type per strike
     for k, v in hm.items():
-        v["dominant"] = "call" if v["call_notional_usd"] >= v["put_notional_usd"] else "put"
+        v["dominant"] = (
+            "call" if v["call_notional_usd"] >= v["put_notional_usd"] else "put"
+        )
         v["call_notional_usd"] = round(v["call_notional_usd"], 2)
         v["put_notional_usd"] = round(v["put_notional_usd"], 2)
     return hm
+
 
 async def compute_cross_market_correlation() -> dict:
     """Rolling correlation matrix for BTC/ETH/SOL/BNB with lead-lag analysis."""
@@ -9405,12 +9767,14 @@ async def compute_order_flow_toxicity() -> Dict:
         total_buy_vol += buy_vol
         total_sell_vol += sell_vol
 
-        volume_buckets.append({
-            "bucket_id": i,
-            "buy_vol": buy_vol,
-            "sell_vol": sell_vol,
-            "imbalance": imbalance,
-        })
+        volume_buckets.append(
+            {
+                "bucket_id": i,
+                "buy_vol": buy_vol,
+                "sell_vol": sell_vol,
+                "imbalance": imbalance,
+            }
+        )
 
     # ── VPIN score (0–1) ─────────────────────────────────────────────────────
     vpin_score = round(
@@ -9423,7 +9787,7 @@ async def compute_order_flow_toxicity() -> Dict:
     rolling_vpin_50: List[float] = []
     for i in range(N_BUCKETS):
         start = max(0, i - window + 1)
-        window_buckets = volume_buckets[start: i + 1]
+        window_buckets = volume_buckets[start : i + 1]
         wvpin = round(
             sum(b["imbalance"] for b in window_buckets) / len(window_buckets),
             6,
@@ -9541,6 +9905,7 @@ async def compute_volatility_regime_detector() -> Dict:
 
 # ── Smart Money Index ─────────────────────────────────────────────────────────
 
+
 def _smi_compute_components(rng) -> dict:
     """Compute sub-components of the Smart Money Index using a seeded RNG."""
     # block_ratio: fraction of volume coming from block trades (institutional)
@@ -9627,7 +9992,6 @@ async def compute_smart_money_index() -> dict:
         "components": components,
         "timestamp": timestamp,
     }
-
 
 
 async def compute_options_flow_tracker() -> dict:
@@ -9754,6 +10118,7 @@ async def compute_cross_market_correlation() -> Dict:
 
 # ── Liquidation Cascade Detector ─────────────────────────────────────────────
 
+
 def _lcd_cascade_chain(rng, assets: list) -> list:
     """Build a cascade chain: sequence of liquidation events across assets."""
     chain = []
@@ -9762,11 +10127,13 @@ def _lcd_cascade_chain(rng, assets: list) -> list:
         n_events = rng.randint(2, 5)
         for _ in range(n_events):
             t += rng.uniform(0.5, 4.0)
-            chain.append({
-                "asset": asset,
-                "amount": round(rng.uniform(500_000, 25_000_000), 2),
-                "time": round(t, 2),
-            })
+            chain.append(
+                {
+                    "asset": asset,
+                    "amount": round(rng.uniform(500_000, 25_000_000), 2),
+                    "time": round(t, 2),
+                }
+            )
     # sort by time
     chain.sort(key=lambda x: x["time"])
     return chain
@@ -9801,6 +10168,7 @@ def _lcd_regime(prob: float) -> str:
 
 async def compute_liquidation_cascade_detector() -> dict:
     import random as _random
+
     rng = _random.Random(20260316)
 
     assets = ["BTC", "ETH", "SOL", "BNB"]
@@ -9832,13 +10200,13 @@ def compute_cross_correlation_signal(
 ) -> Dict:
     """
     Cross-correlation signal detector for two price series.
-    
+
     Computes rolling cross-correlation with window=20, deterministic via seed 20260316.
-    
+
     Args:
         series_a: First price series (list of floats)
         series_b: Second price series (list of floats)
-    
+
     Returns:
         Dict with:
         - correlation_score: Overall correlation coefficient [-1, 1]
@@ -9853,9 +10221,9 @@ def compute_cross_correlation_signal(
     import random as _random
     from math import sqrt, isnan
     from datetime import datetime, timezone
-    
+
     rng = _random.Random(20260316)
-    
+
     # Validate inputs
     if not series_a or not series_b:
         return {
@@ -9868,23 +10236,23 @@ def compute_cross_correlation_signal(
             "confidence_level": 0.0,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-    
+
     # Ensure equal length by truncating to shortest
     min_len = min(len(series_a), len(series_b))
     series_a = series_a[:min_len]
     series_b = series_b[:min_len]
-    
+
     # Compute mean and std for full series
     def mean(s: List[float]) -> float:
         return sum(s) / len(s) if s else 0.0
-    
+
     def std(s: List[float]) -> float:
         if not s or len(s) < 2:
             return 0.0
         m = mean(s)
         variance = sum((x - m) ** 2 for x in s) / len(s)
         return sqrt(variance) if variance > 0 else 0.0
-    
+
     def correlation(x: List[float], y: List[float]) -> float:
         """Pearson correlation coefficient."""
         if not x or not y or len(x) != len(y):
@@ -9896,10 +10264,10 @@ def compute_cross_correlation_signal(
         cov = sum((x[i] - mx) * (y[i] - my) for i in range(len(x))) / len(x)
         r = cov / (sx * sy)
         return 0.0 if isnan(r) else max(-1.0, min(1.0, r))
-    
+
     # Compute overall correlation
     overall_correlation = correlation(series_a, series_b)
-    
+
     # Compute rolling correlations (window=20)
     window = 20
     rolling_correlations = []
@@ -9913,21 +10281,23 @@ def compute_cross_correlation_signal(
         rolling_correlations = rolling_correlations[-20:]
     else:
         rolling_correlations = [overall_correlation] * min(len(series_a), 20)
-    
+
     # Pad to 20 if needed
     while len(rolling_correlations) < 20:
-        rolling_correlations.insert(0, rolling_correlations[0] if rolling_correlations else 0.0)
+        rolling_correlations.insert(
+            0, rolling_correlations[0] if rolling_correlations else 0.0
+        )
     rolling_correlations = rolling_correlations[-20:]
-    
+
     # Detect divergence: high variance in rolling correlations
     corr_mean = mean(rolling_correlations) if rolling_correlations else 0.0
     corr_std = std(rolling_correlations) if rolling_correlations else 0.0
     divergence_detected = corr_std > 0.3
-    
+
     # Compute signal strength based on correlation magnitude and consistency
     signal_strength = abs(overall_correlation) * (1.0 - min(corr_std / 2.0, 1.0))
     signal_strength = round(max(0.0, min(1.0, signal_strength)), 4)
-    
+
     # Determine signal type based on correlation and trend
     if divergence_detected:
         signal_type = "neutral"
@@ -9937,15 +10307,15 @@ def compute_cross_correlation_signal(
         signal_type = "bearish"
     else:
         signal_type = "neutral"
-    
+
     # Confidence level: based on consistency of rolling correlations
     consistency = 1.0 - (corr_std / 2.0)  # Lower std = higher confidence
     confidence_level = round(max(0.0, min(1.0, consistency)), 4)
-    
+
     # Add random component seeded at 20260316 for reproducibility
     random_boost = rng.uniform(-0.05, 0.05)
     confidence_level = round(max(0.0, min(1.0, confidence_level + random_boost)), 4)
-    
+
     return {
         "correlation_score": round(max(-1.0, min(1.0, overall_correlation)), 4),
         "signal_strength": signal_strength,
@@ -9964,17 +10334,17 @@ def compute_cross_correlation_signal(
 async def compute_funding_term_structure(symbol: str = None) -> Dict:
     """
     Compute funding rate term structure: 1d, 7d, 30d average rates.
-    
+
     Detects term structure shape:
     - normal: d1 < d7 < d30 (typical contango, carry trade available)
     - inverted: d1 > d7 > d30 (backwardation, shorts paid heavily)
     - flat: all rates approximately equal (neutral structure)
-    
+
     Exhaustion score (0-1):
     - Measures how extreme current funding is relative to historical norms
     - High score = longs (if positive) or shorts (if negative) overextended
     - Based on absolute magnitude and accumulated extremeness
-    
+
     Returns:
         {
             rates: {d1, d7, d30},        # Average funding rates for each period
@@ -9986,14 +10356,14 @@ async def compute_funding_term_structure(symbol: str = None) -> Dict:
         }
     """
     now = time.time()
-    
+
     # Fetch funding history: 1d, 7d, 30d windows
     funding_rows = await get_funding_history(
         limit=1000,  # Enough for 30+ days at 8-hour intervals
         since=now - 86400 * 30,
-        symbol=symbol
+        symbol=symbol,
     )
-    
+
     if not funding_rows:
         return {
             "rates": {"d1": 0.0, "d7": 0.0, "d30": 0.0},
@@ -10003,37 +10373,37 @@ async def compute_funding_term_structure(symbol: str = None) -> Dict:
             "symbol": symbol,
             "timestamp": now,
         }
-    
+
     # Organize by time window and aggregate by exchange
-    rates_1d = []   # [ts - 86400, now)
-    rates_7d = []   # [ts - 86400*7, now)
+    rates_1d = []  # [ts - 86400, now)
+    rates_7d = []  # [ts - 86400*7, now)
     rates_30d = []  # [ts - 86400*30, now)
-    
+
     for row in funding_rows:
         ts = row["ts"]
         rate = float(row["rate"])
-        
+
         if ts >= now - 86400:
             rates_1d.append(rate)
         if ts >= now - 86400 * 7:
             rates_7d.append(rate)
         if ts >= now - 86400 * 30:
             rates_30d.append(rate)
-    
+
     # Compute period averages
     def safe_avg(rates_list):
         if not rates_list:
             return 0.0
         return sum(rates_list) / len(rates_list)
-    
+
     avg_1d = safe_avg(rates_1d)
     avg_7d = safe_avg(rates_7d)
     avg_30d = safe_avg(rates_30d)
-    
+
     # Detect term structure shape
     # Use threshold to account for rounding/noise
     threshold = 0.00001
-    
+
     if abs(avg_1d - avg_7d) < threshold and abs(avg_7d - avg_30d) < threshold:
         shape = "flat"
     elif avg_1d < avg_7d < avg_30d:
@@ -10049,18 +10419,18 @@ async def compute_funding_term_structure(symbol: str = None) -> Dict:
     else:
         # Mixed pattern (some up, some down) -> flat
         shape = "flat"
-    
+
     # Compute exhaustion score
     # High exhaustion when funding rates are extreme (very positive or very negative)
     # Thresholds: 0.01% = 1 basis point (normal), 0.1% = extreme (100 bp)
-    
+
     all_rates = rates_1d + rates_7d + rates_30d
     if not all_rates:
         exhaustion_score = 0.0
     else:
         abs_rates = [abs(r) for r in all_rates]
         max_abs = max(abs_rates)
-        
+
         # Score based on max absolute value
         # 0.0001 (0.01%) -> score 0.2
         # 0.001  (0.1%)  -> score 0.8
@@ -10073,20 +10443,20 @@ async def compute_funding_term_structure(symbol: str = None) -> Dict:
             exhaustion_score = 0.2 + ((max_abs - 0.0001) / 0.0009) * 0.6
         else:
             exhaustion_score = min(1.0, 0.8 + ((max_abs - 0.001) / 0.009) * 0.2)
-        
+
         exhaustion_score = round(min(1.0, exhaustion_score), 4)
-    
+
     # Detect trend: are rates moving up, down, or stable?
     # Use first vs last recent rates
     trend = "neutral"
     if len(all_rates) >= 2:
         recent_rates = all_rates[-10:] if len(all_rates) >= 10 else all_rates
-        older_rates = all_rates[:len(all_rates)//2]
-        
+        older_rates = all_rates[: len(all_rates) // 2]
+
         if recent_rates and older_rates:
             recent_avg = sum(recent_rates) / len(recent_rates)
             older_avg = sum(older_rates) / len(older_rates)
-            
+
             trend_delta = recent_avg - older_avg
             if trend_delta > 0.00001:
                 trend = "up"
@@ -10094,7 +10464,7 @@ async def compute_funding_term_structure(symbol: str = None) -> Dict:
                 trend = "down"
             else:
                 trend = "neutral"
-    
+
     return {
         "rates": {
             "d1": round(avg_1d, 8),
@@ -10111,13 +10481,13 @@ async def compute_funding_term_structure(symbol: str = None) -> Dict:
 
 async def detect_smart_money_patterns(symbol: str = None) -> Dict:
     """Detect smart money behavior patterns: accumulation, distribution, absorption.
-    
+
     Smart money threshold: trades >= $50k notional value.
     Returns: pattern_type, confidence, smart_delta_1h/4h/24h, absorption_ratio.
     """
     now = time.time()
     trades_24h = await get_trades_for_cvd(now - 86400, symbol=symbol)
-    
+
     if not trades_24h:
         return {
             "pattern_type": "neutral",
@@ -10128,26 +10498,26 @@ async def detect_smart_money_patterns(symbol: str = None) -> Dict:
             "absorption_ratio": 0.0,
             "timestamp": now,
         }
-    
+
     # Classify trades by size: smart (>=$50k notional) vs retail
     SMART_THRESHOLD = 50000  # $50k notional
     smart_trades = []
     retail_trades = []
-    
+
     for t in trades_24h:
         notional = t["qty"] * t["price"]
         if notional >= SMART_THRESHOLD:
             smart_trades.append(t)
         else:
             retail_trades.append(t)
-    
+
     # Compute smart money delta over windows
     def compute_delta(trades, window_seconds):
         since = now - window_seconds
         window_trades = [t for t in trades if t["ts"] >= since]
         if not window_trades:
             return 0.0
-        
+
         delta = 0.0
         for t in window_trades:
             if t["side"] in ("buy", "Buy"):
@@ -10155,31 +10525,39 @@ async def detect_smart_money_patterns(symbol: str = None) -> Dict:
             else:
                 delta -= t["qty"]
         return delta
-    
+
     delta_1h = compute_delta(smart_trades, 3600)
     delta_4h = compute_delta(smart_trades, 14400)
     delta_24h = compute_delta(smart_trades, 86400)
-    
+
     # Pattern detection
     total_smart_buy = sum(t["qty"] for t in smart_trades if t["side"] in ("buy", "Buy"))
-    total_smart_sell = sum(t["qty"] for t in smart_trades if t["side"] in ("sell", "Sell"))
-    total_retail_buy = sum(t["qty"] for t in retail_trades if t["side"] in ("buy", "Buy"))
-    total_retail_sell = sum(t["qty"] for t in retail_trades if t["side"] in ("sell", "Sell"))
-    
+    total_smart_sell = sum(
+        t["qty"] for t in smart_trades if t["side"] in ("sell", "Sell")
+    )
+    total_retail_buy = sum(
+        t["qty"] for t in retail_trades if t["side"] in ("buy", "Buy")
+    )
+    total_retail_sell = sum(
+        t["qty"] for t in retail_trades if t["side"] in ("sell", "Sell")
+    )
+
     # Calculate notional values for absorption check
-    total_retail_sell_notional = sum(t["price"] * t["qty"] for t in retail_trades if t["side"] in ("sell", "Sell"))
-    
+    total_retail_sell_notional = sum(
+        t["price"] * t["qty"] for t in retail_trades if t["side"] in ("sell", "Sell")
+    )
+
     # Default to neutral
     pattern_type = "neutral"
     confidence = 0.0
     absorption_ratio = 0.0
-    
+
     total_smart = total_smart_buy + total_smart_sell
-    
+
     # Calculate absorption ratio early (qty ratio, not notional)
     if total_retail_sell > 0 and total_smart_buy > 0:
         absorption_ratio = min(1.0, total_smart_buy / total_retail_sell)
-    
+
     # First check: require minimum activity (smart trades or retail resistance)
     min_volume = 1000  # At least 1k qty of smart trading
     if total_smart < min_volume and total_retail_sell_notional < 50000:
@@ -10188,10 +10566,14 @@ async def detect_smart_money_patterns(symbol: str = None) -> Dict:
     else:
         buy_ratio = total_smart_buy / total_smart if total_smart > 0 else 0.5
         sell_ratio = total_smart_sell / total_smart if total_smart > 0 else 0.5
-        
+
         # Check absorption first (smart money resisting retail dump)
         # Absorption: strong retail selling ($50k+) + smart buying response
-        if total_retail_sell_notional > 50000 and total_smart_buy > 0 and absorption_ratio > 0.2:
+        if (
+            total_retail_sell_notional > 50000
+            and total_smart_buy > 0
+            and absorption_ratio > 0.2
+        ):
             pattern_type = "absorption"
             confidence = min(1.0, absorption_ratio)
         # Accumulation: smart buying dominates (>65%)
@@ -10206,7 +10588,7 @@ async def detect_smart_money_patterns(symbol: str = None) -> Dict:
             # Mixed but no clear pattern
             pattern_type = "neutral"
             confidence = 0.2
-    
+
     return {
         "pattern_type": pattern_type,
         "confidence": round(max(0.0, min(1.0, confidence)), 4),
@@ -10226,10 +10608,10 @@ import statistics as _statistics
 _RVS_SYMBOLS = ["BTC", "ETH", "BNB", "SOL", "ADA", "XRP", "DOGE", "AVAX"]
 
 _RVS_WINDOWS = {
-    "1h":  3_600,
-    "4h":  14_400,
+    "1h": 3_600,
+    "4h": 14_400,
     "24h": 86_400,
-    "7d":  604_800,
+    "7d": 604_800,
 }
 
 _SECONDS_PER_YEAR = 365.25 * 24 * 3600
@@ -10331,17 +10713,140 @@ async def compute_realized_vol_surface() -> dict:
             v = vol_matrix[sym][win_name]
             z = round((v - mean_w) / std_w, 4) if std_w > 0 else 0.0
             if v > threshold and std_w > 0:
-                outlier_cells.append({
-                    "symbol": sym,
-                    "window": win_name,
-                    "vol": float(v),
-                    "z_score": float(z),
-                    "mean_vol": mean_w,
-                })
+                outlier_cells.append(
+                    {
+                        "symbol": sym,
+                        "window": win_name,
+                        "vol": float(v),
+                        "z_score": float(z),
+                        "mean_vol": mean_w,
+                    }
+                )
 
     return {
         "vol_matrix": vol_matrix,
         "mean_vol_by_window": mean_vol_by_window,
         "outlier_cells": outlier_cells,
         "timestamp": now,
+    }
+
+
+# ── Liquidation Heatmap (2-D: price × time) ────────────────────────────────────
+
+_LHM_N_PRICE_LEVELS = 50
+_LHM_N_TIME_BUCKETS = 288  # 24 h / 5-min buckets
+
+
+async def compute_liquidation_heatmap(
+    symbol: str = "BANANAS31USDT",
+    zone_threshold: int = 10,
+) -> dict:
+    """
+    2-D liquidation heatmap: 50 price levels × 288 time buckets (24 h window,
+    5-minute intervals).
+
+    Uses seeded deterministic data (seed 20260316) to simulate realistic
+    liquidation cluster patterns.
+
+    Returns:
+        heatmap_matrix   – list[list[int]], shape (50, 288)
+        zones            – price levels where any bucket > zone_threshold
+        peak_price_level – midpoint of the hottest price band
+        peak_time        – approximate epoch timestamp of the busiest bucket
+        peak_time_bucket – index of the busiest time bucket (deterministic)
+        price_levels     – 50 price midpoints (±10 % around current price)
+        n_price_levels, n_time_buckets – matrix dimensions
+        current_price, price_min, price_max
+        total_liquidations – total count across all cells
+        symbol, window_seconds, zone_threshold
+    """
+    import random as _lhm_random
+
+    rng = _lhm_random.Random(20260316)
+
+    n_price_levels = _LHM_N_PRICE_LEVELS
+    n_time_buckets = _LHM_N_TIME_BUCKETS
+    window_seconds = 86400
+    time_bucket_seconds = 300  # 5 min
+
+    # Deterministic current price
+    current_price = round(rng.uniform(0.005, 0.020), 6)
+    price_range_pct = 0.10
+    price_min = round(current_price * (1.0 - price_range_pct), 8)
+    price_max = round(current_price * (1.0 + price_range_pct), 8)
+    price_step = (price_max - price_min) / n_price_levels
+
+    price_levels: List[float] = [
+        round(price_min + (i + 0.5) * price_step, 8) for i in range(n_price_levels)
+    ]
+
+    # Build sparse matrix with clustered hotspots
+    matrix: List[List[int]] = [[0] * n_time_buckets for _ in range(n_price_levels)]
+
+    n_clusters = rng.randint(6, 12)
+    for _ in range(n_clusters):
+        cp = rng.randint(0, n_price_levels - 1)
+        ct = rng.randint(0, n_time_buckets - 1)
+        peak_val = rng.randint(12, 30)
+        for dp in range(-2, 3):
+            for dt in range(-3, 4):
+                pi = cp + dp
+                ti = ct + dt
+                if 0 <= pi < n_price_levels and 0 <= ti < n_time_buckets:
+                    dist = abs(dp) + abs(dt)
+                    val = max(0, peak_val - dist * 3 - rng.randint(0, 2))
+                    matrix[pi][ti] = max(matrix[pi][ti], val)
+
+    # Background scatter
+    for pi in range(n_price_levels):
+        for ti in range(n_time_buckets):
+            if rng.random() < 0.04:
+                matrix[pi][ti] = max(matrix[pi][ti], rng.randint(1, 5))
+
+    # Identify liquidation zones
+    zones: List[Dict] = []
+    for pi, row in enumerate(matrix):
+        max_in_row = max(row)
+        if max_in_row > zone_threshold:
+            zones.append(
+                {
+                    "price_level": price_levels[pi],
+                    "price_low": round(price_min + pi * price_step, 8),
+                    "price_high": round(price_min + (pi + 1) * price_step, 8),
+                    "max_count": max_in_row,
+                    "total_count": sum(row),
+                }
+            )
+
+    # Peak price level (row with highest total count)
+    row_totals = [sum(row) for row in matrix]
+    peak_pi = row_totals.index(max(row_totals))
+    peak_price_level = price_levels[peak_pi]
+
+    # Peak time bucket (column with highest total count)
+    col_totals = [
+        sum(matrix[pi][ti] for pi in range(n_price_levels))
+        for ti in range(n_time_buckets)
+    ]
+    peak_ti = col_totals.index(max(col_totals))
+    peak_time = time.time() - window_seconds + peak_ti * time_bucket_seconds
+
+    total_liquidations: int = sum(row_totals)
+
+    return {
+        "heatmap_matrix": matrix,
+        "zones": zones,
+        "peak_price_level": peak_price_level,
+        "peak_time": peak_time,
+        "peak_time_bucket": peak_ti,
+        "price_levels": price_levels,
+        "n_price_levels": n_price_levels,
+        "n_time_buckets": n_time_buckets,
+        "current_price": current_price,
+        "price_min": price_min,
+        "price_max": price_max,
+        "total_liquidations": total_liquidations,
+        "symbol": symbol,
+        "window_seconds": window_seconds,
+        "zone_threshold": zone_threshold,
     }

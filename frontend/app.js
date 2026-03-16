@@ -2524,8 +2524,8 @@ async function refresh() {
     await delay(200);
     // Batch 29: order flow toxicity (VPIN)
     await Promise.all([safe(renderOrderFlowToxicity)]);
-    // Batch 30: liquidation cascade detector
-    await Promise.all([safe(renderLiqCascadeDetector)]);
+    // Batch 30: liquidation cascade detector + liquidation heatmap
+    await Promise.all([safe(renderLiqCascadeDetector), safe(renderLiquidationHeatmap)]);
     // Batch 31: options flow tracker
     await Promise.all([safe(refreshOptionsFlowTracker)]);
   } finally {
@@ -3620,6 +3620,101 @@ async function renderSmartMoneyPatterns() {
   } catch (err) {
     console.error('Error rendering smart money patterns:', err);
     document.getElementById('smart-money-patterns-content').innerHTML = 'Error';
+  }
+}
+
+
+async function renderLiquidationHeatmap() {
+  try {
+    const data = await apiFetch('/liquidation-heatmap-matrix');
+    if (!data) {
+      document.getElementById('liq-heatmap-matrix-content').innerHTML = 'No data';
+      return;
+    }
+
+    const matrix = data.heatmap_matrix || [];
+    const nPriceLevels = data.n_price_levels || 50;
+    const nTimeBuckets = data.n_time_buckets || 288;
+    const zones = data.zones || [];
+    const priceLevels = data.price_levels || [];
+
+    // Find max count for color scaling
+    let maxCount = 1;
+    for (const row of matrix) {
+      for (const v of row) {
+        if (v > maxCount) maxCount = v;
+      }
+    }
+
+    // Downsample for display: every 3rd price level, every 12th time bucket
+    const PRICE_STEP = 3;
+    const TIME_STEP = 12;
+
+    function heatColor(v) {
+      if (v === 0) return 'rgba(30,30,30,0.5)';
+      const ratio = Math.min(v / maxCount, 1);
+      if (ratio < 0.25) return `rgba(74,158,255,${0.3 + ratio * 1.5})`;
+      if (ratio < 0.60) return `rgba(243,156,18,${0.3 + ratio})`;
+      return `rgba(231,76,60,${0.3 + ratio})`;
+    }
+
+    let tableHtml = '<table style="width:100%;border-collapse:collapse;font-size:8px;margin-bottom:6px;">';
+    for (let pi = 0; pi < nPriceLevels; pi += PRICE_STEP) {
+      tableHtml += '<tr>';
+      const priceLabel = priceLevels[pi] ? priceLevels[pi].toFixed(6) : '';
+      tableHtml += `<td style="color:#555;padding:0 2px;width:52px;font-size:7px;">${priceLabel}</td>`;
+      if (matrix[pi]) {
+        for (let ti = 0; ti < nTimeBuckets; ti += TIME_STEP) {
+          const count = matrix[pi][ti] || 0;
+          const bg = heatColor(count);
+          tableHtml += `<td style="background:${bg};width:6px;height:4px;padding:0;" title="${count}"></td>`;
+        }
+      }
+      tableHtml += '</tr>';
+    }
+    tableHtml += '</table>';
+
+    // Zone annotations
+    let zonesHtml = '';
+    if (zones.length > 0) {
+      zonesHtml = `<div style="font-size:10px;color:#888;margin-bottom:4px;">Zones (&gt;${data.zone_threshold || 10} liq):</div>`;
+      zonesHtml += zones.slice(0, 6).map(z =>
+        `<span style="display:inline-block;margin:2px;padding:1px 5px;background:rgba(231,76,60,0.25);border:1px solid rgba(231,76,60,0.4);border-radius:3px;color:#e74c3c;font-size:9px;">${z.price_level.toFixed(6)}</span>`
+      ).join('');
+    }
+
+    const summaryHtml = `
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;margin-bottom:6px;font-size:10px;">
+        <div style="text-align:center;">
+          <div style="color:#4a9eff;font-weight:bold;">${(data.peak_price_level || 0).toFixed(6)}</div>
+          <div style="color:#888;font-size:9px;">Peak Price</div>
+        </div>
+        <div style="text-align:center;">
+          <div style="color:#e74c3c;font-weight:bold;">${zones.length}</div>
+          <div style="color:#888;font-size:9px;">Zones</div>
+        </div>
+        <div style="text-align:center;">
+          <div style="color:#f39c12;font-weight:bold;">${data.total_liquidations || 0}</div>
+          <div style="color:#888;font-size:9px;">Total Liqs</div>
+        </div>
+      </div>
+    `;
+
+    document.getElementById('liq-heatmap-matrix-content').innerHTML = summaryHtml + tableHtml + zonesHtml;
+
+    const badge = document.getElementById('liq-heatmap-matrix-badge');
+    if (badge) {
+      badge.textContent = zones.length + ' zones';
+      badge.style.background = zones.length > 5 ? '#c0392b' : zones.length > 2 ? '#d68910' : '#2980b9';
+      badge.style.color = '#fff';
+      badge.style.fontSize = '10px';
+      badge.style.padding = '2px 6px';
+      badge.style.display = 'inline-block';
+      badge.style.borderRadius = '3px';
+    }
+  } catch (err) {
+    console.error('Error rendering liquidation heatmap:', err);
+    document.getElementById('liq-heatmap-matrix-content').innerHTML = 'Error';
   }
 }
 
