@@ -70,7 +70,7 @@ from metrics import (
     compute_macro_liquidity_indicator,
     compute_token_velocity_nvt,
     compute_layer2_metrics,
-    compute_btc_dominance,
+    compute_gas_fee_predictor,
 )
 
 router = APIRouter(prefix="/api")
@@ -5296,10 +5296,10 @@ async def token_velocity_nvt_endpoint():
 async def layer2_metrics_endpoint():
     """Layer 2 metrics: TVL by chain, bridge flows, gas savings, growth momentum."""
     data = await compute_layer2_metrics()
-@router.get("/btc-dominance-tracker")
-async def btc_dominance_tracker_endpoint():
-    """BTC dominance tracker: BTC/ETH/alt breakdown, regime classifier, 90-day sparkline."""
-    data = await compute_btc_dominance()
+@router.get("/gas-fee-predictor")
+async def gas_fee_predictor_endpoint():
+    """Gas fee predictor: EIP-1559 base fee trend, priority percentiles, spike detection."""
+    data = await compute_gas_fee_predictor()
     return JSONResponse(data)
 @router.get("/network-health-score")
 async def network_health_score_endpoint():

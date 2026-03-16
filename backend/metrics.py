@@ -5669,6 +5669,152 @@ async def compute_miner_reserve() -> dict:
     }
 
 
+# Layer 2 Metrics helpers  (_l2_)
+# ============================================================
+
+def _l2_tvl_share(chains: dict) -> dict:
+    """Return each chain's % share of total TVL. Empty dict if input empty."""
+    if not chains:
+        return {}
+    total = sum(chains.values())
+    if total == 0:
+        return {k: 0.0 for k in chains}
+    return {k: float(v / total * 100.0) for k, v in chains.items()}
+
+
+def _l2_bridge_flow_direction(flow_usd: float, threshold: float = 1_000_000) -> str:
+    """
+    Classify 24h bridge flow direction.
+
+    inflow  — flow > +threshold
+    outflow — flow < -threshold
+    neutral — |flow| <= threshold or flow == 0
+    """
+    if flow_usd > threshold:
+        return "inflow"
+    if flow_usd < -threshold:
+        return "outflow"
+    return "neutral"
+
+
+def _l2_gas_savings_pct(l1_gas_usd: float, l2_gas_usd: float) -> float:
+    """Percentage gas cost savings of L2 vs L1. Clamped to [0, 100]."""
+    if l1_gas_usd <= 0:
+        return 0.0
+    savings = (l1_gas_usd - l2_gas_usd) / l1_gas_usd * 100.0
+    return float(min(100.0, max(0.0, savings)))
+
+
+def _l2_momentum_score(
+    tvl_change_24h: float,
+    tvl_change_7d: float,
+    tx_growth: float,
+) -> float:
+    """
+    Composite momentum score [0, 100].
+
+    Weights: 24h TVL change (30%), 7d TVL change (50%), tx growth (20%).
+    Centred at 0 change → 50; ±10% TVL or ±0.5 tx growth spans the range.
+    """
+    # Normalize each component to [-1, 1] then shift to [0, 1]
+    c24  = max(-1.0, min(1.0, tvl_change_24h  / 5.0))    # ±5% → ±1
+    c7d  = max(-1.0, min(1.0, tvl_change_7d   / 15.0))   # ±15% → ±1
+    ctx  = max(-1.0, min(1.0, tx_growth        / 0.5))    # ±50% → ±1
+
+    composite = c24 * 0.30 + c7d * 0.50 + ctx * 0.20
+    return float(min(100.0, max(0.0, (composite + 1.0) / 2.0 * 100.0)))
+
+
+def _l2_growth_label(momentum: float) -> str:
+    """
+    Map momentum score to growth label.
+
+    strong_growth — >= 70
+    growing       — >= 50
+    neutral       — >= 30
+    declining     — < 30
+    """
+    if momentum >= 70.0:
+        return "strong_growth"
+    if momentum >= 50.0:
+        return "growing"
+    if momentum >= 30.0:
+        return "neutral"
+    return "declining"
+
+
+def _l2_rank_chains(chains: dict) -> list:
+    """Return list of (name, data) tuples sorted by tvl_usd descending."""
+    if not chains:
+        return []
+    return sorted(chains.items(), key=lambda item: item[1].get("tvl_usd", 0), reverse=True)
+
+
+def _l2_tvl_change_pct(current: float, previous: float) -> float:
+    """Percentage change from previous to current TVL."""
+=======
+# ============================================================
+# Gas Fee Predictor helpers  (_gf_)
+# ============================================================
+
+def _gf_base_fee_trend(fees: list) -> str:
+    """
+    Linear regression slope over fee history.
+    Returns 'rising' / 'falling' / 'stable' (|slope| < 0.5 Gwei/period).
+    """
+    n = len(fees)
+    if n < 2:
+        return "stable"
+    xs = list(range(n))
+    mx = sum(xs) / n
+    my = sum(fees) / n
+    num = sum((x - mx) * (y - my) for x, y in zip(xs, fees))
+    den = sum((x - mx) ** 2 for x in xs)
+    if den == 0:
+        return "stable"
+    slope = num / den
+    if slope > 0.5:
+        return "rising"
+    if slope < -0.5:
+        return "falling"
+    return "stable"
+
+
+def _gf_priority_percentile(samples: list, pct: int) -> float:
+    """Return the p-th percentile of priority fee samples (nearest-rank)."""
+    if not samples:
+        return 0.0
+    s = sorted(samples)
+    idx = max(0, int(len(s) * pct / 100) - 1)
+    return float(s[min(idx, len(s) - 1)])
+
+
+def _gf_next_block_estimate(base_fee_gwei: float, utilization: float) -> float:
+    """
+    EIP-1559 next-block base fee estimate.
+
+    base_fee_next = base_fee * (1 + 0.125 * (utilization - 0.5) / 0.5)
+    Clamped so the maximum change is ±12.5%.
+    """
+    if base_fee_gwei == 0.0:
+        return 0.0
+    delta = 0.125 * (utilization - 0.5) / 0.5
+    delta = max(-0.125, min(0.125, delta))
+    return float(base_fee_gwei * (1.0 + delta))
+
+
+def _gf_zscore(current: float, history: list) -> float:
+    """Z-score of current vs history. Returns 0.0 when std is zero or history < 2."""
+    if len(history) < 2:
+        return 0.0
+    mean = sum(history) / len(history)
+    var  = sum((x - mean) ** 2 for x in history) / len(history)
+    std  = var ** 0.5
+    if std == 0.0:
+        return 0.0
+    return float((current - mean) / std)
+
+
 async def compute_token_velocity_nvt() -> dict:
     """
     Token velocity and NVT ratio card for BTC.
@@ -5797,7 +5943,6 @@ async def compute_token_velocity_nvt() -> dict:
     }
 
 
-# ============================================================
 # Layer 2 Metrics helpers  (_l2_)
 # ============================================================
 
@@ -5882,6 +6027,8 @@ def _l2_rank_chains(chains: dict) -> list:
 def _l2_tvl_change_pct(current: float, previous: float) -> float:
     """Percentage change from previous to current TVL."""
 # ╔══════════════════════════════════════════════════════════════════════════╗
+=======
+# =====================================================# ╔══════════════════════════════════════════════════════════════════════════╗
 # ║  MACRO LIQUIDITY INDICATOR                                              ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
@@ -6359,6 +6506,50 @@ async def compute_defi_tvl_tracker() -> dict:
     }
 
 
+def _gf_spike_label(zscore: float) -> str:
+    """
+    Map z-score to fee spike category.
+
+    spike    — z >= 2.0
+    elevated — z >= 1.0
+    normal   — z >= -1.0
+    low      — z < -1.0
+    """
+    if zscore >= 2.0:
+        return "spike"
+    if zscore >= 1.0:
+        return "elevated"
+    if zscore >= -1.0:
+        return "normal"
+    return "low"
+
+
+def _gf_fee_usd(gas_units: int, total_gwei: float, eth_price_usd: float) -> float:
+    """Convert gas cost to USD: gas_units × total_gwei × eth_price / 1e9."""
+    if gas_units == 0 or eth_price_usd == 0.0:
+        return 0.0
+    return float(gas_units * total_gwei * eth_price_usd / 1_000_000_000)
+
+
+def _gf_moving_average(values: list, window: int) -> list:
+    """Simple moving average with partial window at start."""
+    if not values:
+        return []
+    result = []
+    for i in range(len(values)):
+        start = max(0, i - window + 1)
+        subset = values[start : i + 1]
+        result.append(float(sum(subset) / len(subset)))
+    return result
+
+
+async def compute_gas_fee_predictor() -> dict:
+    """
+    Gas Fee Predictor — EIP-1559 base fee trend, priority fee percentiles,
+    next-block estimate, and spike detection.
+
+    Data: Etherscan Gas Oracle (free, no key for basic endpoint) or mock.
+    Falls back to realistic simulated data when API is unavailable.
 async def compute_layer2_metrics() -> dict:
     """
     Layer 2 Metrics Aggregator — TVL, bridge flows, tx counts, gas savings,
@@ -6521,13 +6712,146 @@ async def compute_layer2_metrics() -> dict:
             "label":   momentum_label,
             "leader":  leader,
             "laggard": laggard,
+        "description": desc,
+    }
+
+
+    import math
+
+    # ── Attempt live data from Etherscan gas oracle ─────────────────────────
+    base_fee  = 0.0
+    eth_price = 0.0
+    fetch_ok  = False
+
+    try:
+        async with httpx.AsyncClient(timeout=6.0) as client:
+            resp = await client.get(
+                "https://api.etherscan.io/api?module=gastracker&action=gasoracle",
+                headers={"Accept": "application/json"},
+            )
+            if resp.status_code == 200:
+                result = resp.json().get("result", {})
+                if isinstance(result, dict) and "suggestBaseFee" in result:
+                    base_fee  = float(result.get("suggestBaseFee", 0))
+                    eth_price = float(result.get("UsdPrice", 3000))
+                    fetch_ok  = True
+    except Exception:
+        pass
+
+    # ── Mock / fallback ──────────────────────────────────────────────────────
+    if not fetch_ok or base_fee <= 0:
+        base_fee  = 42.5
+        eth_price = 3_200.0
+
+    # ── Build 7-day hourly history (168 points) ──────────────────────────────
+    random.seed(7)
+    hist_fees = []
+    f = base_fee * 0.85
+    for _ in range(168):
+        f += random.gauss(0, 1.5)
+        f = max(5.0, min(200.0, f))
+        hist_fees.append(round(f, 2))
+    hist_fees[-1] = base_fee   # anchor last point to current
+
+    ma24   = _gf_moving_average(hist_fees, 24)
+    ma168  = _gf_moving_average(hist_fees, 168)
+
+    # ── Trend ────────────────────────────────────────────────────────────────
+    trend_dir   = _gf_base_fee_trend(hist_fees[-24:])
+    slope_ph    = 0.0
+    if len(hist_fees) >= 2:
+        recent = hist_fees[-6:]
+        n = len(recent)
+        xs = list(range(n))
+        mx_ = sum(xs) / n
+        my_ = sum(recent) / n
+        num = sum((x - mx_) * (y - my_) for x, y in zip(xs, recent))
+        den = sum((x - mx_) ** 2 for x in xs) or 1.0
+        slope_ph = round(num / den, 3)
+
+    # ── Priority fee percentiles (simulated recent block data) ───────────────
+    random.seed(13)
+    priority_samples = [max(0.1, random.lognormvariate(0.7, 0.6)) for _ in range(200)]
+    p10 = round(_gf_priority_percentile(priority_samples, 10), 2)
+    p50 = round(_gf_priority_percentile(priority_samples, 50), 2)
+    p90 = round(_gf_priority_percentile(priority_samples, 90), 2)
+
+    # ── Next-block estimate (assume avg 65% utilization + noise) ─────────────
+    util = 0.65 + random.gauss(0, 0.05)
+    util = max(0.0, min(1.0, util))
+    next_block = round(_gf_next_block_estimate(base_fee, util), 2)
+
+    # ── Total fees (base + priority) ─────────────────────────────────────────
+    TRANSFER_GAS = 21_000
+    t_slow = round(base_fee + p10, 2)
+    t_std  = round(base_fee + p50, 2)
+    t_fast = round(base_fee + p90, 2)
+
+    slow_usd = round(_gf_fee_usd(TRANSFER_GAS, t_slow, eth_price), 4)
+    std_usd  = round(_gf_fee_usd(TRANSFER_GAS, t_std,  eth_price), 4)
+    fast_usd = round(_gf_fee_usd(TRANSFER_GAS, t_fast, eth_price), 4)
+
+    # ── Spike detection (z-score vs 24h window) ───────────────────────────────
+    window_24h = hist_fees[-24:]
+    zs    = round(_gf_zscore(base_fee, window_24h), 3)
+    label = _gf_spike_label(zs)
+
+    # percentile rank
+    below = sum(1 for x in window_24h if x < base_fee)
+    pct_rank = round(below / max(len(window_24h), 1) * 100, 1)
+
+    # ── Build hourly history_7d (downsample to 7d daily snapshots) ───────────
+    today = datetime.datetime.utcnow()
+    history_7d = []
+    for i in range(7):
+        day_idx = i * 24
+        fee_val = hist_fees[min(day_idx, len(hist_fees) - 1)]
+        ma_val  = ma24[min(day_idx, len(ma24) - 1)]
+        ts = (today - datetime.timedelta(days=6 - i)).strftime("%Y-%m-%dT%H:00:00")
+        history_7d.append({
+            "timestamp":    ts,
+            "base_fee_gwei": round(fee_val, 2),
+            "ma_gwei":       round(ma_val, 2),
+        })
+
+    # ── Description ──────────────────────────────────────────────────────────
+    label_display = label.capitalize()
+    desc = (
+        f"{label_display}: base fee {base_fee:.1f} Gwei — "
+        f"{trend_dir} trend, z-score {zs:.2f}"
+    )
+
+    return {
+        "current": {
+            "base_fee_gwei":       round(base_fee, 2),
+            "priority_slow_gwei":  p10,
+            "priority_std_gwei":   p50,
+            "priority_fast_gwei":  p90,
+            "next_block_gwei":     next_block,
+            "total_slow_gwei":     t_slow,
+            "total_std_gwei":      t_std,
+            "total_fast_gwei":     t_fast,
+            "total_slow_usd":      slow_usd,
+            "total_std_usd":       std_usd,
+            "total_fast_usd":      fast_usd,
+        },
+        "spike": {
+            "zscore":     zs,
+            "label":      label,
+            "threshold":  2.0,
+            "percentile": pct_rank,
+        },
+        "trend": {
+            "direction":           trend_dir,
+            "slope_gwei_per_hour": slope_ph,
+            "ma_24h_gwei":         round(ma24[-1], 2),
+            "ma_7d_gwei":          round(ma168[-1], 2),
         },
         "history_7d": history_7d,
         "description": desc,
     }
 
 
-# ============================================================
 # BTC Dominance Tracker helpers  (_bd_)
 # ============================================================
 
@@ -6747,5 +7071,208 @@ async def compute_btc_dominance() -> dict:
             "interpretation":       interp,
         },
         "sparkline": sparkline,
+=======
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  LEVERAGE RATIO HEATMAP                                                 ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+
+def _lv_leverage_ratio(oi_usd: float, market_cap_usd: float) -> float:
+    """Leverage ratio: OI as % of market cap.  Returns 0.0 if mcap is zero."""
+    if market_cap_usd == 0:
+        return 0.0
+    return float(oi_usd / market_cap_usd * 100.0)
+
+
+def _lv_percentile_rank(value: float, history: list) -> float:
+    """Fraction of history values ≤ current value, expressed as [0-100].
+    Returns 50.0 when history is empty (neutral/unknown).
+    """
+    if not history:
+        return 50.0
+    count = sum(1 for h in history if h <= value)
+    return float(count / len(history) * 100.0)
+
+
+def _lv_deleverage_risk(percentile: float) -> str:
+    """Deleveraging risk label from percentile rank."""
+    if percentile >= 80.0:
+        return "high"
+    if percentile >= 65.0:
+        return "elevated"
+    if percentile >= 40.0:
+        return "normal"
+    return "low"
+
+
+def _lv_risk_score(leverage_ratio: float, percentile: float) -> float:
+    """Composite risk score [0-100]: 40% normalised leverage + 60% percentile."""
+    norm_lev = min(100.0, max(0.0, leverage_ratio / 5.0 * 100.0))
+    return float(0.40 * norm_lev + 0.60 * percentile)
+
+
+def _lv_zscore(current: float, history: list) -> float:
+    """Z-score of current leverage ratio vs historical distribution."""
+    if len(history) < 2:
+        return 0.0
+    import math
+    mean = sum(history) / len(history)
+    std  = math.sqrt(sum((v - mean) ** 2 for v in history) / len(history))
+    if std == 0:
+        return 0.0
+    return float((current - mean) / std)
+
+
+def _lv_trend(values: list) -> str:
+    """Linear-regression trend of a leverage series: rising / falling / stable."""
+    if len(values) < 2:
+        return "stable"
+    n = len(values)
+    mean_x = (n - 1) / 2.0
+    mean_y = sum(values) / n
+    num = sum((i - mean_x) * (v - mean_y) for i, v in enumerate(values))
+    den = sum((i - mean_x) ** 2 for i in range(n))
+    if den == 0:
+        return "stable"
+    slope = num / den
+    threshold = (max(values) - min(values)) * 0.01
+    if slope > threshold:
+        return "rising"
+    if slope < -threshold:
+        return "falling"
+    return "stable"
+
+
+def _lv_heatmap_color(percentile: float) -> str:
+    """Heatmap color bucket from percentile rank."""
+    if percentile >= 80.0:
+        return "red"
+    if percentile >= 65.0:
+        return "orange"
+    if percentile >= 40.0:
+        return "yellow"
+    return "green"
+
+
+def _lv_sector_avg(ratios: dict) -> float:
+    """Simple mean of leverage ratios across assets."""
+    if not ratios:
+        return 0.0
+    return float(sum(ratios.values()) / len(ratios))
+
+
+async def compute_leverage_ratio_heatmap() -> dict:
+    """Leverage ratio heatmap: OI/mcap across BTC/ETH/SOL/BNB perps."""
+    import httpx, datetime, random
+
+    today = datetime.date.today()
+
+    # Baseline data — OI from typical Binance/Bybit/OKX combined estimates
+    ASSETS = {
+        "BTC": {
+            "oi": 18_500_000_000, "mcap": 1_200_000_000_000,
+            # 30-day history of leverage ratios (weekly snapshots)
+            "history_lv": [1.22, 1.28, 1.33, 1.38, 1.42, 1.47, 1.54],
+        },
+        "ETH": {
+            "oi":  9_800_000_000, "mcap":   380_000_000_000,
+            "history_lv": [2.45, 2.48, 2.51, 2.53, 2.55, 2.57, 2.58],
+        },
+        "SOL": {
+            "oi":  4_200_000_000, "mcap":    75_000_000_000,
+            "history_lv": [4.20, 4.40, 4.60, 4.80, 5.10, 5.35, 5.60],
+        },
+        "BNB": {
+            "oi":  1_800_000_000, "mcap":    85_000_000_000,
+            "history_lv": [2.25, 2.22, 2.19, 2.17, 2.15, 2.13, 2.12],
+        },
+    }
+
+    # Date labels for the 7 weekly snapshots covering last 30 days
+    dates = [
+        (today - datetime.timedelta(days=30 - i * 5)).isoformat()
+        for i in range(7)
+    ]
+
+    assets_out = {}
+    sector_ratios = {}
+
+    for name, d in ASSETS.items():
+        current_lv = _lv_leverage_ratio(d["oi"], d["mcap"])
+        hist_lv    = d["history_lv"]
+
+        # Percentile vs 90-day synthetic extension
+        extended = [
+            lv * (0.85 + 0.03 * i)
+            for i in range(10)
+            for lv in [hist_lv[0] * 0.9]
+        ] + hist_lv
+        pct  = _lv_percentile_rank(current_lv, extended)
+        risk = _lv_deleverage_risk(pct)
+        rs   = _lv_risk_score(current_lv, pct)
+        zs   = _lv_zscore(current_lv, hist_lv[:-1])
+        trend = _lv_trend(hist_lv)
+        color = _lv_heatmap_color(pct)
+
+        history_30d = [
+            {
+                "date": dates[i],
+                "leverage_ratio": round(hist_lv[i], 3),
+                "percentile": round(_lv_percentile_rank(hist_lv[i], extended), 1),
+            }
+            for i in range(len(hist_lv))
+        ]
+
+        assets_out[name] = {
+            "oi_usd":          d["oi"],
+            "market_cap_usd":  d["mcap"],
+            "leverage_ratio":  round(current_lv, 3),
+            "percentile_rank": round(pct, 1),
+            "risk_signal":     risk,
+            "risk_score":      round(rs, 1),
+            "zscore":          round(zs, 3),
+            "trend":           trend,
+            "heatmap_color":   color,
+            "history_30d":     history_30d,
+        }
+        sector_ratios[name] = current_lv
+
+    # Sector aggregates
+    avg_lv  = _lv_sector_avg(sector_ratios)
+    avg_pct = _lv_sector_avg({n: assets_out[n]["percentile_rank"] for n in assets_out})
+    max_risk = max(assets_out, key=lambda n: assets_out[n]["risk_score"])
+    deleverage_count = sum(
+        1 for a in assets_out.values() if a["risk_signal"] == "high"
+    )
+    sector_rs = _lv_sector_avg({n: assets_out[n]["risk_score"] for n in assets_out})
+
+    # Sector 30-day history
+    history_30d = [
+        {
+            "date": dates[i],
+            "avg_leverage_ratio": round(
+                sum(ASSETS[n]["history_lv"][i] for n in ASSETS) / len(ASSETS), 3
+            ),
+            "avg_percentile": round(avg_pct * (0.90 + 0.10 * (i / 6)), 1),
+        }
+        for i in range(7)
+    ]
+
+    desc = (
+        f"Leverage {'elevated' if avg_pct >= 65 else 'normal'}: "
+        f"{max_risk} at {assets_out[max_risk]['percentile_rank']:.0f}th pct"
+        f" — {deleverage_count} asset{'s' if deleverage_count != 1 else ''} "
+        f"in deleveraging risk zone"
+    )
+
+    return {
+        "assets": assets_out,
+        "sector": {
+            "avg_leverage_ratio":    round(avg_lv, 3),
+            "avg_percentile":        round(avg_pct, 1),
+            "max_risk_asset":        max_risk,
+            "deleverage_risk_count": deleverage_count,
+            "sector_risk_score":     round(sector_rs, 1),
+        },
+        "history_30d": history_30d,
         "description": desc,
     }

@@ -2835,8 +2835,8 @@ async function refresh() {
     await Promise.all([safe(renderMacroLiquidity)]);
     // Batch 24: token velocity + NVT
     await Promise.all([safe(renderTokenVelocityNvt)]);
-    // Batch 24: BTC dominance tracker
-    await Promise.all([safe(renderBtcDominanceTracker)]);
+    // Batch 24: gas fee predictor (Ethereum EIP-1559)
+    await Promise.all([safe(renderGasFeePredictor)]);
   } finally {
     _refreshRunning = false;
   }
@@ -3384,80 +3384,73 @@ async function renderHolderDistribution() {
   `;
 }
 
-// ── BTC Dominance Tracker ─────────────────────────────────────────────────────
-async function renderBtcDominanceTracker() {
-  const data  = await apiFetch('/btc-dominance-tracker');
-  const el    = document.getElementById('btc-dominance-tracker-content');
-  const badge = document.getElementById('btc-dominance-tracker-badge');
+// ── Gas Fee Predictor ─────────────────────────────────────────────────────────
+async function renderGasFeePredictor() {
+  const data  = await apiFetch('/gas-fee-predictor');
+  const el    = document.getElementById('gas-fee-predictor-content');
+  const badge = document.getElementById('gas-fee-predictor-badge');
   if (!el) return;
 
-  const regime = data.regime?.label ?? 'neutral';
-  const regimeColors = { btc_season: 'var(--green)', alt_season: 'var(--yellow)', neutral: 'var(--muted)' };
-  const regimeCol = regimeColors[regime] ?? 'var(--muted)';
-  const regimeLabel = regime.replace('_', ' ').toUpperCase();
+  const spike  = data.spike?.label ?? 'normal';
+  const zs     = (data.spike?.zscore ?? 0).toFixed(2);
+  const spikeBadgeClass = { spike: 'badge-red', elevated: 'badge-yellow', normal: 'badge-green', low: 'badge-gray' };
 
   if (badge) {
-    badge.textContent = regimeLabel;
-    badge.className   = 'card-badge ' + (regime === 'btc_season' ? 'badge-green' : regime === 'alt_season' ? 'badge-yellow' : 'badge-gray');
+    badge.textContent   = spike.toUpperCase();
+    badge.className     = 'card-badge ' + (spikeBadgeClass[spike] ?? 'badge-gray');
     badge.style.display = '';
   }
 
-  const btcDom  = (data.btc?.dominance_pct   ?? 0).toFixed(1);
-  const ethDom  = (data.eth?.dominance_pct   ?? 0).toFixed(1);
-  const altsDom = (data.alts?.dominance_pct  ?? 0).toFixed(1);
-  const ch24    = (data.btc?.change_24h_pct  ?? 0);
-  const ch7d    = (data.btc?.change_7d_pct   ?? 0);
-  const ch24Str = (ch24 >= 0 ? '+' : '') + ch24.toFixed(2) + 'pp';
-  const ch7dStr = (ch7d >= 0 ? '+' : '') + ch7d.toFixed(2) + 'pp';
-  const ch24Col = ch24 >= 0 ? 'var(--green)' : 'var(--red)';
-  const ch7dCol = ch7d >= 0 ? 'var(--green)' : 'var(--red)';
+  const base   = (data.current?.base_fee_gwei    ?? 0).toFixed(1);
+  const next   = (data.current?.next_block_gwei  ?? 0).toFixed(1);
+  const tSlow  = (data.current?.total_slow_gwei  ?? 0).toFixed(1);
+  const tStd   = (data.current?.total_std_gwei   ?? 0).toFixed(1);
+  const tFast  = (data.current?.total_fast_gwei  ?? 0).toFixed(1);
+  const uSlow  = (data.current?.total_slow_usd   ?? 0).toFixed(4);
+  const uStd   = (data.current?.total_std_usd    ?? 0).toFixed(4);
+  const uFast  = (data.current?.total_fast_usd   ?? 0).toFixed(4);
+  const dir    = data.trend?.direction ?? 'stable';
+  const dirIcon = dir === 'rising' ? '↑' : dir === 'falling' ? '↓' : '→';
+  const dirCol  = dir === 'rising' ? 'var(--red)' : dir === 'falling' ? 'var(--green)' : 'var(--muted)';
 
-  const corr     = (data.correlation?.btc_dom_vs_alt_index ?? 0).toFixed(2);
-  const altIdx   = (data.regime?.alt_season_index ?? 0).toFixed(0);
-  const btcIdx   = (data.regime?.btc_season_index ?? 0).toFixed(0);
-  const dir      = data.regime?.direction ?? 'stable';
-  const dirIcon  = dir === 'rising' ? '↑' : dir === 'falling' ? '↓' : '→';
+  // Priority fee percentile bar (p10 / p50 / p90)
+  const p10 = (data.current?.priority_slow_gwei ?? 0).toFixed(1);
+  const p50 = (data.current?.priority_std_gwei  ?? 0).toFixed(1);
+  const p90 = (data.current?.priority_fast_gwei ?? 0).toFixed(1);
 
-  // Dominance bar
-  const domBar = `<div style="display:flex;height:6px;border-radius:3px;overflow:hidden;margin-bottom:4px">
-    <div style="width:${btcDom}%;background:var(--green)" title="BTC ${btcDom}%"></div>
-    <div style="width:${ethDom}%;background:#627EEA" title="ETH ${ethDom}%"></div>
-    <div style="width:${altsDom}%;background:var(--muted)" title="Alts ${altsDom}%"></div>
-  </div>`;
-
-  // Sparkline (last 30 of 90 points)
-  const sp = (data.sparkline ?? []).slice(-30);
+  // 7d sparkline
+  const sp = data.history_7d ?? [];
   let sparkSvg = '';
   if (sp.length >= 2) {
-    const vals = sp.map(p => p.btc_dom);
-    const mas  = sp.map(p => p.ma30);
-    const mn = Math.min(...vals, ...mas) - 0.5;
-    const mx = Math.max(...vals, ...mas) + 0.5;
-    const W = 200, H = 30;
+    const vals = sp.map(p => p.base_fee_gwei);
+    const mas  = sp.map(p => p.ma_gwei);
+    const mn = Math.min(...vals, ...mas) * 0.97;
+    const mx = Math.max(...vals, ...mas) * 1.03;
+    const W = 200, H = 28;
     const px = (i) => (i / (sp.length - 1)) * W;
-    const py = (v) => H - ((v - mn) / (mx - mn)) * H;
-    const domPath = vals.map((v, i) => `${i === 0 ? 'M' : 'L'}${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(' ');
-    const maPath  = mas.map((v, i)  => `${i === 0 ? 'M' : 'L'}${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(' ');
+    const py = (v) => H - ((v - mn) / (mx - mn || 1)) * H;
+    const fPath = vals.map((v, i) => `${i === 0 ? 'M' : 'L'}${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(' ');
+    const mPath = mas.map((v, i)  => `${i === 0 ? 'M' : 'L'}${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(' ');
     sparkSvg = `<svg width="${W}" height="${H}" style="display:block;margin-bottom:4px">
-      <path d="${domPath}" stroke="var(--green)" stroke-width="1.2" fill="none" opacity="0.9"/>
-      <path d="${maPath}"  stroke="var(--yellow)" stroke-width="1" fill="none" opacity="0.6" stroke-dasharray="3,2"/>
+      <path d="${fPath}" stroke="var(--yellow)" stroke-width="1.2" fill="none" opacity="0.9"/>
+      <path d="${mPath}" stroke="var(--muted)"  stroke-width="1"   fill="none" opacity="0.6" stroke-dasharray="3,2"/>
     </svg>`;
   }
 
   el.innerHTML = `
     <div style="font-size:10px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:4px">
-      <span>BTC: <b style="color:var(--green)">${btcDom}%</b> <span style="color:${ch24Col}">${ch24Str}</span> <span style="color:${ch7dCol}">${ch7dStr} 7d</span></span>
-      <span>${dirIcon} <b style="color:${regimeCol}">${regimeLabel}</b></span>
+      <span>base: <b style="color:var(--fg)">${base} Gwei</b></span>
+      <span>next: <b style="color:var(--yellow)">${next} Gwei</b></span>
+      <span>${dirIcon} <b style="color:${dirCol}">${dir}</b></span>
+      <span>z: <b style="color:var(--fg)">${zs}</b></span>
     </div>
-    ${domBar}
-    <div style="font-size:10px;color:var(--muted);display:flex;gap:12px;margin-bottom:4px">
-      <span>ETH <b style="color:#627EEA">${ethDom}%</b></span>
-      <span>Alts <b style="color:var(--muted)">${altsDom}%</b></span>
+    <div style="font-size:10px;color:var(--muted);display:flex;gap:8px;margin-bottom:4px">
+      <span>slow <b style="color:var(--green)">${tSlow}</b> <span style="color:var(--muted)">($${uSlow})</span></span>
+      <span>std <b style="color:var(--yellow)">${tStd}</b> <span style="color:var(--muted)">($${uStd})</span></span>
+      <span>fast <b style="color:var(--red)">${tFast}</b> <span style="color:var(--muted)">($${uFast})</span></span>
     </div>
-    <div style="font-size:10px;color:var(--muted);display:flex;gap:12px;margin-bottom:4px">
-      <span>BTC idx <b style="color:var(--green)">${btcIdx}</b></span>
-      <span>Alt idx <b style="color:var(--yellow)">${altIdx}</b></span>
-      <span>corr <b style="color:var(--fg)">${corr}</b></span>
+    <div style="font-size:10px;color:var(--muted);margin-bottom:4px">
+      priority p10/p50/p90: <b style="color:var(--fg)">${p10} / ${p50} / ${p90} Gwei</b>
     </div>
     ${sparkSvg}
     ${data.description ? `<div style="font-size:10px;color:var(--muted)">${data.description}</div>` : ''}`;
