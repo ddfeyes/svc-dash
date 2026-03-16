@@ -5727,212 +5727,318 @@ async def compute_options_skew(
     }
 
 
-# ── Perpetual Basis Tracker ───────────────────────────────────────────────────
+# ── Fear & Greed Composite Index ──────────────────────────────────────────────
 
-_PB_CARRY_THRESHOLD: float = 0.1   # % basis below which signal is neutral
-_PB_CARRY_SCALE: float = 2.0       # % basis at which strength saturates (~71% at 5%)
-_PB_FUNDING_INTERVAL_HOURS: float = 8.0  # standard perp funding interval
-_PB_HISTORY_LIMIT: int = 48        # max history points to return
+# Signal weights — must sum to 1.0
+_FG_WEIGHTS: dict = {
+    "funding":        0.20,
+    "oi_momentum":    0.15,
+    "price_deviation": 0.20,
+    "volatility":     0.15,
+    "taker_pressure": 0.20,
+    "liquidation":    0.10,
+}
 
+# Funding rate ±% that maps to score 0 / 100
+_FG_FUNDING_SCALE: float = 0.05   # ±5% funding → full fear/greed
 
-def _pb_basis_pct(perp_price: float, spot_price: float) -> float:
-    """Return basis as % of spot: (perp - spot) / spot * 100.
-    Returns 0.0 if spot_price is zero or None.
-    """
-    if not spot_price:
-        return 0.0
-    return round((perp_price - spot_price) / spot_price * 100.0, 6)
+# OI % change that maps to score 0 / 100
+_FG_OI_SCALE: float = 20.0        # ±20% OI change → full fear/greed
 
+# Price deviation % that maps to score 0 / 100
+_FG_PRICE_DEV_SCALE: float = 10.0  # ±10% from SMA → full fear/greed
 
-def _pb_annualized_from_price(
-    basis_pct: float, funding_interval_hours: float = _PB_FUNDING_INTERVAL_HOURS
-) -> float:
-    """Annualise a per-interval basis % to an annual rate.
+# Volatility regime → score mapping
+_FG_VOL_SCORES: dict = {
+    "low":     70.0,   # low vol = complacency = mild greed
+    "mid":     50.0,
+    "high":    30.0,
+    "extreme": 15.0,
+}
 
-    annualized = basis_pct × (365 × 24 / funding_interval_hours)
-    """
-    if funding_interval_hours <= 0:
-        return 0.0
-    return round(basis_pct * 365.0 * 24.0 / funding_interval_hours, 4)
-
-
-def _pb_funding_annualized(avg_rate_8h: float) -> float:
-    """Convert an 8-hour funding rate to annualized % return.
-
-    annualized_pct = rate × 3 payments/day × 365 days × 100
-    """
-    return round(avg_rate_8h * 3.0 * 365.0 * 100.0, 6)
+# Liquidation count → score (exponential decay towards 0)
+_FG_LIQ_SCALE: float = 10.0       # 10 liquidations → score ≈ 28
 
 
-def _pb_carry_signal(
-    basis_pct: float, threshold: float = _PB_CARRY_THRESHOLD
-) -> str:
-    """Classify basis into carry signal.
-
-    basis > +threshold  → positive_carry  (perp > spot: short perp / long spot)
-    basis < -threshold  → negative_carry  (perp < spot: long perp / short spot)
-    |basis| <= threshold → neutral
-    """
-    if basis_pct >= threshold:
-        return "positive_carry"
-    if basis_pct <= -threshold:
-        return "negative_carry"
-    return "neutral"
+def _fg_clamp(v: float, lo: float, hi: float) -> float:
+    """Clamp v to [lo, hi]."""
+    return max(lo, min(hi, v))
 
 
-def _pb_carry_strength(basis_pct: float) -> float:
-    """Return 0-100 carry strength score based on basis magnitude.
-
-    Uses a logistic-style scaling: strength = 100 × |basis| / (|basis| + scale)
-    """
-    import math
-    abs_basis = abs(basis_pct)
-    # Hyperbolic scaling: saturates at 100 as basis → ∞
-    score = 100.0 * abs_basis / (abs_basis + _PB_CARRY_SCALE)
-    return round(max(0.0, min(100.0, score)), 2)
+def _fg_normalize(v: float, lo: float, hi: float) -> float:
+    """Map v from [lo, hi] to [0, 100], clamped."""
+    if lo == hi:
+        return 50.0
+    return _fg_clamp((v - lo) / (hi - lo) * 100.0, 0.0, 100.0)
 
 
-def _pb_carry_action(carry_signal: str) -> str:
-    """Return trade-action recommendation for a carry signal."""
+def _fg_label(score: float) -> str:
+    """Return sentiment label from composite score."""
+    if score <= 20:
+        return "Extreme Fear"
+    if score <= 40:
+        return "Fear"
+    if score < 60:
+        return "Neutral"
+    if score < 80:
+        return "Greed"
+    return "Extreme Greed"
+
+
+def _fg_label_color(label: str) -> str:
+    """Return CSS color variable string for a sentiment label."""
     return {
-        "positive_carry": "short_perp_long_spot",
-        "negative_carry": "long_perp_short_spot",
-        "neutral":        "no_trade",
-    }.get(carry_signal, "no_trade")
+        "Extreme Fear":  "#ef4444",
+        "Fear":          "#f97316",
+        "Neutral":       "#6b7280",
+        "Greed":         "#22c55e",
+        "Extreme Greed": "#16a34a",
+    }.get(label, "#6b7280")
 
 
-def _pb_basis_zscore(current_basis: float, history: list) -> float:
-    """Compute z-score of current basis vs historical basis_pct values.
-
-    Returns 0.0 for empty / single-point history or zero standard deviation.
+def _fg_funding_score(avg_rate: float) -> float:
+    """Map average funding rate to 0-100 score.
+    Zero rate → 50; positive (longs pay) → greed (>50); negative → fear (<50).
     """
-    if len(history) < 2:
-        return 0.0
-    values = [h["basis_pct"] for h in history if "basis_pct" in h]
-    if len(values) < 2:
-        return 0.0
-    mean = sum(values) / len(values)
-    variance = sum((v - mean) ** 2 for v in values) / len(values)
-    std = variance ** 0.5
-    if std < 1e-10:
-        return 0.0
-    return round((current_basis - mean) / std, 4)
+    return _fg_normalize(avg_rate, -_FG_FUNDING_SCALE, _FG_FUNDING_SCALE)
 
 
-async def compute_perpetual_basis(
+def _fg_oi_momentum_score(oi_change_pct: float) -> float:
+    """Map OI % change to 0-100. Rising OI → greed; falling → fear."""
+    return _fg_normalize(oi_change_pct, -_FG_OI_SCALE, _FG_OI_SCALE)
+
+
+def _fg_price_deviation_score(deviation_pct: float) -> float:
+    """Map price-vs-SMA deviation % to 0-100. Above SMA → greed; below → fear."""
+    return _fg_normalize(deviation_pct, -_FG_PRICE_DEV_SCALE, _FG_PRICE_DEV_SCALE)
+
+
+def _fg_volatility_score(regime: str) -> float:
+    """Map volatility regime label to 0-100. Low vol → greed; extreme → fear."""
+    return float(_FG_VOL_SCORES.get(regime, 50.0))
+
+
+def _fg_taker_score(buy_ratio: float) -> float:
+    """Map taker buy ratio [0,1] to 0-100. All buys → 100; all sells → 0."""
+    return _fg_clamp(buy_ratio * 100.0, 0.0, 100.0)
+
+
+def _fg_liquidation_score(liq_count: int) -> float:
+    """Map recent liquidation count to 0-100. More liquidations → fear (lower score)."""
+    import math
+    if liq_count <= 0:
+        return 70.0
+    # Exponential decay: score = 70 * exp(-liq_count / scale)
+    score = 70.0 * math.exp(-liq_count / _FG_LIQ_SCALE)
+    return _fg_clamp(round(score, 2), 0.0, 100.0)
+
+
+def _fg_composite(scores: list, weights: list) -> float:
+    """Weighted average of signal scores, result clamped to [0, 100]."""
+    if not scores or not weights:
+        return 50.0
+    total = sum(s * w for s, w in zip(scores, weights))
+    return _fg_clamp(round(total, 2), 0.0, 100.0)
+
+
+async def compute_fear_greed(
     symbol: str,
     window_seconds: int = 3600,
 ) -> dict:
-    """Perpetual futures basis tracker: spot vs perp spread, annualized carry, signal.
+    """Composite Fear & Greed Index from 6 on-chain / market signals.
 
-    Spot price is fetched from Binance REST API when available; falls back to
-    funding-rate-adjusted perp price estimate if the token has no Binance spot market.
-
-    Returns:
-      perp_price, spot_price, basis_pct, annualized_basis_pct,
-      carry_signal, carry_strength, carry_action, basis_zscore,
-      funding_rate, funding_annualized_pct, history[], description
+    Returns score 0-100, label, per-signal breakdown, historical snapshots, trend.
     """
-    import aiohttp
+    import math
     from storage import get_recent_trades, get_funding_history
 
     now = time.time()
     since = now - window_seconds
+    prev_since = now - window_seconds * 2
 
-    trades_task    = get_recent_trades(symbol=symbol, since=since, limit=50_000)
-    funding_task   = get_funding_history(limit=_PB_HISTORY_LIMIT, symbol=symbol, since=since - 86400)
+    # ── Fetch raw data ──────────────────────────────────────────────────────
+    trades_task = get_recent_trades(symbol=symbol, since=since, limit=50_000)
+    prev_trades_task = get_recent_trades(symbol=symbol, since=prev_since, limit=50_000)
+    funding_task = get_funding_history(limit=8, symbol=symbol)
 
-    trades, funding_rows = await asyncio.gather(trades_task, funding_task)
-
-    # ── Perp price from latest trade ─────────────────────────────────────────
-    perp_price: float = 0.0
-    if trades:
-        perp_price = float(trades[0]["price"])
-
-    # ── Spot price from Binance REST ─────────────────────────────────────────
-    spot_price: float | None = None
-    binance_sym = symbol.upper()
-    try:
-        async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=3)
-        ) as session:
-            url = f"https://api.binance.com/api/v3/ticker/price?symbol={binance_sym}"
-            async with session.get(url) as resp:
-                if resp.status == 200:
-                    j = await resp.json()
-                    spot_price = float(j.get("price", 0) or 0) or None
-    except Exception:
-        spot_price = None
-
-    # ── Funding rate ─────────────────────────────────────────────────────────
-    # Average the most recent rates across exchanges
-    recent_funding: dict = {}
-    for row in reversed(funding_rows or []):
-        ex = row.get("exchange", "")
-        if ex and ex not in recent_funding:
-            recent_funding[ex] = row.get("rate", 0.0)
-    avg_funding = (
-        sum(recent_funding.values()) / len(recent_funding) if recent_funding else 0.0
+    trades, prev_trades, funding_rows = await asyncio.gather(
+        trades_task, prev_trades_task, funding_task
     )
 
-    # ── Basis ────────────────────────────────────────────────────────────────
-    # If no spot price, estimate from perp price adjusted by funding premium
-    effective_spot = spot_price
-    if effective_spot is None and perp_price > 0:
-        # spot ≈ perp / (1 + avg_funding)
-        effective_spot = perp_price / (1.0 + avg_funding) if (1.0 + avg_funding) != 0 else perp_price
-
-    basis_pct = _pb_basis_pct(perp_price, effective_spot or 0.0)
-    annualized = _pb_annualized_from_price(basis_pct)
-    funding_ann = _pb_funding_annualized(avg_funding)
-
-    # ── History from funding rows ─────────────────────────────────────────────
-    # Build history: each funding row gives a (ts, funding_rate) data point.
-    # Basis proxy = funding premium accumulated; use funding rate * scaling.
-    history_map: dict = {}
+    # ── 1. Funding rate sentiment ────────────────────────────────────────────
+    funding_rates: dict = {}
     for row in (funding_rows or []):
-        ts_bucket = round(row["ts"] / 3600) * 3600  # 1h buckets
-        if ts_bucket not in history_map:
-            history_map[ts_bucket] = {"rates": [], "ts": ts_bucket}
-        history_map[ts_bucket]["rates"].append(row.get("rate", 0.0))
+        ex = row.get("exchange", "")
+        if ex not in funding_rates:
+            funding_rates[ex] = row.get("rate", 0.0)
+    avg_funding = (
+        sum(funding_rates.values()) / len(funding_rates) if funding_rates else 0.0
+    )
+    funding_score = _fg_funding_score(avg_funding)
 
-    history: list = []
-    for ts_b, v in sorted(history_map.items()):
-        avg_r = sum(v["rates"]) / len(v["rates"]) if v["rates"] else 0.0
-        # basis proxy: annualised funding as instantaneous basis signal
-        h_basis = round(avg_r * 100.0, 6)
-        history.append({"ts": float(ts_b), "basis_pct": h_basis, "funding_rate": round(avg_r, 8)})
+    # ── 2. OI momentum ──────────────────────────────────────────────────────
+    # Proxy: compare total qty in recent half vs earlier half of window
+    mid_ts = since + (now - since) / 2
+    early_qty = sum(t["qty"] for t in trades if t["ts"] < mid_ts)
+    late_qty  = sum(t["qty"] for t in trades if t["ts"] >= mid_ts)
+    oi_change_pct = 0.0
+    if early_qty > 0:
+        oi_change_pct = (late_qty - early_qty) / early_qty * 100.0
+    oi_score = _fg_oi_momentum_score(oi_change_pct)
 
-    # Add current point
-    history.append({"ts": round(now, 3), "basis_pct": basis_pct, "funding_rate": round(avg_funding, 8)})
-    history = sorted(history, key=lambda x: x["ts"])[-_PB_HISTORY_LIMIT:]
+    # ── 3. Price vs SMA deviation ────────────────────────────────────────────
+    prices = [t["price"] for t in trades if t.get("price", 0) > 0]
+    sma = sum(prices) / len(prices) if prices else 0.0
+    latest_price = prices[-1] if prices else 0.0  # trades are DESC order
+    # trades may be DESC; get last-inserted price
+    if trades:
+        latest_price = trades[0]["price"]
+    dev_pct = 0.0
+    if sma > 0:
+        dev_pct = (latest_price - sma) / sma * 100.0
+    price_dev_score = _fg_price_deviation_score(dev_pct)
 
-    # ── Signals ───────────────────────────────────────────────────────────────
-    carry_signal   = _pb_carry_signal(basis_pct)
-    carry_strength = _pb_carry_strength(basis_pct)
-    carry_action   = _pb_carry_action(carry_signal)
-    basis_zscore   = _pb_basis_zscore(basis_pct, history[:-1])  # exclude current point
+    # ── 4. Volatility regime ─────────────────────────────────────────────────
+    # Compute intra-window realized vol percentile as proxy for regime
+    regime = "mid"
+    if len(prices) >= 20:
+        import statistics
+        log_rets = [
+            math.log(prices[i] / prices[i + 1])
+            for i in range(min(len(prices) - 1, 100))
+            if prices[i] > 0 and prices[i + 1] > 0
+        ]
+        if log_rets:
+            realized_vol = statistics.stdev(log_rets) * (252 * 24 * 60) ** 0.5 * 100
+            if realized_vol < 50:
+                regime = "low"
+            elif realized_vol < 150:
+                regime = "mid"
+            elif realized_vol < 300:
+                regime = "high"
+            else:
+                regime = "extreme"
+    vol_score = _fg_volatility_score(regime)
+
+    # ── 5. Net taker buy pressure ────────────────────────────────────────────
+    buy_qty  = sum(t["qty"] for t in trades if t.get("side", "") in ("buy", "Buy"))
+    sell_qty = sum(t["qty"] for t in trades if t.get("side", "") not in ("buy", "Buy"))
+    total_qty = buy_qty + sell_qty
+    buy_ratio = buy_qty / total_qty if total_qty > 0 else 0.5
+    taker_score = _fg_taker_score(buy_ratio)
+
+    # ── 6. Liquidation pressure ──────────────────────────────────────────────
+    # Proxy: count trades with high qty variance (sharp single-candle events)
+    liq_count = 0
+    if prices:
+        median_qty = sorted(t["qty"] for t in trades)[len(trades) // 2]
+        liq_count = sum(
+            1 for t in trades if t["qty"] > median_qty * 10
+        )
+    liq_score = _fg_liquidation_score(liq_count)
+
+    # ── Composite score ──────────────────────────────────────────────────────
+    signal_keys = list(_FG_WEIGHTS.keys())
+    signal_scores_list = [
+        funding_score, oi_score, price_dev_score,
+        vol_score, taker_score, liq_score,
+    ]
+    weights_list = [_FG_WEIGHTS[k] for k in signal_keys]
+    composite = _fg_composite(signal_scores_list, weights_list)
+    label = _fg_label(composite)
+
+    # ── Previous period composite ────────────────────────────────────────────
+    prev_prices = [t["price"] for t in prev_trades if t.get("price", 0) > 0]
+    prev_sma = sum(prev_prices) / len(prev_prices) if prev_prices else sma
+    prev_latest = prev_trades[0]["price"] if prev_trades else latest_price
+    prev_dev_pct = (prev_latest - prev_sma) / prev_sma * 100.0 if prev_sma > 0 else 0.0
+    prev_buy_qty  = sum(t["qty"] for t in prev_trades if t.get("side", "") in ("buy", "Buy"))
+    prev_sell_qty = sum(t["qty"] for t in prev_trades if t.get("side", "") not in ("buy", "Buy"))
+    prev_total_qty = prev_buy_qty + prev_sell_qty
+    prev_buy_ratio = prev_buy_qty / prev_total_qty if prev_total_qty > 0 else 0.5
+    prev_composite = _fg_composite(
+        [
+            _fg_funding_score(avg_funding),
+            _fg_oi_momentum_score(0.0),
+            _fg_price_deviation_score(prev_dev_pct),
+            vol_score,
+            _fg_taker_score(prev_buy_ratio),
+            _fg_liquidation_score(0),
+        ],
+        weights_list,
+    )
+    label_prev = _fg_label(prev_composite)
+    delta = round(composite - prev_composite, 2)
+    trend = "rising" if delta > 2 else ("falling" if delta < -2 else "stable")
+
+    # ── History snapshots ────────────────────────────────────────────────────
+    history = [
+        {"ts": round(prev_since + window_seconds, 3), "score": prev_composite, "label": label_prev},
+        {"ts": round(now, 3), "score": composite, "label": label},
+    ]
 
     # ── Description ──────────────────────────────────────────────────────────
-    if carry_signal == "positive_carry":
-        desc = f"Positive carry: perp trades above spot — {carry_action.replace('_', ' ')}"
-    elif carry_signal == "negative_carry":
-        desc = f"Negative carry: perp trades below spot — {carry_action.replace('_', ' ')}"
-    else:
-        desc = "Neutral basis: no significant spot/perp divergence"
+    desc_parts = []
+    if funding_score > 65:
+        desc_parts.append("positive funding")
+    elif funding_score < 35:
+        desc_parts.append("negative funding")
+    if taker_score > 65:
+        desc_parts.append("strong buy pressure")
+    elif taker_score < 35:
+        desc_parts.append("strong sell pressure")
+    if vol_score < 35:
+        desc_parts.append("high volatility fear")
+    if liq_count > 5:
+        desc_parts.append("liquidation pressure")
+    desc_suffix = ", ".join(desc_parts) if desc_parts else "mixed signals"
+    description = f"{label}: {desc_suffix}"
 
     return {
         "symbol": symbol,
-        "perp_price": round(perp_price, 8),
-        "spot_price": round(spot_price, 8) if spot_price is not None else None,
-        "basis_pct": basis_pct,
-        "annualized_basis_pct": annualized,
-        "carry_signal": carry_signal,
-        "carry_strength": carry_strength,
-        "carry_action": carry_action,
-        "basis_zscore": basis_zscore,
-        "funding_rate": round(avg_funding, 8),
-        "funding_annualized_pct": funding_ann,
+        "score": composite,
+        "label": label,
+        "label_prev": label_prev,
+        "delta": delta,
+        "trend": trend,
+        "signals": {
+            "funding": {
+                "score": funding_score,
+                "weight": _FG_WEIGHTS["funding"],
+                "raw": round(avg_funding, 6),
+                "label": _fg_label(funding_score),
+            },
+            "oi_momentum": {
+                "score": oi_score,
+                "weight": _FG_WEIGHTS["oi_momentum"],
+                "raw": round(oi_change_pct, 4),
+                "label": _fg_label(oi_score),
+            },
+            "price_deviation": {
+                "score": price_dev_score,
+                "weight": _FG_WEIGHTS["price_deviation"],
+                "raw": round(dev_pct, 4),
+                "label": _fg_label(price_dev_score),
+            },
+            "volatility": {
+                "score": vol_score,
+                "weight": _FG_WEIGHTS["volatility"],
+                "raw": regime,
+                "label": _fg_label(vol_score),
+            },
+            "taker_pressure": {
+                "score": taker_score,
+                "weight": _FG_WEIGHTS["taker_pressure"],
+                "raw": round(buy_ratio, 4),
+                "label": _fg_label(taker_score),
+            },
+            "liquidation": {
+                "score": liq_score,
+                "weight": _FG_WEIGHTS["liquidation"],
+                "raw": liq_count,
+                "label": _fg_label(liq_score),
+            },
+        },
         "history": history,
-        "description": desc,
+        "description": description,
     }

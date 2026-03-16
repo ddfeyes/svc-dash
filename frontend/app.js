@@ -23385,8 +23385,8 @@ async function refresh() {
     await Promise.all([safe(renderMarketMicrostructure)]);
     // Batch 16: options skew
     await Promise.all([safe(renderOptionsSkew)]);
-    // Batch 17: perpetual basis
-    await Promise.all([safe(renderPerpetualBasis)]);
+    // Batch 17: fear & greed composite
+    await Promise.all([safe(renderFearGreed)]);
   } finally {
     _refreshRunning = false;
   }
@@ -23451,82 +23451,90 @@ async function renderOptionsSkew() {
     ${data.description ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${data.description}</div>` : ''}`;
 }
 
-// ── Perpetual Basis Tracker ───────────────────────────────────────────────────
-async function renderPerpetualBasis() {
-  const sym   = encodeURIComponent(activeSymbol);
-  const data  = await apiFetch(`/perpetual-basis?symbol=${sym}`);
-  const el    = document.getElementById('perpetual-basis-content');
-  const badge = document.getElementById('perpetual-basis-badge');
+// ── Fear & Greed Composite ────────────────────────────────────────────────────
+async function renderFearGreed() {
+  const sym  = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/fear-greed?symbol=${sym}`);
+  const el   = document.getElementById('fear-greed-content');
+  const badge = document.getElementById('fear-greed-badge');
   if (!data || !el) return;
 
-  const signal   = data.carry_signal ?? 'neutral';
-  const strength = data.carry_strength ?? 0;
-  const basisPct = data.basis_pct ?? 0;
-  const annPct   = data.annualized_basis_pct ?? 0;
-  const fundAnn  = data.funding_annualized_pct ?? 0;
-  const zscore   = data.basis_zscore ?? 0;
-  const action   = (data.carry_action ?? 'no_trade').replace(/_/g, ' ');
+  const score  = data.score ?? 50;
+  const label  = data.label ?? 'Neutral';
+  const delta  = data.delta ?? 0;
+  const trend  = data.trend ?? 'stable';
+  const sigs   = data.signals || {};
 
-  const sigCol = signal === 'positive_carry' ? 'var(--green)'
-    : signal === 'negative_carry' ? 'var(--red)' : 'var(--muted)';
-  const sigLabel = signal === 'positive_carry' ? 'POS CARRY'
-    : signal === 'negative_carry' ? 'NEG CARRY' : 'NEUTRAL';
+  // Label color
+  const labelColors = {
+    'Extreme Fear':  '#ef4444',
+    'Fear':          '#f97316',
+    'Neutral':       '#6b7280',
+    'Greed':         '#22c55e',
+    'Extreme Greed': '#16a34a',
+  };
+  const col = labelColors[label] || '#6b7280';
 
   if (badge) {
-    badge.textContent = sigLabel;
+    badge.textContent = label.toUpperCase();
     badge.style.display = 'inline-block';
-    badge.style.color = sigCol;
+    badge.style.color = col;
   }
 
-  const fmtP = v => v != null ? v.toFixed(6) : '—';
-  const fmtPct = v => (v >= 0 ? '+' : '') + v.toFixed(4) + '%';
-  const fmtAnn = v => (v >= 0 ? '+' : '') + v.toFixed(2) + '%/yr';
-
-  // Carry strength bar
-  const strengthBar = `
-    <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
-      <div style="flex:1;height:5px;background:var(--border);border-radius:3px">
-        <div style="width:${strength.toFixed(0)}%;height:100%;background:${sigCol};border-radius:3px"></div>
-      </div>
-      <span style="font-size:9px;color:var(--muted);width:28px;text-align:right">${strength.toFixed(0)}</span>
+  // Gauge bar (0-100 → red to green)
+  const gaugeCol = score < 25 ? '#ef4444' : score < 45 ? '#f97316' : score < 55 ? '#6b7280' : score < 75 ? '#22c55e' : '#16a34a';
+  const gaugeBar = `
+    <div style="position:relative;height:8px;background:var(--border);border-radius:4px;margin-bottom:6px">
+      <div style="width:${score.toFixed(1)}%;height:100%;background:${gaugeCol};border-radius:4px;transition:width 0.3s"></div>
+      <div style="position:absolute;top:50%;left:${score.toFixed(1)}%;transform:translate(-50%,-50%);width:10px;height:10px;background:var(--bg);border:2px solid ${gaugeCol};border-radius:50%"></div>
     </div>`;
 
-  // History sparkline (SVG mini line)
-  const hist = (data.history || []).slice(-20);
-  let sparkline = '';
-  if (hist.length >= 2) {
-    const bVals = hist.map(h => h.basis_pct);
-    const bMin = Math.min(...bVals), bMax = Math.max(...bVals);
-    const bRange = bMax - bMin || 0.001;
-    const W = 120, H = 24;
-    const pts = hist.map((h, i) => {
-      const x = (i / (hist.length - 1)) * W;
-      const y = H - ((h.basis_pct - bMin) / bRange) * H;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    }).join(' ');
-    sparkline = `<svg width="${W}" height="${H}" style="display:block;margin-bottom:4px">
-      <polyline points="${pts}" fill="none" stroke="${sigCol}" stroke-width="1.5"/>
-      <line x1="0" y1="${(H - (0 - bMin) / bRange * H).toFixed(1)}" x2="${W}" y2="${(H - (0 - bMin) / bRange * H).toFixed(1)}" stroke="var(--muted)" stroke-width="0.5" stroke-dasharray="2,2"/>
-    </svg>`;
-  }
+  const trendArrow = trend === 'rising' ? '↑' : trend === 'falling' ? '↓' : '→';
+  const trendCol   = trend === 'rising' ? 'var(--green)' : trend === 'falling' ? 'var(--red)' : 'var(--muted)';
+
+  // Signal breakdown rows
+  const sigOrder = ['funding', 'oi_momentum', 'price_deviation', 'volatility', 'taker_pressure', 'liquidation'];
+  const sigNames = {
+    funding: 'Funding', oi_momentum: 'OI Mom', price_deviation: 'Price Dev',
+    volatility: 'Volatility', taker_pressure: 'Taker', liquidation: 'Liq',
+  };
+  const sigRows = sigOrder.map(k => {
+    const s = sigs[k];
+    if (!s) return '';
+    const sc = s.score ?? 50;
+    const barCol = sc < 40 ? 'var(--red)' : sc > 60 ? 'var(--green)' : 'var(--muted)';
+    const wPct = (s.weight * 100).toFixed(0);
+    return `<tr>
+      <td style="font-size:9px;color:var(--muted);padding-right:6px;white-space:nowrap">${sigNames[k]}</td>
+      <td style="padding-right:4px;width:60px">
+        <div style="height:4px;background:var(--border);border-radius:2px">
+          <div style="width:${sc.toFixed(0)}%;height:100%;background:${barCol};border-radius:2px"></div>
+        </div>
+      </td>
+      <td style="font-size:9px;color:${barCol};text-align:right;padding-right:4px;font-weight:600">${sc.toFixed(0)}</td>
+      <td style="font-size:9px;color:var(--muted);text-align:right">${wPct}%</td>
+    </tr>`;
+  }).join('');
 
   el.innerHTML = `
-    <div style="font-size:10px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:4px">
-      <span>perp: <b style="color:var(--fg)">${fmtP(data.perp_price)}</b></span>
-      <span>spot: <b style="color:var(--fg)">${data.spot_price != null ? fmtP(data.spot_price) : '—'}</b></span>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+      <span style="font-size:22px;font-weight:700;color:${col}">${score.toFixed(0)}</span>
+      <div>
+        <div style="font-size:12px;font-weight:600;color:${col}">${label}</div>
+        <div style="font-size:10px;color:${trendCol}">${trendArrow} ${delta >= 0 ? '+' : ''}${delta.toFixed(1)} vs prev</div>
+      </div>
     </div>
-    <div style="font-size:10px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:4px">
-      <span>basis: <b style="color:${sigCol}">${fmtPct(basisPct)}</b></span>
-      <span>ann: <b style="color:${sigCol}">${fmtAnn(annPct)}</b></span>
-      <span>z: <b style="color:var(--fg)">${zscore.toFixed(2)}</b></span>
-    </div>
-    <div style="font-size:10px;color:var(--muted);margin-bottom:4px">
-      funding ann: <b style="color:var(--fg)">${fmtAnn(fundAnn)}</b>
-      &nbsp;·&nbsp; action: <b style="color:${sigCol}">${action}</b>
-    </div>
-    ${strengthBar}
-    ${sparkline}
-    ${data.description ? `<div style="font-size:10px;color:var(--muted)">${data.description}</div>` : ''}`;
+    ${gaugeBar}
+    <table style="border-collapse:collapse;width:100%;margin-top:2px">
+      <thead><tr>
+        <th style="font-size:9px;color:var(--muted);text-align:left">signal</th>
+        <th style="font-size:9px;color:var(--muted);padding-right:4px"></th>
+        <th style="font-size:9px;color:var(--muted);text-align:right;padding-right:4px">score</th>
+        <th style="font-size:9px;color:var(--muted);text-align:right">wt</th>
+      </tr></thead>
+      <tbody>${sigRows}</tbody>
+    </table>
+    ${data.description ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${data.description}</div>` : ''}`;
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
