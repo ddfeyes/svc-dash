@@ -2835,8 +2835,8 @@ async function refresh() {
     await Promise.all([safe(renderMacroLiquidity)]);
     // Batch 24: token velocity + NVT
     await Promise.all([safe(renderTokenVelocityNvt)]);
-    // Batch 24: gas fee predictor (Ethereum EIP-1559)
-    await Promise.all([safe(renderGasFeePredictor)]);
+    // Batch 24: validator activity (Ethereum beacon chain)
+    await Promise.all([safe(renderValidatorActivity)]);
   } finally {
     _refreshRunning = false;
   }
@@ -3384,73 +3384,73 @@ async function renderHolderDistribution() {
   `;
 }
 
-// ── Gas Fee Predictor ─────────────────────────────────────────────────────────
-async function renderGasFeePredictor() {
-  const data  = await apiFetch('/gas-fee-predictor');
-  const el    = document.getElementById('gas-fee-predictor-content');
-  const badge = document.getElementById('gas-fee-predictor-badge');
+// ── Validator Activity ────────────────────────────────────────────────────────
+async function renderValidatorActivity() {
+  const data  = await apiFetch('/validator-activity');
+  const el    = document.getElementById('validator-activity-content');
+  const badge = document.getElementById('validator-activity-badge');
   if (!el) return;
 
-  const spike  = data.spike?.label ?? 'normal';
-  const zs     = (data.spike?.zscore ?? 0).toFixed(2);
-  const spikeBadgeClass = { spike: 'badge-red', elevated: 'badge-yellow', normal: 'badge-green', low: 'badge-gray' };
+  const health = data.health?.label ?? 'healthy';
+  const healthClass = { healthy: 'badge-green', degraded: 'badge-yellow', unhealthy: 'badge-red' };
 
   if (badge) {
-    badge.textContent   = spike.toUpperCase();
-    badge.className     = 'card-badge ' + (spikeBadgeClass[spike] ?? 'badge-gray');
+    badge.textContent   = health.toUpperCase();
+    badge.className     = 'card-badge ' + (healthClass[health] ?? 'badge-gray');
     badge.style.display = '';
   }
 
-  const base   = (data.current?.base_fee_gwei    ?? 0).toFixed(1);
-  const next   = (data.current?.next_block_gwei  ?? 0).toFixed(1);
-  const tSlow  = (data.current?.total_slow_gwei  ?? 0).toFixed(1);
-  const tStd   = (data.current?.total_std_gwei   ?? 0).toFixed(1);
-  const tFast  = (data.current?.total_fast_gwei  ?? 0).toFixed(1);
-  const uSlow  = (data.current?.total_slow_usd   ?? 0).toFixed(4);
-  const uStd   = (data.current?.total_std_usd    ?? 0).toFixed(4);
-  const uFast  = (data.current?.total_fast_usd   ?? 0).toFixed(4);
-  const dir    = data.trend?.direction ?? 'stable';
-  const dirIcon = dir === 'rising' ? '↑' : dir === 'falling' ? '↓' : '→';
-  const dirCol  = dir === 'rising' ? 'var(--red)' : dir === 'falling' ? 'var(--green)' : 'var(--muted)';
+  const active  = (data.validators?.active ?? 0).toLocaleString();
+  const eff     = (data.attestation?.effectiveness_pct ?? 0).toFixed(1);
+  const effCol  = (data.attestation?.effectiveness_pct ?? 0) >= 95
+    ? 'var(--green)' : (data.attestation?.effectiveness_pct ?? 0) >= 90
+    ? 'var(--yellow)' : 'var(--red)';
+  const apy     = (data.apy?.estimated_pct ?? 0).toFixed(2);
+  const epoch   = (data.attestation?.epoch ?? 0).toLocaleString();
 
-  // Priority fee percentile bar (p10 / p50 / p90)
-  const p10 = (data.current?.priority_slow_gwei ?? 0).toFixed(1);
-  const p50 = (data.current?.priority_std_gwei  ?? 0).toFixed(1);
-  const p90 = (data.current?.priority_fast_gwei ?? 0).toFixed(1);
+  const entry   = (data.queue?.entry_count ?? 0).toLocaleString();
+  const exit    = (data.queue?.exit_count  ?? 0).toLocaleString();
+  const pressure = data.queue?.pressure ?? 'low';
+  const pressCol = { high: 'var(--red)', moderate: 'var(--yellow)', low: 'var(--green)' };
 
-  // 7d sparkline
-  const sp = data.history_7d ?? [];
+  const slashed = data.slashing?.count_30d ?? 0;
+  const slashRate = (data.slashing?.rate_per_1k ?? 0).toFixed(4);
+  const slashCol  = slashed > 50 ? 'var(--red)' : slashed > 10 ? 'var(--yellow)' : 'var(--green)';
+
+  const ch30 = (data.validators?.change_30d_pct ?? 0);
+  const ch30Str = (ch30 >= 0 ? '+' : '') + ch30.toFixed(2) + '%';
+  const ch30Col = ch30 >= 0 ? 'var(--green)' : 'var(--red)';
+
+  // 30d sparkline (active validators)
+  const sp = data.history_30d ?? [];
   let sparkSvg = '';
   if (sp.length >= 2) {
-    const vals = sp.map(p => p.base_fee_gwei);
-    const mas  = sp.map(p => p.ma_gwei);
-    const mn = Math.min(...vals, ...mas) * 0.97;
-    const mx = Math.max(...vals, ...mas) * 1.03;
-    const W = 200, H = 28;
+    const vals = sp.map(p => p.active);
+    const mn = Math.min(...vals) * 0.999;
+    const mx = Math.max(...vals) * 1.001;
+    const W = 200, H = 24;
     const px = (i) => (i / (sp.length - 1)) * W;
     const py = (v) => H - ((v - mn) / (mx - mn || 1)) * H;
-    const fPath = vals.map((v, i) => `${i === 0 ? 'M' : 'L'}${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(' ');
-    const mPath = mas.map((v, i)  => `${i === 0 ? 'M' : 'L'}${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(' ');
+    const path = vals.map((v, i) => `${i === 0 ? 'M' : 'L'}${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(' ');
     sparkSvg = `<svg width="${W}" height="${H}" style="display:block;margin-bottom:4px">
-      <path d="${fPath}" stroke="var(--yellow)" stroke-width="1.2" fill="none" opacity="0.9"/>
-      <path d="${mPath}" stroke="var(--muted)"  stroke-width="1"   fill="none" opacity="0.6" stroke-dasharray="3,2"/>
+      <path d="${path}" stroke="var(--green)" stroke-width="1.2" fill="none" opacity="0.85"/>
     </svg>`;
   }
 
   el.innerHTML = `
     <div style="font-size:10px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:4px">
-      <span>base: <b style="color:var(--fg)">${base} Gwei</b></span>
-      <span>next: <b style="color:var(--yellow)">${next} Gwei</b></span>
-      <span>${dirIcon} <b style="color:${dirCol}">${dir}</b></span>
-      <span>z: <b style="color:var(--fg)">${zs}</b></span>
+      <span>active: <b style="color:var(--fg)">${active}</b> <span style="color:${ch30Col}">${ch30Str} 30d</span></span>
+      <span>epoch: <b style="color:var(--fg)">${epoch}</b></span>
     </div>
-    <div style="font-size:10px;color:var(--muted);display:flex;gap:8px;margin-bottom:4px">
-      <span>slow <b style="color:var(--green)">${tSlow}</b> <span style="color:var(--muted)">($${uSlow})</span></span>
-      <span>std <b style="color:var(--yellow)">${tStd}</b> <span style="color:var(--muted)">($${uStd})</span></span>
-      <span>fast <b style="color:var(--red)">${tFast}</b> <span style="color:var(--muted)">($${uFast})</span></span>
+    <div style="font-size:10px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:4px">
+      <span>attest: <b style="color:${effCol}">${eff}%</b></span>
+      <span>APY: <b style="color:var(--green)">${apy}%</b></span>
+    </div>
+    <div style="font-size:10px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:4px">
+      <span>queue in/out: <b style="color:${pressCol[pressure] ?? 'var(--fg)'}">+${entry} / -${exit}</b> <span>(${pressure})</span></span>
     </div>
     <div style="font-size:10px;color:var(--muted);margin-bottom:4px">
-      priority p10/p50/p90: <b style="color:var(--fg)">${p10} / ${p50} / ${p90} Gwei</b>
+      slashed 30d: <b style="color:${slashCol}">${slashed}</b> <span style="color:var(--muted)">(${slashRate}/1k)</span>
     </div>
     ${sparkSvg}
     ${data.description ? `<div style="font-size:10px;color:var(--muted)">${data.description}</div>` : ''}`;

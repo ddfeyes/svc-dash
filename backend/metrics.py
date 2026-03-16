@@ -6243,6 +6243,259 @@ async def compute_macro_liquidity_indicator() -> dict:
     }
 
 
+# ============================================================
+# Validator Activity helpers  (_va_)
+# ============================================================
+
+def _va_effectiveness_rate(attested: int, total: int) -> float:
+    """Attestation effectiveness: attested / total * 100, clamped [0, 100]."""
+    if total <= 0:
+        return 0.0
+    return float(min(100.0, max(0.0, attested / total * 100.0)))
+
+
+def _va_queue_pressure(entry_count: int, exit_count: int) -> str:
+    """
+    Classify validator queue pressure.
+
+    high     — total queue > 10_000
+    moderate — total queue 1_000–10_000
+    low      — total queue < 1_000
+    """
+    total = entry_count + exit_count
+    if total >= 10_000:
+        return "high"
+    if total >= 1_000:
+        return "moderate"
+    return "low"
+
+
+def _va_slashing_rate(slashed_count: int, active_validators: int) -> float:
+    """Slashing rate per 1,000 active validators over the measured period."""
+    if active_validators <= 0:
+        return 0.0
+    return float(slashed_count / active_validators * 1_000)
+
+
+def _va_staking_apy(total_staked_eth: float) -> float:
+    """
+    Estimate annualised staking APY.
+
+    Based on Ethereum issuance formula:
+      base_reward_factor = 64
+      annual_rewards ≈ base_reward_factor * sqrt(total_staked_eth) * slots_per_year / 32
+      APY = annual_rewards / total_staked_eth * 100
+
+    Uses simplified constant-factor model for mock accuracy.
+    """
+    if total_staked_eth <= 0:
+        return 0.0
+    import math
+    # Empirical constant derived from mainnet: ~3.85% APY at 32M ETH staked
+    # APY ∝ 1/sqrt(staked), calibrated so APY(32M) ≈ 3.85%
+    K = 3.85 * math.sqrt(32_000_000.0)
+    return float(min(20.0, max(0.0, K / math.sqrt(total_staked_eth))))
+
+
+def _va_validator_trend(counts: list) -> str:
+    """
+    Classify validator count trend via linear regression slope.
+
+    growing   — slope > 500/period
+    shrinking — slope < -500/period
+    stable    — otherwise
+    """
+    n = len(counts)
+    if n < 2:
+        return "stable"
+    xs = list(range(n))
+    mx = sum(xs) / n
+    my = sum(counts) / n
+    num = sum((x - mx) * (y - my) for x, y in zip(xs, counts))
+    den = sum((x - mx) ** 2 for x in xs)
+    if den == 0:
+        return "stable"
+    slope = num / den
+    if slope > 500:
+        return "growing"
+    if slope < -500:
+        return "shrinking"
+    return "stable"
+
+
+def _va_health_label(effectiveness_pct: float, slashed_30d: int) -> str:
+    """
+    Overall validator health.
+
+    healthy   — effectiveness >= 95% AND slashed_30d < 50
+    degraded  — effectiveness >= 90% OR slashed_30d < 100
+    unhealthy — otherwise
+    """
+    if effectiveness_pct >= 95.0 and slashed_30d < 50:
+        return "healthy"
+    if effectiveness_pct >= 90.0 and slashed_30d < 100:
+        return "degraded"
+    return "unhealthy"
+
+
+def _va_participation_score(
+    effectiveness_pct: float,
+    queue_total: int,
+    active_validators: int,
+) -> float:
+    """
+    Composite participation score [0, 100].
+
+    Starts from effectiveness, penalised by queue ratio (queue / active).
+    Returns 0 if active_validators is 0.
+    """
+    if active_validators <= 0:
+        return 0.0
+    # Map effectiveness [80, 100] → base score [0, 100] so low eff yields low score
+    base = min(100.0, max(0.0, (effectiveness_pct - 80.0) * 5.0))
+    queue_ratio = queue_total / active_validators
+    penalty = min(20.0, queue_ratio * 100.0)
+    return float(max(0.0, base - penalty))
+
+
+async def compute_validator_activity() -> dict:
+    """
+    Ethereum Validator Activity — active validators, attestation effectiveness,
+    queue size, slashing events, and estimated staking APY.
+
+    Data: beaconcha.in public API (free) or realistic mock fallback.
+    """
+    import httpx
+    import datetime
+    import random
+    import math
+
+    # ── Attempt live data from beaconcha.in ──────────────────────────────────
+    active_validators = 0
+    pending_entry     = 0
+    pending_exit      = 0
+    effectiveness     = 0.0
+    current_epoch     = 0
+    fetch_ok          = False
+
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.get(
+                "https://beaconcha.in/api/v1/epoch/latest",
+                headers={"Accept": "application/json"},
+            )
+            if resp.status_code == 200:
+                d = resp.json().get("data", {})
+                active_validators = int(d.get("validatorscount", 0))
+                pending_entry     = int(d.get("eligibleether", 0)) // 32
+                current_epoch     = int(d.get("epoch", 0))
+                effectiveness     = float(d.get("globalparticipationrate", 0.0)) * 100.0
+                if active_validators > 0:
+                    fetch_ok = True
+    except Exception:
+        pass
+
+    if not fetch_ok:
+        active_validators = 1_023_456
+        pending_entry     = 4_200
+        pending_exit      = 380
+        current_epoch     = 310_450
+        effectiveness     = 96.8
+
+    # ── Simulated data points ────────────────────────────────────────────────
+    random.seed(17)
+    slashed_30d    = random.randint(5, 25)
+    last_slash_days = random.randint(1, 15)
+    total_staked    = active_validators * 32.0   # 32 ETH per validator
+
+    # ── Queue ────────────────────────────────────────────────────────────────
+    queue_pressure = _va_queue_pressure(pending_entry, pending_exit)
+    # churn limit: max 8 activations per epoch (approx)
+    churn_per_epoch = max(4, active_validators // 65_536)
+    wait_epochs     = (pending_entry // churn_per_epoch) if churn_per_epoch else 0
+
+    # ── Slashing ─────────────────────────────────────────────────────────────
+    slash_rate = _va_slashing_rate(slashed_30d, active_validators)
+
+    # ── APY ──────────────────────────────────────────────────────────────────
+    apy = _va_staking_apy(total_staked)
+    annual_rewards = total_staked * apy / 100.0
+
+    # ── Health ───────────────────────────────────────────────────────────────
+    health = _va_health_label(effectiveness, slashed_30d)
+    participation = _va_participation_score(effectiveness, pending_entry + pending_exit, active_validators)
+
+    health_score = participation * 0.7 + (100.0 - min(100.0, slashed_30d * 2.0)) * 0.3
+
+    # ── 30-day history (daily snapshots) ─────────────────────────────────────
+    today = datetime.date.today()
+    history_30d = []
+    v = active_validators - 3_356   # 30d ago approx
+    e = effectiveness
+    for i in range(30):
+        day = today - datetime.timedelta(days=29 - i)
+        v   += random.randint(0, 300)
+        e   += random.gauss(0, 0.15)
+        e    = max(94.0, min(99.0, e))
+        history_30d.append({
+            "date":              day.isoformat(),
+            "active":            v,
+            "effectiveness_pct": round(e, 2),
+        })
+    history_30d[-1]["active"]            = active_validators
+    history_30d[-1]["effectiveness_pct"] = round(effectiveness, 2)
+
+    # ── Trend ────────────────────────────────────────────────────────────────
+    trend = _va_validator_trend([h["active"] for h in history_30d])
+    change_30d_pct = round(
+        (active_validators - history_30d[0]["active"]) / max(history_30d[0]["active"], 1) * 100, 2
+    )
+
+    # ── Description ──────────────────────────────────────────────────────────
+    v_fmt = f"{active_validators / 1_000:.0f}k"
+    desc = (
+        f"{health.capitalize()}: {v_fmt} validators, "
+        f"{effectiveness:.1f}% attestation effectiveness, APY {apy:.2f}%"
+    )
+
+    return {
+        "validators": {
+            "active":          active_validators,
+            "pending_entry":   pending_entry,
+            "pending_exit":    pending_exit,
+            "slashed_30d":     slashed_30d,
+            "change_30d_pct":  change_30d_pct,
+        },
+        "attestation": {
+            "effectiveness_pct":   round(effectiveness, 2),
+            "participation_score": round(participation, 1),
+            "epoch":               current_epoch,
+        },
+        "queue": {
+            "entry_count":  pending_entry,
+            "exit_count":   pending_exit,
+            "pressure":     queue_pressure,
+            "wait_epochs":  wait_epochs,
+        },
+        "slashing": {
+            "count_30d":       slashed_30d,
+            "rate_per_1k":     round(slash_rate, 4),
+            "last_event_days": last_slash_days,
+        },
+        "apy": {
+            "estimated_pct":     round(apy, 2),
+            "total_staked_eth":  int(total_staked),
+            "annual_rewards_eth": round(annual_rewards, 0),
+        },
+        "health": {
+            "label": health,
+            "score": round(health_score, 1),
+        },
+        "history_30d": history_30d,
+        "description":  desc,
+    }
+
+
 # ── DeFi TVL Tracker ───────────────────────────────────────────────────────────
 # Dashboard card: top 10 protocols by TVL, chain dominance breakdown,
 # TVL momentum signal, and 30-day sparkline history.
