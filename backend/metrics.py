@@ -12,6 +12,7 @@ from storage import (
     get_funding_history,
     get_recent_trades,
     get_orderbook_snapshots_for_heatmap,
+    get_ohlcv,
 )
 
 
@@ -7389,8 +7390,7 @@ async def compute_nft_market_pulse() -> dict:
 
 
 # BTC Dominance Tracker helpers  (_bd_)
-# =====================================================
-def _bd_dominance_pct(asset_market_cap: float, total_market_cap: float) -> float:
+# ==============================================def _bd_dominance_pct(asset_market_cap: float, total_market_cap: float) -> float:
     """Return asset's % share of total market cap, clamped to [0, 100]."""
     if total_market_cap <= 0:
         return 0.0

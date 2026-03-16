@@ -2886,6 +2886,71 @@ async function renderTokenVelocityNvt() {
     ${data.description ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${data.description}</div>` : ''}`;
 }
 
+// ── DEX vs CEX Volume Divergence ──────────────────────────────────────────────
+async function refreshDexVsCexFlow() {
+  const el = document.getElementById('dex-vs-cex-content');
+  if (!el) return;
+  const sym = activeSymbol ? `?symbol=${activeSymbol}` : '';
+  const data = await apiFetch(`/api/dex-vs-cex-flow${sym}`);
+  if (!data) { el.textContent = 'Unavailable'; return; }
+
+  const badge = document.getElementById('dex-vs-cex-badge');
+  const sig = data.discovery_signal ?? 'neutral';
+  const sigColor = {
+    strong_buy:  '#26a69a',
+    watch:       '#ffa726',
+    strong_sell: '#ef5350',
+    neutral:     '#607d8b',
+  }[sig] ?? '#607d8b';
+  if (badge) {
+    badge.textContent = sig.replace('_', ' ').toUpperCase();
+    badge.style.background = sigColor;
+    badge.style.display = 'inline-block';
+  }
+
+  const zscore  = data.divergence_zscore ?? 0;
+  const zColor  = zscore > 1.5 ? '#26a69a' : zscore < -1.5 ? '#ef5350' : '#aaa';
+  const domPct  = data.dex_dominance_pct ?? 0;
+  const trend   = data.dominance_trend ?? 'stable';
+  const trendArrow = trend === 'rising' ? '▲' : trend === 'falling' ? '▼' : '–';
+  const trendColor = trend === 'rising' ? '#26a69a' : trend === 'falling' ? '#ef5350' : '#aaa';
+
+  const fmtM = v => {
+    if (v >= 1e9) return (v / 1e9).toFixed(2) + 'B';
+    if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+    return v.toFixed(0);
+  };
+
+  const protocols = data.protocols ?? {};
+  const pctMap    = data.protocol_breakdown_pct ?? {};
+  const protoRows = Object.keys(protocols).map(k => {
+    const pct = pctMap[k] ?? 0;
+    return `<span style="color:#aaa">${k.replace('_', ' ')}: <b style="color:#e2e8f0">${fmtM(protocols[k])}</b> <span style="color:#555">(${pct}%)</span></span>`;
+  }).join(' · ');
+
+  const hist = data.dominance_history ?? [];
+  const sparkMax = Math.max(...hist, 0.01);
+  const sparkMin = Math.min(...hist, 0);
+  const sparkBars = hist.map(v => {
+    const h = Math.round(((v - sparkMin) / (sparkMax - sparkMin || 1)) * 20);
+    const c = v > data.mean_dominance ? '#26a69a' : '#ef5350';
+    return `<span style="display:inline-block;width:4px;height:${h + 2}px;background:${c};margin-right:1px;vertical-align:bottom"></span>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:10px;margin-bottom:5px">
+      <span style="color:#aaa">DEX vol: <b style="color:#e2e8f0">$${fmtM(data.dex_volume_usd ?? 0)}</b></span>
+      <span style="color:#aaa">CEX vol: <b style="color:#e2e8f0">$${fmtM(data.cex_volume_usd ?? 0)}</b></span>
+      <span style="color:#aaa">DEX dom: <b style="color:#e2e8f0">${domPct.toFixed(1)}%</b> <span style="color:${trendColor}">${trendArrow}</span></span>
+      <span style="color:#aaa">Z-score: <b style="color:${zColor}">${zscore.toFixed(2)}</b></span>
+    </div>
+    <div style="font-size:10px;color:#aaa;margin-bottom:4px">${protoRows}</div>
+    <div style="margin:4px 0;line-height:22px">${sparkBars}</div>
+    <div style="font-size:10px;color:#aaa">price discovery: <b style="color:${sigColor}">${(data.price_discovery ?? '').replace(/_/g, ' ')}</b></div>
+    ${data.description ? `<div style="font-size:10px;color:#555;margin-top:3px">${data.description}</div>` : ''}
+  `;
+}
+
 // ── Derivatives Heatmap ───────────────────────────────────────────────────────
 // ── Holder Distribution ───────────────────────────────────────────────────
 // ── Cross-Chain Bridge Monitor ────────────────────────────────────────────────
@@ -3153,6 +3218,111 @@ async function init() {
     if (btn) btn.addEventListener('click', toggleTheme);
   });
 })();
+
+async function refreshOptionsFlowTracker() {
+  const el = document.getElementById('options-flow-content');
+  const badge = document.getElementById('options-flow-badge');
+  if (!el) return;
+
+  const data = await apiFetch('/options-flow-tracker');
+  if (!data) { el.innerHTML = '<span class="card-badge badge-red" style="display:inline-block">Error</span>'; return; }
+
+  const summary = data.summary || {};
+  const direction = summary.net_flow_direction || 'neutral';
+  const dirCol = direction === 'bullish' ? 'var(--green)' : direction === 'bearish' ? 'var(--red)' : 'var(--muted)';
+
+  if (badge) {
+    badge.textContent = direction.toUpperCase();
+    badge.className = 'card-badge ' + (direction === 'bullish' ? 'badge-green' : direction === 'bearish' ? 'badge-red' : 'badge-blue');
+    badge.style.display = 'inline-block';
+  }
+
+  const fmtM = v => '$' + ((v || 0) / 1e6).toFixed(2) + 'M';
+
+  // Skew by expiry rows
+  const skew_by_expiry = data.skew_by_expiry || {};
+  const skewRows = Object.entries(skew_by_expiry).sort((a, b) => {
+    const tv = e => (e[1].call_volume_usd || 0) + (e[1].put_volume_usd || 0);
+    return tv(b) - tv(a);
+  }).slice(0, 5).map(([exp, v]) => {
+    const sc = v.skew_signal === 'bullish' ? 'var(--green)' : v.skew_signal === 'bearish' ? 'var(--red)' : 'var(--muted)';
+    return '<tr>' +
+      '<td style="font-size:9px;color:var(--text)">' + exp + '</td>' +
+      '<td style="font-size:9px;text-align:right;color:var(--green)">' + fmtM(v.call_volume_usd) + '</td>' +
+      '<td style="font-size:9px;text-align:right;color:var(--red)">' + fmtM(v.put_volume_usd) + '</td>' +
+      '<td style="font-size:9px;text-align:right;color:' + sc + '">' + (v.skew_signal || '').toUpperCase() + '</td>' +
+      '<td style="font-size:9px;text-align:right;color:var(--muted)">' + (v.skew_ratio || 0).toFixed(2) + 'x</td>' +
+      '</tr>';
+  }).join('');
+
+  // Unusual flow alert rows
+  const alerts = data.unusual_flow_alerts || [];
+  const alertRows = alerts.slice(0, 4).map(a => {
+    const ac = a.severity === 'critical' ? 'var(--red)' : '#f59e0b';
+    return '<tr>' +
+      '<td style="font-size:9px;color:var(--text)">' + (a.instrument || '').substring(0, 22) + '</td>' +
+      '<td style="font-size:9px;text-align:right">' + fmtM(a.notional_usd) + '</td>' +
+      '<td style="font-size:9px;text-align:right;color:' + (a.side === 'buy' ? 'var(--green)' : 'var(--red)') + '">' + (a.side || '').toUpperCase() + '</td>' +
+      '<td style="font-size:9px;text-align:right;color:' + ac + '">' + (a.severity || '').toUpperCase() + '</td>' +
+      '</tr>';
+  }).join('');
+
+  // Strike heatmap — top 5 by total notional
+  const strike_heatmap = data.strike_heatmap || {};
+  const hmRows = Object.entries(strike_heatmap).sort((a, b) => {
+    const tn = e => (e[1].call_notional_usd || 0) + (e[1].put_notional_usd || 0);
+    return tn(b) - tn(a);
+  }).slice(0, 5).map(([strike, h]) => {
+    const nc = (h.net_flow_usd || 0) >= 0 ? 'var(--green)' : 'var(--red)';
+    const dc = h.dominant === 'call' ? 'var(--green)' : 'var(--red)';
+    return '<tr>' +
+      '<td style="font-size:9px;color:var(--text)">$' + Number(strike).toLocaleString() + '</td>' +
+      '<td style="font-size:9px;text-align:right;color:var(--green)">' + fmtM(h.call_notional_usd) + '</td>' +
+      '<td style="font-size:9px;text-align:right;color:var(--red)">' + fmtM(h.put_notional_usd) + '</td>' +
+      '<td style="font-size:9px;text-align:right;color:' + nc + '">' + ((h.net_flow_usd || 0) >= 0 ? '+' : '') + fmtM(h.net_flow_usd) + '</td>' +
+      '<td style="font-size:9px;text-align:right;color:' + dc + '">' + (h.dominant || '').toUpperCase() + '</td>' +
+      '</tr>';
+  }).join('');
+
+  el.innerHTML =
+    '<div style="display:flex;gap:12px;margin-bottom:6px;flex-wrap:wrap">' +
+      '<div><div style="font-size:9px;color:var(--muted)">CALLS</div>' +
+        '<div style="font-size:14px;font-weight:700;color:var(--green)">' + fmtM(summary.total_call_volume_usd) + '</div></div>' +
+      '<div><div style="font-size:9px;color:var(--muted)">PUTS</div>' +
+        '<div style="font-size:14px;font-weight:700;color:var(--red)">' + fmtM(summary.total_put_volume_usd) + '</div></div>' +
+      '<div><div style="font-size:9px;color:var(--muted)">C/P RATIO</div>' +
+        '<div style="font-size:14px;font-weight:700;color:' + dirCol + '">' + (summary.overall_skew_ratio || 0).toFixed(2) + 'x</div></div>' +
+      '<div><div style="font-size:9px;color:var(--muted)">SKEW %ile</div>' +
+        '<div style="font-size:14px;font-weight:700;color:' + dirCol + '">' + (summary.skew_percentile || 0).toFixed(1) + '</div></div>' +
+      '<div><div style="font-size:9px;color:var(--muted)">ALERTS</div>' +
+        '<div style="font-size:14px;font-weight:700;color:' + ((summary.unusual_activity_count || 0) > 0 ? '#f59e0b' : 'var(--muted)') + '">' + (summary.unusual_activity_count || 0) + '</div></div>' +
+    '</div>' +
+    '<div style="font-size:9px;color:var(--muted);margin-bottom:2px;font-weight:600">SKEW BY EXPIRY</div>' +
+    '<table style="width:100%;border-collapse:collapse;margin-bottom:6px"><thead><tr>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:left;font-weight:500">EXPIRY</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">CALLS</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">PUTS</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">SIGNAL</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">RATIO</th>' +
+    '</tr></thead><tbody>' + (skewRows || '<tr><td colspan="5" style="font-size:9px;color:var(--muted)">No data</td></tr>') + '</tbody></table>' +
+    '<div style="font-size:9px;color:var(--muted);margin-bottom:2px;font-weight:600">UNUSUAL FLOW ALERTS</div>' +
+    '<table style="width:100%;border-collapse:collapse;margin-bottom:6px"><thead><tr>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:left;font-weight:500">INSTRUMENT</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">NOTIONAL</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">SIDE</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">SEV</th>' +
+    '</tr></thead><tbody>' + (alertRows || '<tr><td colspan="4" style="font-size:9px;color:var(--muted)">No unusual flow</td></tr>') + '</tbody></table>' +
+    '<div style="font-size:9px;color:var(--muted);margin-bottom:2px;font-weight:600">STRIKE HEATMAP (TOP 5)</div>' +
+    '<table style="width:100%;border-collapse:collapse"><thead><tr>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:left;font-weight:500">STRIKE</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">CALLS</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">PUTS</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">NET</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">DOM</th>' +
+    '</tr></thead><tbody>' + (hmRows || '<tr><td colspan="5" style="font-size:9px;color:var(--muted)">No data</td></tr>') + '</tbody></table>' +
+    '<div style="font-size:9px;color:var(--muted);margin-top:4px">' + (data.description || '') + '</div>';
+}
+
 
 // ── Bootstrap on Load ──────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', init);

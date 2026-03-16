@@ -5308,6 +5308,9 @@ async def leverage_ratio_heatmap_endpoint():
 async def layer2_metrics_endpoint():
     """Layer 2 metrics: TVL by chain, bridge flows, gas savings, growth momentum."""
     data = await compute_layer2_metrics()
+    return JSONResponse(data)
+
+
 @router.get("/nft-market-pulse")
 async def nft_market_pulse_endpoint():
     """NFT market pulse: floor trends, wash-adjusted volume, blue-chip index, liquidity signals."""
