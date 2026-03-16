@@ -2783,5 +2783,34 @@ async function init() {
 }
 
 
+// ── Theme Toggle ──────────────────────────────────────────────────────────────
+(function initTheme() {
+  const STORAGE_KEY = 'theme';
+  const DEFAULT_THEME = 'dark';
+  const root = document.documentElement;
+
+  function applyTheme(theme) {
+    root.setAttribute('data-theme', theme);
+    const btn = document.getElementById('theme-toggle');
+    if (btn) btn.textContent = theme === 'dark' ? '☀' : '🌙';
+  }
+
+  function toggleTheme() {
+    const current = localStorage.getItem(STORAGE_KEY) || DEFAULT_THEME;
+    const next = current === 'dark' ? 'light' : 'dark';
+    localStorage.setItem(STORAGE_KEY, next);
+    applyTheme(next);
+  }
+
+  // Apply saved theme on load
+  const saved = localStorage.getItem(STORAGE_KEY) || DEFAULT_THEME;
+  applyTheme(saved);
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const btn = document.getElementById('theme-toggle');
+    if (btn) btn.addEventListener('click', toggleTheme);
+  });
+})();
+
 document.addEventListener('DOMContentLoaded', init);
 
