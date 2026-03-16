@@ -23385,6 +23385,8 @@ async function refresh() {
     await Promise.all([safe(renderMarketMicrostructure)]);
     // Batch 16: options skew
     await Promise.all([safe(renderOptionsSkew)]);
+    // Batch 17: exchange netflow
+    await Promise.all([safe(renderExchangeNetflow)]);
   } finally {
     _refreshRunning = false;
   }
@@ -23446,6 +23448,79 @@ async function renderOptionsSkew() {
       </tr></thead>
       <tbody>${termRows}</tbody>
     </table>
+    ${data.description ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${data.description}</div>` : ''}`;
+}
+
+// ── Exchange Net Flow ─────────────────────────────────────────────────────────
+async function renderExchangeNetflow() {
+  const el    = document.getElementById('exchange-netflow-content');
+  const badge = document.getElementById('exchange-netflow-badge');
+  if (!el) return;
+  const data = await apiFetch('/exchange-netflow');
+  if (!data) { setErr('exchange-netflow-content'); return; }
+
+  const agg     = data.aggregate    || {};
+  const exs     = data.exchanges    || {};
+  const history = data.history      || [];
+  const signal  = agg.signal        || 'neutral';
+  const trend   = agg.trend         || 'stable';
+  const strength = agg.strength     ?? 0;
+  const zscore  = agg.zscore        ?? 0;
+  const nf24h   = agg.net_flow_24h  ?? 0;
+  const nf7d    = agg.net_flow_7d   ?? 0;
+
+  const sigCls   = signal === 'accumulation' ? 'badge-green' : signal === 'distribution' ? 'badge-red' : 'badge-blue';
+  const sigLabel = signal.toUpperCase();
+  if (badge) {
+    badge.textContent = sigLabel;
+    badge.className   = `card-badge ${sigCls}`;
+    badge.style.display = '';
+  }
+
+  const trendCol = trend === 'increasing' ? 'var(--green)' : trend === 'decreasing' ? 'var(--red)' : 'var(--muted)';
+  const fmtFlow  = v => {
+    const abs = Math.abs(v);
+    const sign = v >= 0 ? '+' : '-';
+    if (abs >= 1e6) return sign + (abs / 1e6).toFixed(1) + 'M';
+    if (abs >= 1e3) return sign + (abs / 1e3).toFixed(1) + 'k';
+    return sign + abs.toFixed(0);
+  };
+
+  const exRows = Object.entries(exs)
+    .sort((a, b) => b[1].net_flow - a[1].net_flow)
+    .map(([name, ex]) => {
+      const dir    = ex.direction || 'neutral';
+      const col    = dir === 'inflow' ? 'var(--green)' : dir === 'outflow' ? 'var(--red)' : 'var(--muted)';
+      const netStr = fmtFlow(ex.net_flow || 0);
+      return `<tr>
+        <td style="font-size:9px;color:var(--muted);padding-right:8px">${name}</td>
+        <td style="font-size:10px;color:${col};font-weight:600;text-align:right;padding-right:6px">${netStr}</td>
+        <td style="font-size:9px;color:${col};text-align:right">${dir}</td>
+      </tr>`;
+    }).join('');
+
+  const sparkbars = history.slice(-14).map(h => {
+    const col = (h.net_flow || 0) >= 0 ? 'var(--green)' : 'var(--red)';
+    return `<span style="display:inline-block;width:5px;height:10px;background:${col};margin-right:1px;opacity:0.7"></span>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="font-size:10px;color:var(--muted);margin-bottom:4px;display:flex;gap:10px;flex-wrap:wrap">
+      <span>24h: <b style="color:${nf24h>=0?'var(--green)':'var(--red)'}">${fmtFlow(nf24h)}</b></span>
+      <span>7d: <b style="color:${nf7d>=0?'var(--green)':'var(--red)'}">${fmtFlow(nf7d)}</b></span>
+      <span>strength: <b style="color:var(--fg)">${strength.toFixed(1)}%</b></span>
+      <span>z: <b style="color:${zscore>1?'var(--green)':zscore<-1?'var(--red)':'var(--muted)'}">${zscore.toFixed(2)}</b></span>
+      <span>trend: <b style="color:${trendCol}">${trend}</b></span>
+    </div>
+    <table style="border-collapse:collapse;width:100%;margin-bottom:4px">
+      <thead><tr>
+        <th style="font-size:9px;color:var(--muted);text-align:left">exchange</th>
+        <th style="font-size:9px;color:var(--muted);text-align:right;padding-right:6px">net flow</th>
+        <th style="font-size:9px;color:var(--muted);text-align:right">direction</th>
+      </tr></thead>
+      <tbody>${exRows}</tbody>
+    </table>
+    <div style="margin-top:4px">${sparkbars}</div>
     ${data.description ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${data.description}</div>` : ''}`;
 }
 
@@ -23515,3 +23590,8 @@ document.addEventListener('DOMContentLoaded', init);
 }
 }
 
+
+}
+}
+}
+}

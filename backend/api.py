@@ -82,6 +82,7 @@ from metrics import (
     compute_momentum_divergence,
     compute_spread_analysis,
     compute_options_skew,
+    compute_exchange_netflow,
 )
 
 router = APIRouter(prefix="/api")
@@ -5440,4 +5441,11 @@ async def options_skew_endpoint(
         symbol=target,
         history_window=history_window,
     )
+    return JSONResponse(data)
+
+
+@router.get("/exchange-netflow")
+async def exchange_netflow_endpoint():
+    """Exchange net flow dashboard: BTC inflows vs outflows across top 5 exchanges."""
+    data = await compute_exchange_netflow()
     return JSONResponse(data)
