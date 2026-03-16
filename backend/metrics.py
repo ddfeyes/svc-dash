@@ -5043,3 +5043,284 @@ async def compute_cross_asset_corr(
         "weakest_pair": weakest_pair,
         "description": desc,
     }
+
+
+# ── Social Sentiment Aggregator ────────────────────────────────────────────────
+# Combines Twitter/Reddit volume proxy with keyword-based sentiment scoring.
+# Data: CryptoCompare news + social stats (free, no API key).
+
+_SS_BULLISH_KEYWORDS: list = [
+    "moon", "rally", "breakout", "accumulation", "buy", "bull", "surge",
+    "pump", "ath", "breakout", "support", "adoption", "upgrade", "launch",
+    "partnership", "bullish", "recovery", "rebound", "growth", "gain",
+    "profit", "long", "hodl", "squeeze", "uptrend", "milestone",
+]
+_SS_BEARISH_KEYWORDS: list = [
+    "crash", "dump", "sell", "bear", "drop", "decline", "loss", "panic",
+    "collapse", "fear", "liquidation", "short", "resistance", "downtrend",
+    "hack", "exploit", "scam", "fraud", "ban", "regulation", "fine",
+    "bankruptcy", "delist", "bearish", "correction", "plunge", "tank",
+]
+
+# CryptoCompare social stats for BTC (coinId=1182)
+_SS_CC_SOCIAL: str = "https://min-api.cryptocompare.com/data/social/coin/latest?coinId=1182"
+_SS_CC_NEWS:   str = "https://min-api.cryptocompare.com/data/v2/news/?lang=EN&categories=BTC,ETH"
+
+# Volume proxy normalisation ceilings (empirical baselines)
+_SS_POSTS_CEIL:    float = 200.0    # reddit posts/hour
+_SS_COMMENTS_CEIL: float = 2_000.0  # reddit comments/hour
+_SS_TWITTER_CEIL:  float = 5_000_000.0  # twitter engagement points
+
+
+def _ss_keyword_score(
+    text: str,
+    bullish_words: list,
+    bearish_words: list,
+) -> float:
+    """Score text against keyword lists. Returns [-1.0, 1.0]. Neutral = 0."""
+    if not text:
+        return 0.0
+    lower = text.lower()
+    bull = sum(1 for w in bullish_words if w in lower)
+    bear = sum(1 for w in bearish_words if w in lower)
+    total = bull + bear
+    if total == 0:
+        return 0.0
+    return float(round((bull - bear) / total, 4))
+
+
+def _ss_normalize_score(raw: float, min_val: float, max_val: float) -> float:
+    """Map raw value from [min_val, max_val] to [0, 100], clamped."""
+    if max_val == min_val:
+        return 50.0
+    norm = (raw - min_val) / (max_val - min_val) * 100.0
+    return float(round(max(0.0, min(100.0, norm)), 4))
+
+
+def _ss_sentiment_label(score: float) -> str:
+    """5-level sentiment label from 0-100 score."""
+    if score >= 70:
+        return "very_bullish"
+    if score >= 55:
+        return "bullish"
+    if score >= 40:
+        return "neutral"
+    if score >= 25:
+        return "bearish"
+    return "very_bearish"
+
+
+def _ss_momentum(scores: list) -> float:
+    """Recent half average minus prior half average. Positive = accelerating."""
+    if len(scores) < 2:
+        return 0.0
+    mid = len(scores) // 2
+    prior  = sum(scores[:mid]) / mid
+    recent = sum(scores[mid:]) / len(scores[mid:])
+    return float(round(recent - prior, 4))
+
+
+def _ss_trend(scores: list) -> str:
+    """Linear regression slope direction across scores."""
+    n = len(scores)
+    if n < 2:
+        return "stable"
+    xs = list(range(n))
+    mean_x = sum(xs) / n
+    mean_y = sum(scores) / n
+    num   = sum((xs[i] - mean_x) * (scores[i] - mean_y) for i in range(n))
+    denom = sum((xs[i] - mean_x) ** 2 for i in range(n))
+    if denom == 0:
+        return "stable"
+    slope = num / denom
+    if slope > 0.1:
+        return "rising"
+    if slope < -0.1:
+        return "falling"
+    return "stable"
+
+
+def _ss_volume_proxy(
+    posts_per_hour: int,
+    comments_per_hour: int,
+    twitter_points: int,
+) -> float:
+    """Weighted composite social volume proxy, 0-100."""
+    p_norm = min(float(posts_per_hour)    / _SS_POSTS_CEIL,    1.0) * 100.0
+    c_norm = min(float(comments_per_hour) / _SS_COMMENTS_CEIL, 1.0) * 100.0
+    t_norm = min(float(twitter_points)    / _SS_TWITTER_CEIL,  1.0) * 100.0
+    # weights: posts 20%, comments 30%, twitter 50%
+    proxy = 0.20 * p_norm + 0.30 * c_norm + 0.50 * t_norm
+    return float(round(proxy, 4))
+
+
+def _ss_buzz_level(proxy: float) -> str:
+    """5-level buzz label from 0-100 volume proxy."""
+    if proxy >= 80:
+        return "very_high"
+    if proxy >= 60:
+        return "high"
+    if proxy >= 40:
+        return "moderate"
+    if proxy >= 20:
+        return "low"
+    return "very_low"
+
+
+def _ss_zscore(current: float, history: list) -> float:
+    """Z-score of current vs history. ±3.0 when std≈0 but current≠mean."""
+    if not history:
+        return 0.0
+    mean = sum(history) / len(history)
+    if len(history) == 1:
+        return 0.0
+    variance = sum((x - mean) ** 2 for x in history) / len(history)
+    std = variance ** 0.5
+    if std < 0.01:
+        diff = current - mean
+        if abs(diff) < 0.01:
+            return 0.0
+        return 3.0 if diff > 0 else -3.0
+    return float(round((current - mean) / std, 4))
+
+
+async def compute_social_sentiment() -> dict:
+    """
+    Social sentiment aggregator: keyword scoring of crypto news headlines
+    combined with Reddit/Twitter social volume proxy from CryptoCompare.
+    Returns normalised 0-100 sentiment score with label and trend.
+    """
+    import aiohttp  # noqa: PLC0415
+
+    news_articles: list = []
+    reddit_posts_ph:    int = 0
+    reddit_comments_ph: int = 0
+    twitter_pts:        int = 0
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            # Fetch news and social stats concurrently
+            async def _get(url: str) -> dict:
+                try:
+                    async with session.get(url) as r:
+                        return await r.json()
+                except Exception:
+                    return {}
+
+            import asyncio as _asyncio
+            news_data, social_data = await _asyncio.gather(
+                _get(_SS_CC_NEWS),
+                _get(_SS_CC_SOCIAL),
+            )
+
+        # Parse news
+        raw_articles = news_data.get("Data", []) if isinstance(news_data, dict) else []
+        for art in raw_articles[:30]:
+            title = art.get("title", "") or ""
+            body  = art.get("body",  "") or ""
+            news_articles.append(title + " " + body[:200])
+
+        # Parse social
+        sdata = social_data.get("Data", {}) if isinstance(social_data, dict) else {}
+        reddit  = sdata.get("Reddit",  {}) or {}
+        twitter = sdata.get("Twitter", {}) or {}
+        reddit_posts_ph    = int(reddit.get("posts_per_hour",    0) or 0)
+        reddit_comments_ph = int(reddit.get("comments_per_hour", 0) or 0)
+        twitter_pts        = int(twitter.get("points", 0) or 0)
+    except Exception:
+        pass
+
+    # Keyword scoring per article
+    bull_count = 0
+    bear_count = 0
+    neut_count = 0
+    raw_scores: list = []
+    top_bull_hits: dict = {}
+    top_bear_hits: dict = {}
+
+    for text in news_articles:
+        s = _ss_keyword_score(text, _SS_BULLISH_KEYWORDS, _SS_BEARISH_KEYWORDS)
+        raw_scores.append(s)
+        lower = text.lower()
+        if s > 0:
+            bull_count += 1
+            for w in _SS_BULLISH_KEYWORDS:
+                if w in lower:
+                    top_bull_hits[w] = top_bull_hits.get(w, 0) + 1
+        elif s < 0:
+            bear_count += 1
+            for w in _SS_BEARISH_KEYWORDS:
+                if w in lower:
+                    top_bear_hits[w] = top_bear_hits.get(w, 0) + 1
+        else:
+            neut_count += 1
+
+    # Aggregate keyword sentiment → 0-100
+    avg_raw = (sum(raw_scores) / len(raw_scores)) if raw_scores else 0.0
+    kw_score = _ss_normalize_score(avg_raw, -1.0, 1.0)
+
+    # Volume proxy
+    vol_proxy = _ss_volume_proxy(reddit_posts_ph, reddit_comments_ph, twitter_pts)
+    buzz      = _ss_buzz_level(vol_proxy)
+
+    # Blend: 70% keyword sentiment, 30% volume boost
+    composite = round(kw_score * 0.70 + vol_proxy * 0.30, 2)
+    label     = _ss_sentiment_label(composite)
+
+    # Historical context (synthetic from variance in article scores)
+    hist_scores = [
+        round(_ss_normalize_score(s, -1.0, 1.0) * 0.70 + vol_proxy * 0.30, 2)
+        for s in raw_scores[-7:] if raw_scores
+    ] or []
+
+    trend    = _ss_trend(hist_scores or [composite])
+    momentum = _ss_momentum(hist_scores or [composite, composite])
+    zscore   = _ss_zscore(composite, hist_scores) if hist_scores else 0.0
+
+    history_out = [
+        {"date": f"article-{i+1}", "score": s, "label": _ss_sentiment_label(s)}
+        for i, s in enumerate(hist_scores)
+    ]
+
+    # Top keywords
+    top_bull = [k for k, _ in sorted(top_bull_hits.items(), key=lambda x: -x[1])[:3]]
+    top_bear = [k for k, _ in sorted(top_bear_hits.items(), key=lambda x: -x[1])[:3]]
+    dominant = "bullish" if bull_count > bear_count else (
+        "bearish" if bear_count > bull_count else "neutral"
+    )
+
+    direction_word = {"very_bullish": "Very Bullish", "bullish": "Bullish",
+                      "neutral": "Neutral", "bearish": "Bearish",
+                      "very_bearish": "Very Bearish"}.get(label, "Neutral")
+    desc = (
+        f"{direction_word}: social sentiment score {composite:.0f}/100 — "
+        f"{dominant} signals dominant"
+    )
+
+    return {
+        "sentiment": {
+            "score":     composite,
+            "label":     label,
+            "direction": trend,
+            "momentum":  round(momentum, 2),
+        },
+        "social_volume": {
+            "reddit_posts_per_hour":    reddit_posts_ph,
+            "reddit_comments_per_hour": reddit_comments_ph,
+            "twitter_points":           twitter_pts,
+            "volume_proxy":             round(vol_proxy, 2),
+            "buzz":                     buzz,
+        },
+        "keywords": {
+            "bullish_count": bull_count,
+            "bearish_count": bear_count,
+            "neutral_count": neut_count,
+            "dominant":      dominant,
+            "top_bullish":   top_bull,
+            "top_bearish":   top_bear,
+        },
+        "history":     history_out,
+        "zscore":      round(zscore, 4),
+        "description": desc,
+    }
