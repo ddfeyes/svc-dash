@@ -5670,8 +5670,7 @@ async def compute_miner_reserve() -> dict:
 
 
 # Layer 2 Metrics helpers  (_l2_)
-# ============================================================
-
+# =====================================================
 def _l2_tvl_share(chains: dict) -> dict:
     """Return each chain's % share of total TVL. Empty dict if input empty."""
     if not chains:
@@ -5757,10 +5756,8 @@ def _l2_tvl_change_pct(current: float, previous: float) -> float:
     return float((current - previous) / previous * 100.0)
 
 
-# ============================================================
-# Gas Fee Predictor helpers  (_gf_)
-# ============================================================
-
+# =====================================================# Gas Fee Predictor helpers  (_gf_)
+# =====================================================
 def _gf_base_fee_trend(fees: list) -> str:
     """
     Linear regression slope over fee history.
@@ -5948,8 +5945,7 @@ async def compute_token_velocity_nvt() -> dict:
 
 
 # Layer 2 Metrics helpers  (_l2_)
-# ============================================================
-
+# =====================================================
 def _l2_tvl_share(chains: dict) -> dict:
     """Return each chain's % share of total TVL. Empty dict if input empty."""
     if not chains:
@@ -6031,74 +6027,6 @@ def _l2_rank_chains(chains: dict) -> list:
 def _l2_tvl_change_pct(current: float, previous: float) -> float:
     """Percentage change from previous to current TVL."""
 # ╔══════════════════════════════════════════════════════════════════════════╗
-# ║  STAKING YIELD TRACKER                                                  ║
-# ╚══════════════════════════════════════════════════════════════════════════╝
-
-def _sy_real_yield(apy: float, inflation_rate: float) -> float:
-    """Nominal APY minus protocol inflation rate."""
-    return float(apy - inflation_rate)
-
-
-def _sy_stake_ratio(staked_supply: float, total_supply: float) -> float:
-    """% of total supply currently staked, clamped to [0, 100]."""
-    if total_supply == 0:
-        return 0.0
-    return float(min(100.0, max(0.0, staked_supply / total_supply * 100.0)))
-
-
-def _sy_concentration_risk(validators: list) -> float:
-    """Normalised HHI-based stake concentration risk [0-100].
-
-    0 = perfectly equal, 100 = single validator monopoly.
-    """
-    if not validators:
-        return 0.0
-    n = len(validators)
-    if n == 1:
-        return 100.0
-    total = sum(validators)
-    if total == 0:
-        return 0.0
-    shares = [v / total for v in validators]
-    hhi = sum(s * s for s in shares)
-    # Normalise: 0 (equal) → 1 (monopoly)
-    norm = (hhi - 1.0 / n) / (1.0 - 1.0 / n)
-    return float(min(100.0, max(0.0, norm * 100.0)))
-
-
-def _sy_apy_trend(apy_history: list) -> str:
-    """Linear-regression slope classifier: rising / falling / stable."""
-    if len(apy_history) < 2:
-        return "stable"
-    n = len(apy_history)
-    xs = list(range(n))
-    mean_x = (n - 1) / 2.0
-    mean_y = sum(apy_history) / n
-    num = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, apy_history))
-    den = sum((x - mean_x) ** 2 for x in xs)
-    if den == 0:
-        return "stable"
-    slope = num / den
-    threshold = (max(apy_history) - min(apy_history)) * 0.01
-    if slope > threshold:
-        return "rising"
-    if slope < -threshold:
-        return "falling"
-    return "stable"
-
-
-def _sy_yield_label(real_yield: float) -> str:
-    """Classify real yield: attractive (>=2%), neutral (>0%), negative (<=0%)."""
-    if real_yield >= 2.0:
-        return "attractive"
-    if real_yield > 0.0:
-        return "neutral"
-    return "negative"
-
-
-def _sy_validator_growth(current: float, previous: float) -> float:
-    """% growth in validator count from previous to current period."""
-=======
 # ║  PROTOCOL REVENUE CARD                                                  ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
@@ -6118,6 +6046,72 @@ def _pr_pe_ratio(market_cap: float, annualized_revenue: float) -> float:
 
 def _pr_revenue_growth(current: float, previous: float) -> float:
     """% revenue growth from previous period to current."""
+# ║  LAYER 2 METRICS AGGREGATOR                                             ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+
+def _l2_tvl_share(chains: dict) -> dict:
+    """Return each chain's % share of total TVL."""
+    if not chains:
+        return {}
+    total = sum(chains.values())
+    if total == 0:
+        return {k: 0.0 for k in chains}
+    return {k: float(v / total * 100) for k, v in chains.items()}
+
+
+def _l2_bridge_flow_direction(flow_usd: float, threshold: float = 1_000_000) -> str:
+    """Classify bridge flow as inflow / outflow / neutral."""
+    if flow_usd > threshold:
+        return "inflow"
+    if flow_usd < -threshold:
+        return "outflow"
+    return "neutral"
+
+
+def _l2_gas_savings_pct(l1_gas_usd: float, l2_gas_usd: float) -> float:
+    """% gas savings vs L1, clamped to [0, 100]."""
+    if l1_gas_usd <= 0:
+        return 0.0
+    raw = (l1_gas_usd - l2_gas_usd) / l1_gas_usd * 100.0
+    return float(max(0.0, min(100.0, raw)))
+
+
+def _l2_momentum_score(
+    tvl_change_24h: float,
+    tvl_change_7d: float,
+    tx_growth: float,
+) -> float:
+    """Composite momentum [0-100]: 30% 24h + 50% 7d + 20% tx growth."""
+    def _clamp(v: float) -> float:
+        return max(-1.0, min(1.0, v))
+
+    n24 = _clamp(tvl_change_24h / 5.0)
+    n7d = _clamp(tvl_change_7d / 15.0)
+    ntx = _clamp(tx_growth / 0.5)
+    composite = 0.30 * n24 + 0.50 * n7d + 0.20 * ntx
+    return float((composite + 1.0) / 2.0 * 100.0)
+
+
+def _l2_growth_label(momentum: float) -> str:
+    """5-level growth label from momentum score."""
+    if momentum >= 70.0:
+        return "strong_growth"
+    if momentum >= 50.0:
+        return "growing"
+    if momentum > 35.0:
+        return "neutral"
+    return "declining"
+
+
+def _l2_rank_chains(chains: dict) -> list:
+    """Sort chains by tvl_usd descending; return list of (name, data) tuples."""
+    if not chains:
+        return []
+    return sorted(chains.items(), key=lambda x: x[1].get("tvl_usd", 0), reverse=True)
+
+
+def _l2_tvl_change_pct(current: float, previous: float) -> float:
+    """% change from previous to current TVL."""
 # ║  MACRO LIQUIDITY INDICATOR                                              ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
@@ -6339,10 +6333,8 @@ async def compute_macro_liquidity_indicator() -> dict:
     }
 
 
-# ============================================================
-# Validator Activity helpers  (_va_)
-# ============================================================
-
+# =====================================================# Validator Activity helpers  (_va_)
+# =====================================================
 def _va_effectiveness_rate(attested: int, total: int) -> float:
     """Attestation effectiveness: attested / total * 100, clamped [0, 100]."""
     if total <= 0:
@@ -7185,28 +7177,110 @@ async def compute_layer2_metrics() -> dict:
         f"{top_chain} leads ({top_share}%), {leader} momentum strongest"
     )
 
+    import httpx, datetime, random, math
+
+    L1_GAS_USD = 1.50  # approximate ETH transfer cost on L1
+    L1_TX_24H = 1_200_000  # approximate L1 tx/day
+
+    CHAIN_DEFAULTS = {
+        "Arbitrum": {"tvl": 18_500_000_000, "d24": 1.2, "d7": 4.5, "bridge": 120_000_000, "tx": 950_000, "gas": 0.04},
+        "Optimism": {"tvl": 7_200_000_000, "d24": 0.8, "d7": 2.1, "bridge": 45_000_000, "tx": 420_000, "gas": 0.05},
+        "Base":     {"tvl": 4_800_000_000, "d24": 2.5, "d7": 8.2, "bridge": 85_000_000, "tx": 680_000, "gas": 0.03},
+        "Polygon":  {"tvl": 1_100_000_000, "d24": -0.5, "d7": -1.2, "bridge": -15_000_000, "tx": 310_000, "gas": 0.02},
+        "zkSync":   {"tvl":   820_000_000, "d24": 0.3, "d7": 1.0, "bridge": 8_000_000, "tx": 95_000, "gas": 0.06},
+    }
+
+    chain_data: dict[str, dict] = {}
+    tvl_totals: dict[str, float] = {}
+
+    # Try DeFi Llama for real TVL data
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            resp = await client.get("https://api.llama.fi/chains")
+            if resp.status_code == 200:
+                llama = {item["name"]: item.get("tvl", 0) for item in resp.json()}
+                for name in CHAIN_DEFAULTS:
+                    if name in llama:
+                        tvl_totals[name] = float(llama[name])
+    except Exception:
+        pass
+
+    # Build per-chain metrics (mix live TVL with mock activity data)
+    for name, d in CHAIN_DEFAULTS.items():
+        tvl = tvl_totals.get(name, d["tvl"])
+        gas_savings = _l2_gas_savings_pct(L1_GAS_USD, d["gas"])
+        bridge_dir = _l2_bridge_flow_direction(d["bridge"])
+        momentum = _l2_momentum_score(d["d24"], d["d7"], d["tx"] / L1_TX_24H)
+        chain_data[name] = {
+            "tvl_usd": tvl,
+            "tvl_change_24h_pct": d["d24"],
+            "tvl_change_7d_pct": d["d7"],
+            "bridge_flow_24h_usd": d["bridge"],
+            "bridge_direction": bridge_dir,
+            "tx_count_24h": d["tx"],
+            "avg_gas_usd": d["gas"],
+            "gas_savings_pct": round(gas_savings, 1),
+            "momentum": round(momentum, 1),
+        }
+
+    total_tvl = sum(c["tvl_usd"] for c in chain_data.values())
+    total_bridge = sum(c["bridge_flow_24h_usd"] for c in chain_data.values() if c["bridge_flow_24h_usd"] > 0)
+    total_tx = sum(c["tx_count_24h"] for c in chain_data.values())
+    avg_gas_savings = sum(c["gas_savings_pct"] for c in chain_data.values()) / len(chain_data)
+    ranked = _l2_rank_chains({n: {"tvl_usd": c["tvl_usd"]} for n, c in chain_data.items()})
+    top_chain = ranked[0][0] if ranked else "Arbitrum"
+    laggard = ranked[-1][0] if ranked else "zkSync"
+
+    # Aggregate momentum
+    total_d24 = sum(c["tvl_change_24h_pct"] * c["tvl_usd"] for c in chain_data.values()) / max(total_tvl, 1)
+    total_d7 = sum(c["tvl_change_7d_pct"] * c["tvl_usd"] for c in chain_data.values()) / max(total_tvl, 1)
+    agg_tx_growth = total_tx / L1_TX_24H
+    agg_momentum = _l2_momentum_score(total_d24, total_d7, agg_tx_growth)
+    growth_label = _l2_growth_label(agg_momentum)
+
+    # Momentum leader (highest momentum score)
+    leader = max(chain_data, key=lambda n: chain_data[n]["momentum"])
+
+    # 7-day history (synthetic)
+    today = datetime.date.today()
+    history_7d = []
+    for i in range(7):
+        day = today - datetime.timedelta(days=6 - i)
+        scale = 0.96 + 0.04 * (i / 6)
+        day_tvl = total_tvl * scale * (1 + random.uniform(-0.005, 0.005))
+        day_momentum = agg_momentum * scale
+        history_7d.append({
+            "date": day.isoformat(),
+            "total_tvl_usd": round(day_tvl, 0),
+            "momentum": round(day_momentum, 1),
+        })
+
+    desc = (
+        f"{growth_label.replace('_', ' ').capitalize()}: "
+        f"L2 total TVL ${total_tvl / 1e9:.1f}B"
+    )
+
     return {
-        "chains":    chains_out,
+        "chains": chain_data,
         "aggregate": {
-            "total_tvl_usd":            round(total_tvl, 0),
-            "total_tvl_change_24h_pct": total_ch24,
-            "total_bridge_inflow_24h":  round(total_bridge_inflow, 0),
-            "total_tx_count_24h":       total_tx,
-            "l1_vs_l2_tx_ratio":        l1_ratio,
-            "avg_gas_savings_pct":      avg_gas_savings,
-            "top_chain":                top_chain,
+            "total_tvl_usd": total_tvl,
+            "total_tvl_change_24h_pct": round(total_d24, 2),
+            "total_bridge_inflow_24h": total_bridge,
+            "total_tx_count_24h": total_tx,
+            "l1_vs_l2_tx_ratio": round(L1_TX_24H / max(total_tx, 1), 4),
+            "avg_gas_savings_pct": round(avg_gas_savings, 1),
+            "top_chain": top_chain,
         },
         "momentum": {
-            "score":   agg_momentum,
-            "label":   momentum_label,
-            "leader":  leader,
+            "score": round(agg_momentum, 1),
+            "label": growth_label,
+            "leader": leader,
             "laggard": laggard,
         },
         "description": desc,
     }
 
 
-=======
 def _pr_momentum_score(
     d1_growth: float,
     d7_growth: float,
@@ -7602,7 +7676,6 @@ async def compute_btc_dominance() -> dict:
             "interpretation":       interp,
         },
         "sparkline": sparkline,
-=======
 # ╔══════════════════════════════════════════════════════════════════════════╗
 # ║  LEVERAGE RATIO HEATMAP                                                 ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
