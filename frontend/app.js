@@ -2499,6 +2499,8 @@ async function refresh() {
     // Batch 24: macro liquidity indicator
     // Batch 24: token velocity + NVT
     await Promise.all([safe(renderTokenVelocityNvt)]);
+    // Batch 25: market regime classifier
+    await Promise.all([safe(renderMarketRegimeClassifier)]);
     // Batch 16: derivatives heatmap
         // Batch 25: holder distribution card
         // Batch 26: cross-chain bridge monitor
@@ -2747,6 +2749,108 @@ async function renderTokenVelocityNvt() {
 
 // ── Derivatives Heatmap ───────────────────────────────────────────────────────
 // ── Holder Distribution ───────────────────────────────────────────────────
+
+// ── Market Regime Classifier ──────────────────────────────────────────────────
+async function renderMarketRegimeClassifier() {
+  const el    = document.getElementById('market-regime-classifier-content');
+  const badge = document.getElementById('market-regime-classifier-badge');
+  if (!el) return;
+
+  const sym  = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/market-regime-classifier?symbol=${sym}`);
+  if (!data) { setErr('market-regime-classifier-content'); return; }
+
+  const regime     = data.regime     || 'ranging';
+  const signal     = data.regime_signal || 'neutral';
+  const conf       = data.regime_confidence ?? 0;
+  const durH       = data.duration_hours ?? 0;
+  const sigs       = data.signals        || {};
+  const sw         = data.signal_weights || {};
+  const history    = data.regime_history || [];
+
+  // Badge
+  const REGIME_COLORS = {
+    bull: 'badge-green', bear: 'badge-red',
+    accumulation: 'badge-blue', distribution: 'badge-yellow', ranging: 'badge-gray',
+  };
+  const SIGNAL_COLORS = {
+    strong_bull: '#00e082', bull: '#4ea8de',
+    neutral: '#6b7280', bear: '#f0c040', strong_bear: '#ff4d4f',
+  };
+  const regimeColor = REGIME_COLORS[regime] || 'badge-gray';
+  if (badge) {
+    badge.textContent = signal.replace('_', ' ');
+    badge.className   = `card-badge ${regimeColor}`;
+    badge.style.display = '';
+  }
+
+  // Signal bar helper
+  function sigBar(val) {
+    const pct    = Math.round(Math.abs(val) * 100);
+    const color  = val >= 0 ? 'var(--green)' : 'var(--red)';
+    const dir    = val >= 0 ? 'left' : 'right';
+    return `<div style="display:flex;align-items:center;gap:4px;min-width:60px">
+      <div style="flex:1;height:4px;background:var(--border);border-radius:2px;position:relative">
+        <div style="position:absolute;${dir}:0;width:${pct}%;height:100%;background:${color};border-radius:2px"></div>
+      </div>
+      <span style="font-size:9px;color:${color};min-width:32px;text-align:right">${val >= 0 ? '+' : ''}${val.toFixed(3)}</span>
+    </div>`;
+  }
+
+  function fmtDur(h) {
+    if (h < 1) return `${Math.round(h * 60)}m`;
+    return `${h.toFixed(1)}h`;
+  }
+
+  const SIGNAL_LABELS = { rsi: 'RSI', oi: 'OI', funding: 'Funding', cvd: 'CVD', dominance: 'Dominance' };
+  const signalRows = Object.entries(SIGNAL_LABELS).map(([k, label]) => {
+    const raw = sigs[k] ?? 0;
+    const weighted = sw[k] ?? 0;
+    return `<tr>
+      <td style="color:var(--muted);font-size:10px;padding-right:6px">${label}</td>
+      <td>${sigBar(raw)}</td>
+      <td style="font-size:9px;color:var(--muted);padding-left:4px">${weighted >= 0 ? '+' : ''}${weighted.toFixed(3)}</td>
+    </tr>`;
+  }).join('');
+
+  const histRows = history.slice(-5).reverse().map(h => {
+    const d = new Date(h.ts * 1000);
+    const t = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return `<div style="display:flex;gap:6px;font-size:9px;color:var(--muted)">
+      <span>${t}</span>
+      <span style="color:var(--fg)">${h.from}</span>
+      <span>→</span>
+      <span style="color:${SIGNAL_COLORS[h.to] || 'var(--fg)'};">${h.to}</span>
+    </div>`;
+  }).join('') || `<div style="font-size:9px;color:var(--muted)">No transitions yet</div>`;
+
+  const confPct  = Math.round(conf * 100);
+  const confColor = conf > 0.65 ? 'var(--green)' : conf > 0.4 ? 'var(--yellow)' : 'var(--muted)';
+  const regimeLabel = regime.charAt(0).toUpperCase() + regime.slice(1);
+  const signalColor = SIGNAL_COLORS[signal] || 'var(--fg)';
+
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+      <div style="font-size:20px;font-weight:700;color:${signalColor}">${regimeLabel}</div>
+      <div style="display:flex;flex-direction:column;gap:2px">
+        <div style="font-size:10px;color:var(--muted)">Confidence <span style="color:${confColor}">${confPct}%</span></div>
+        <div style="font-size:10px;color:var(--muted)">Duration <span style="color:var(--fg)">${fmtDur(durH)}</span></div>
+      </div>
+    </div>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:8px">
+      <thead>
+        <tr>
+          <th style="text-align:left;font-size:9px;color:var(--muted);font-weight:400;padding-bottom:4px">Signal</th>
+          <th style="text-align:left;font-size:9px;color:var(--muted);font-weight:400">Raw</th>
+          <th style="text-align:left;font-size:9px;color:var(--muted);font-weight:400;padding-left:4px">Weighted</th>
+        </tr>
+      </thead>
+      <tbody>${signalRows}</tbody>
+    </table>
+    <div style="font-size:9px;color:var(--muted);margin-bottom:3px">Recent transitions</div>
+    <div style="display:flex;flex-direction:column;gap:2px">${histRows}</div>`;
+}
+
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 async function init() {
   const safeInit = (fn) => { try { fn(); } catch(e) { console.warn('Chart init failed:', e.message); } };

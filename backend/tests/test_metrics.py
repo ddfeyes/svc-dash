@@ -38,7 +38,10 @@ async def test_cvd_with_trades():
     """CVD should accumulate correctly with buy/sell trades."""
     await init_db()
     db = await get_db()
-    
+    # Clear existing trades to ensure a clean state
+    await db.execute("DELETE FROM trades")
+    await db.commit()
+
     ts = time.time()
     trades = [
         (ts - 10, "binance", "BANANAS31USDT", 0.01, 100.0, "buy"),
