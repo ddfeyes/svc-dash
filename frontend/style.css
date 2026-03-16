@@ -541,6 +541,23 @@ html, body {
 
   #trade-tape  { max-height: 300px; }
   #alerts-feed { max-height: 160px; }
+
+  #header { flex-wrap: wrap; padding: 8px 12px; gap: 8px; }
+  #symbol-tabs { width: 100%; margin-left: 0; order: 3; flex-wrap: wrap; }
+  .sym-tab { min-height: 36px; flex: 1; text-align: center; }
+  #last-price { margin-left: 0; }
+  #price-change { margin-left: 0; }
+}
+
+@media (max-width: 768px) {
+  #price-chart-container { height: 240px; }
+  #oi-chart-container { height: 120px; }
+  #cvd-chart-container { height: 90px; }
+  #funding-chart-container { height: 70px; }
+  #spread-chart-container { height: 70px; }
+  #volume-profile-container { height: 160px; }
+  #adaptive-vp-container { height: 180px; }
+  #main { padding: 8px; gap: 8px; }
 }
 
 /* ── New Chart Containers ─────────────────────────────────────────────────── */

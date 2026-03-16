@@ -45,6 +45,15 @@ async function apiFetch(path, timeoutMs = 8000) {
   }
 }
 
+function setErr(contentId) {
+  const el = document.getElementById(contentId);
+  if (!el) return;
+  const txt = el.textContent.trim();
+  if (txt.startsWith('Loading') || txt === 'No data yet' || txt === 'No data available' || txt === 'No data' || txt === 'Unavailable' || txt === '') {
+    el.innerHTML = '<span class="card-badge badge-red" style="display:inline-block">Error</span>';
+  }
+}
+
 /** Format a price with auto decimal places (6dp for sub-penny assets). */
 function fmtPrice(price) {
   if (price == null) return '—';
@@ -816,8 +825,7 @@ async function renderPhase() {
   const sym = encodeURIComponent(activeSymbol);
   const data = await apiFetch(`/market-regime?symbol=${sym}`);
   if (!data) {
-    const el = document.getElementById('phase-content');
-    if (el && el.textContent.includes('Loading')) el.innerHTML = '<div class="text-muted" style="font-size:11px;">No data yet</div>';
+    setErr('phase-content');
     return;
   }
 
@@ -882,8 +890,7 @@ async function renderOiDivergence() {
   const sym = encodeURIComponent(activeSymbol);
   const data = await apiFetch(`/oi-divergence?symbol=${sym}&window=3600`);
   if (!data) {
-    const el = document.getElementById('oi-divergence-content');
-    if (el && el.textContent.includes('Loading')) el.innerHTML = '<div class="text-muted" style="font-size:11px;">No data yet</div>';
+    setErr('oi-divergence-content');
     return;
   }
 
@@ -961,8 +968,7 @@ async function renderMicrostructure() {
   const sym = encodeURIComponent(activeSymbol);
   const data = await apiFetch(`/market-microstructure?symbol=${sym}&window=300`);
   if (!data) {
-    const el = document.getElementById('microstructure-content');
-    if (el && el.textContent.includes('Loading')) el.innerHTML = '<div class="text-muted" style="font-size:11px;">No data yet</div>';
+    setErr('microstructure-content');
     return;
   }
 
@@ -1102,13 +1108,10 @@ async function renderWhaleClustering() {
   const badge = document.getElementById('whale-clustering-badge');
   if (!el) return;
 
-  const sym = activeSymbol;
-  let data;
-  try {
-    const res = await fetch(`${API}/whale-clustering?symbol=${sym}&window=1800`);
-    data = await res.json();
-  } catch {
-    el.innerHTML = '<div class="text-muted" style="font-size:11px;">Unavailable</div>';
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/whale-clustering?symbol=${sym}&window=1800`);
+  if (!data) {
+    setErr('whale-clustering-content');
     return;
   }
 
@@ -1168,8 +1171,7 @@ async function renderVwapDeviation() {
   const sym = encodeURIComponent(activeSymbol);
   const data = await apiFetch(`/vwap-deviation?symbol=${sym}`);
   if (!data) {
-    const el = document.getElementById('vwap-deviation-content');
-    if (el && el.textContent.includes('Loading')) el.innerHTML = '<div class="text-muted" style="font-size:11px;">No data yet</div>';
+    setErr('vwap-deviation-content');
     return;
   }
 
@@ -1218,7 +1220,7 @@ async function renderOiWeightedPrice() {
   if (!el) return;
 
   if (!data) {
-    if (el.textContent.includes('Loading')) el.innerHTML = '<div class="text-muted" style="font-size:11px;">No data yet</div>';
+    setErr('oi-weighted-price-content');
     return;
   }
 
@@ -1268,7 +1270,7 @@ async function renderRealizedVolBands() {
   if (!el) return;
 
   if (!data) {
-    if (el.textContent.includes('Loading')) el.innerHTML = '<div class="text-muted" style="font-size:11px;">No data yet</div>';
+    setErr('realized-vol-bands-content');
     return;
   }
 
@@ -1337,8 +1339,7 @@ async function renderMarketRegime() {
   const sym = encodeURIComponent(activeSymbol);
   const data = await apiFetch(`/market-regime?symbol=${sym}`);
   if (!data) {
-    const el = document.getElementById('market-regime-content');
-    if (el && el.textContent.includes('Loading')) el.innerHTML = '<div class="text-muted" style="font-size:11px;">No data yet</div>';
+    setErr('market-regime-content');
     return;
   }
 
@@ -1678,7 +1679,10 @@ async function renderTapeSpeed() {
 async function renderAggressorStreak() {
   const sym = encodeURIComponent(activeSymbol);
   const data = await apiFetch(`/aggressor-streak?symbol=${sym}`);
-  if (!data) return;
+  if (!data) {
+    setErr('aggressor-streak-content');
+    return;
+  }
 
   const el    = document.getElementById('aggressor-streak-content');
   const badge = document.getElementById('aggressor-streak-badge');
@@ -1810,7 +1814,7 @@ async function renderObWalls() {
   if (!el) return;
 
   if (!data) {
-    if (el.textContent.includes('Loading')) el.innerHTML = '<div class="text-muted">No data yet</div>';
+    setErr('ob-walls-content');
     return;
   }
 
@@ -1925,10 +1929,13 @@ async function init() {
   safeInit(initAdaptiveVpChart);
   connectAlerts();
 
-  // After 10s replace any still-Loading cards with "No data available"
+  // After 10s replace any still-Loading cards with Error badge
   setTimeout(() => {
-    document.querySelectorAll('.text-muted').forEach(el => {
-      if (el.textContent.trim() === 'Loading…') el.textContent = 'No data available';
+    document.querySelectorAll('[id$="-content"]').forEach(el => {
+      const txt = el.textContent.trim();
+      if (txt.startsWith('Loading') || txt === 'No data available') {
+        el.innerHTML = '<span class="card-badge badge-red" style="display:inline-block">Error</span>';
+      }
     });
   }, 10000);
 
