@@ -3016,122 +3016,103 @@ async function refreshOptionsFlowTracker() {
   const badge = document.getElementById('options-flow-badge');
   if (!el) return;
 
-  const data = await apiFetch('/api/options-flow-tracker');
-  if (!data) { setErr('options-flow-content'); return; }
+  const data = await apiFetch('/options-flow-tracker');
+  if (!data) { el.innerHTML = '<span class="card-badge badge-red" style="display:inline-block">Error</span>'; return; }
 
   const summary = data.summary || {};
   const direction = summary.net_flow_direction || 'neutral';
-  const dirColor = direction === 'bullish' ? 'var(--green)' : direction === 'bearish' ? 'var(--red)' : 'var(--muted)';
+  const dirCol = direction === 'bullish' ? 'var(--green)' : direction === 'bearish' ? 'var(--red)' : 'var(--muted)';
 
   if (badge) {
     badge.textContent = direction.toUpperCase();
-    badge.className = `card-badge badge-${direction === 'bullish' ? 'green' : direction === 'bearish' ? 'red' : 'gray'}`;
-    badge.style.display = '';
+    badge.className = 'card-badge ' + (direction === 'bullish' ? 'badge-green' : direction === 'bearish' ? 'badge-red' : 'badge-blue');
+    badge.style.display = 'inline-block';
   }
 
-  const fmtM = v => `$${((v || 0) / 1e6).toFixed(2)}M`;
-  const fmtK = v => `$${((v || 0) / 1e3).toFixed(0)}K`;
+  const fmtM = v => '$' + ((v || 0) / 1e6).toFixed(2) + 'M';
 
   // Skew by expiry rows
-  const skew = data.skew_by_expiry || {};
-  const skewRows = Object.entries(skew).sort((a, b) => b[1].call_volume_usd + b[1].put_volume_usd - (a[1].call_volume_usd + a[1].put_volume_usd)).slice(0, 5).map(([exp, v]) => {
+  const skew_by_expiry = data.skew_by_expiry || {};
+  const skewRows = Object.entries(skew_by_expiry).sort((a, b) => {
+    const tv = e => (e[1].call_volume_usd || 0) + (e[1].put_volume_usd || 0);
+    return tv(b) - tv(a);
+  }).slice(0, 5).map(([exp, v]) => {
     const sc = v.skew_signal === 'bullish' ? 'var(--green)' : v.skew_signal === 'bearish' ? 'var(--red)' : 'var(--muted)';
-    return `<tr>
-      <td style="font-size:9px;color:var(--text)">${exp}</td>
-      <td style="font-size:9px;text-align:right;color:var(--green)">${fmtM(v.call_volume_usd)}</td>
-      <td style="font-size:9px;text-align:right;color:var(--red)">${fmtM(v.put_volume_usd)}</td>
-      <td style="font-size:9px;text-align:right;color:${sc}">${(v.skew_ratio || 0).toFixed(2)}x</td>
-      <td style="font-size:9px;text-align:right;color:${sc}">${(v.skew_signal || '').toUpperCase()}</td>
-    </tr>`;
+    return '<tr>' +
+      '<td style="font-size:9px;color:var(--text)">' + exp + '</td>' +
+      '<td style="font-size:9px;text-align:right;color:var(--green)">' + fmtM(v.call_volume_usd) + '</td>' +
+      '<td style="font-size:9px;text-align:right;color:var(--red)">' + fmtM(v.put_volume_usd) + '</td>' +
+      '<td style="font-size:9px;text-align:right;color:' + sc + '">' + (v.skew_signal || '').toUpperCase() + '</td>' +
+      '<td style="font-size:9px;text-align:right;color:var(--muted)">' + (v.skew_ratio || 0).toFixed(2) + 'x</td>' +
+      '</tr>';
   }).join('');
 
   // Unusual flow alert rows
   const alerts = data.unusual_flow_alerts || [];
   const alertRows = alerts.slice(0, 4).map(a => {
     const ac = a.severity === 'critical' ? 'var(--red)' : '#f59e0b';
-    return `<tr>
-      <td style="font-size:9px;color:var(--text)">${(a.instrument || '').substring(0, 20)}</td>
-      <td style="font-size:9px;text-align:right">${fmtK(a.notional_usd)}</td>
-      <td style="font-size:9px;text-align:right;color:${a.side === 'buy' ? 'var(--green)' : 'var(--red)'}">${(a.side || '').toUpperCase()}</td>
-      <td style="font-size:9px;text-align:right;color:${ac}">${(a.severity || '').toUpperCase()}</td>
-    </tr>`;
+    return '<tr>' +
+      '<td style="font-size:9px;color:var(--text)">' + (a.instrument || '').substring(0, 22) + '</td>' +
+      '<td style="font-size:9px;text-align:right">' + fmtM(a.notional_usd) + '</td>' +
+      '<td style="font-size:9px;text-align:right;color:' + (a.side === 'buy' ? 'var(--green)' : 'var(--red)') + '">' + (a.side || '').toUpperCase() + '</td>' +
+      '<td style="font-size:9px;text-align:right;color:' + ac + '">' + (a.severity || '').toUpperCase() + '</td>' +
+      '</tr>';
   }).join('');
 
-  // Strike heatmap — top 5 strikes by total notional
-  const hm = data.strike_heatmap || {};
-  const hmRows = Object.entries(hm).sort((a, b) => (b[1].call_notional_usd + b[1].put_notional_usd) - (a[1].call_notional_usd + a[1].put_notional_usd)).slice(0, 5).map(([strike, v]) => {
-    const nc = v.net_flow_usd >= 0 ? 'var(--green)' : 'var(--red)';
-    const dc = v.dominant === 'call' ? 'var(--green)' : 'var(--red)';
-    return `<tr>
-      <td style="font-size:9px;color:var(--text)">$${Number(strike).toLocaleString()}</td>
-      <td style="font-size:9px;text-align:right;color:var(--green)">${fmtM(v.call_notional_usd)}</td>
-      <td style="font-size:9px;text-align:right;color:var(--red)">${fmtM(v.put_notional_usd)}</td>
-      <td style="font-size:9px;text-align:right;color:${nc}">${v.net_flow_usd >= 0 ? '+' : ''}${fmtM(v.net_flow_usd)}</td>
-      <td style="font-size:9px;text-align:right;color:${dc}">${(v.dominant || '').toUpperCase()}</td>
-    </tr>`;
+  // Strike heatmap — top 5 by total notional
+  const strike_heatmap = data.strike_heatmap || {};
+  const hmRows = Object.entries(strike_heatmap).sort((a, b) => {
+    const tn = e => (e[1].call_notional_usd || 0) + (e[1].put_notional_usd || 0);
+    return tn(b) - tn(a);
+  }).slice(0, 5).map(([strike, h]) => {
+    const nc = (h.net_flow_usd || 0) >= 0 ? 'var(--green)' : 'var(--red)';
+    const dc = h.dominant === 'call' ? 'var(--green)' : 'var(--red)';
+    return '<tr>' +
+      '<td style="font-size:9px;color:var(--text)">$' + Number(strike).toLocaleString() + '</td>' +
+      '<td style="font-size:9px;text-align:right;color:var(--green)">' + fmtM(h.call_notional_usd) + '</td>' +
+      '<td style="font-size:9px;text-align:right;color:var(--red)">' + fmtM(h.put_notional_usd) + '</td>' +
+      '<td style="font-size:9px;text-align:right;color:' + nc + '">' + ((h.net_flow_usd || 0) >= 0 ? '+' : '') + fmtM(h.net_flow_usd) + '</td>' +
+      '<td style="font-size:9px;text-align:right;color:' + dc + '">' + (h.dominant || '').toUpperCase() + '</td>' +
+      '</tr>';
   }).join('');
 
-  el.innerHTML = `
-    <div style="display:flex;gap:12px;margin-bottom:6px;flex-wrap:wrap">
-      <div>
-        <div style="font-size:9px;color:var(--muted)">CALL VOL</div>
-        <div style="font-size:14px;font-weight:700;color:var(--green)">${fmtM(summary.total_call_volume_usd)}</div>
-      </div>
-      <div>
-        <div style="font-size:9px;color:var(--muted)">PUT VOL</div>
-        <div style="font-size:14px;font-weight:700;color:var(--red)">${fmtM(summary.total_put_volume_usd)}</div>
-      </div>
-      <div>
-        <div style="font-size:9px;color:var(--muted)">C/P RATIO</div>
-        <div style="font-size:14px;font-weight:700;color:${dirColor}">${(summary.overall_skew_ratio || 0).toFixed(2)}x</div>
-      </div>
-      <div>
-        <div style="font-size:9px;color:var(--muted)">SKEW %ILE</div>
-        <div style="font-size:14px;font-weight:700;color:${dirColor}">${(summary.skew_percentile || 0).toFixed(1)}</div>
-      </div>
-      <div>
-        <div style="font-size:9px;color:var(--muted)">ALERTS</div>
-        <div style="font-size:14px;font-weight:700;color:${(summary.unusual_activity_count || 0) > 0 ? '#f59e0b' : 'var(--muted)'}">${summary.unusual_activity_count || 0}</div>
-      </div>
-    </div>
-
-    <div style="font-size:9px;color:var(--muted);margin-bottom:2px;font-weight:600">SKEW BY EXPIRY</div>
-    <table style="width:100%;border-collapse:collapse;margin-bottom:6px">
-      <thead><tr>
-        <th style="font-size:8px;color:var(--muted);text-align:left;font-weight:500">EXPIRY</th>
-        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">CALLS</th>
-        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">PUTS</th>
-        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">RATIO</th>
-        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">SIGNAL</th>
-      </tr></thead>
-      <tbody>${skewRows || '<tr><td colspan="5" style="font-size:9px;color:var(--muted)">No data</td></tr>'}</tbody>
-    </table>
-
-    <div style="font-size:9px;color:var(--muted);margin-bottom:2px;font-weight:600">UNUSUAL FLOW ALERTS</div>
-    <table style="width:100%;border-collapse:collapse;margin-bottom:6px">
-      <thead><tr>
-        <th style="font-size:8px;color:var(--muted);text-align:left;font-weight:500">INSTRUMENT</th>
-        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">NOTIONAL</th>
-        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">SIDE</th>
-        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">SEVERITY</th>
-      </tr></thead>
-      <tbody>${alertRows || '<tr><td colspan="4" style="font-size:9px;color:var(--muted)">No unusual flow</td></tr>'}</tbody>
-    </table>
-
-    <div style="font-size:9px;color:var(--muted);margin-bottom:2px;font-weight:600">STRIKE HEATMAP (TOP 5)</div>
-    <table style="width:100%;border-collapse:collapse;margin-bottom:6px">
-      <thead><tr>
-        <th style="font-size:8px;color:var(--muted);text-align:left;font-weight:500">STRIKE</th>
-        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">CALLS</th>
-        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">PUTS</th>
-        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">NET</th>
-        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">DOM</th>
-      </tr></thead>
-      <tbody>${hmRows || '<tr><td colspan="5" style="font-size:9px;color:var(--muted)">No data</td></tr>'}</tbody>
-    </table>
-
-    <div style="font-size:9px;color:var(--muted);margin-top:4px">${data.description || ''}</div>
-  `;
+  el.innerHTML =
+    '<div style="display:flex;gap:12px;margin-bottom:6px;flex-wrap:wrap">' +
+      '<div><div style="font-size:9px;color:var(--muted)">CALLS</div>' +
+        '<div style="font-size:14px;font-weight:700;color:var(--green)">' + fmtM(summary.total_call_volume_usd) + '</div></div>' +
+      '<div><div style="font-size:9px;color:var(--muted)">PUTS</div>' +
+        '<div style="font-size:14px;font-weight:700;color:var(--red)">' + fmtM(summary.total_put_volume_usd) + '</div></div>' +
+      '<div><div style="font-size:9px;color:var(--muted)">C/P RATIO</div>' +
+        '<div style="font-size:14px;font-weight:700;color:' + dirCol + '">' + (summary.overall_skew_ratio || 0).toFixed(2) + 'x</div></div>' +
+      '<div><div style="font-size:9px;color:var(--muted)">SKEW %ile</div>' +
+        '<div style="font-size:14px;font-weight:700;color:' + dirCol + '">' + (summary.skew_percentile || 0).toFixed(1) + '</div></div>' +
+      '<div><div style="font-size:9px;color:var(--muted)">ALERTS</div>' +
+        '<div style="font-size:14px;font-weight:700;color:' + ((summary.unusual_activity_count || 0) > 0 ? '#f59e0b' : 'var(--muted)') + '">' + (summary.unusual_activity_count || 0) + '</div></div>' +
+    '</div>' +
+    '<div style="font-size:9px;color:var(--muted);margin-bottom:2px;font-weight:600">SKEW BY EXPIRY</div>' +
+    '<table style="width:100%;border-collapse:collapse;margin-bottom:6px"><thead><tr>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:left;font-weight:500">EXPIRY</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">CALLS</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">PUTS</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">SIGNAL</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">RATIO</th>' +
+    '</tr></thead><tbody>' + (skewRows || '<tr><td colspan="5" style="font-size:9px;color:var(--muted)">No data</td></tr>') + '</tbody></table>' +
+    '<div style="font-size:9px;color:var(--muted);margin-bottom:2px;font-weight:600">UNUSUAL FLOW ALERTS</div>' +
+    '<table style="width:100%;border-collapse:collapse;margin-bottom:6px"><thead><tr>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:left;font-weight:500">INSTRUMENT</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">NOTIONAL</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">SIDE</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">SEV</th>' +
+    '</tr></thead><tbody>' + (alertRows || '<tr><td colspan="4" style="font-size:9px;color:var(--muted)">No unusual flow</td></tr>') + '</tbody></table>' +
+    '<div style="font-size:9px;color:var(--muted);margin-bottom:2px;font-weight:600">STRIKE HEATMAP (TOP 5)</div>' +
+    '<table style="width:100%;border-collapse:collapse"><thead><tr>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:left;font-weight:500">STRIKE</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">CALLS</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">PUTS</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">NET</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">DOM</th>' +
+    '</tr></thead><tbody>' + (hmRows || '<tr><td colspan="5" style="font-size:9px;color:var(--muted)">No data</td></tr>') + '</tbody></table>' +
+    '<div style="font-size:9px;color:var(--muted);margin-top:4px">' + (data.description || '') + '</div>';
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
