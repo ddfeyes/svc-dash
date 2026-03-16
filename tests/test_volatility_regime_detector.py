@@ -14,7 +14,7 @@ from metrics import compute_volatility_regime_detector
 # ---------------------------------------------------------------------------
 
 def run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 @pytest.fixture(scope="module")

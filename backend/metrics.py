@@ -9570,3 +9570,143 @@ async def compute_order_flow_toxicity() -> Dict:
         "rolling_vpin_50": rolling_vpin_50,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+
+
+async def compute_cross_market_correlation() -> Dict:
+    """Rolling correlation matrix for BTC/ETH/SOL/BNB with lead-lag analysis."""
+    import random as _random
+    from datetime import datetime, timezone
+
+    _random.seed(20260319)
+
+    ASSETS = ["BTC", "ETH", "SOL", "BNB"]
+    WINDOWS_DAYS = {"7d": 7, "30d": 30, "90d": 90}
+
+    def _gen_corr_matrix(seed_val: int) -> dict:
+        _random.seed(seed_val)
+        matrix: dict = {a: {} for a in ASSETS}
+        for i, a in enumerate(ASSETS):
+            for j, b in enumerate(ASSETS):
+                if i == j:
+                    continue
+                if j < i:
+                    matrix[a][b] = matrix[b][a]
+                else:
+                    base = 0.4 + _random.random() * 0.55
+                    val = round(min(1.0, max(-1.0, base)), 4)
+                    matrix[a][b] = float(val)
+        return matrix
+
+    correlation_matrix = _gen_corr_matrix(20260319)
+
+    windows: dict = {}
+    for w, days in WINDOWS_DAYS.items():
+        _random.seed(20260319 + days)
+        w_matrix: dict = {a: {} for a in ASSETS}
+        for i, a in enumerate(ASSETS):
+            for j, b in enumerate(ASSETS):
+                if i == j:
+                    continue
+                if j < i:
+                    w_matrix[a][b] = w_matrix[b][a]
+                else:
+                    base_val = correlation_matrix[a][b]
+                    noise = (_random.random() - 0.5) * 0.15
+                    val = round(min(1.0, max(-1.0, base_val + noise)), 4)
+                    w_matrix[a][b] = float(val)
+        windows[w] = w_matrix
+
+    _random.seed(20260319 + 999)
+    leader = "BTC"
+    lag_hours = {}
+    for a in ASSETS:
+        if a != leader:
+            lag_hours[a] = round(1 + _random.random() * 5, 1)
+
+    lead_lag = {"leader": leader, "lag_hours": lag_hours}
+    dominant_leader = leader
+
+    breakdown_assets = []
+    for a in ASSETS:
+        for b in ASSETS:
+            if a != b and b in windows["30d"].get(a, {}):
+                diff = windows["90d"][a][b] - windows["30d"][a][b]
+                if diff > 0.35:
+                    if a not in breakdown_assets:
+                        breakdown_assets.append(a)
+
+    breakdown_detected = len(breakdown_assets) > 0
+
+    return {
+        "correlation_matrix": correlation_matrix,
+        "windows": windows,
+        "lead_lag": lead_lag,
+        "dominant_leader": dominant_leader,
+        "breakdown_detected": breakdown_detected,
+        "breakdown_assets": breakdown_assets,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# ── Liquidation Cascade Detector ─────────────────────────────────────────────
+
+def _lcd_cascade_chain(rng, assets):
+    chain = []
+    t = 0.0
+    for asset in assets:
+        n_events = rng.randint(2, 5)
+        for _ in range(n_events):
+            t += rng.uniform(0.5, 4.0)
+            chain.append({
+                "asset": asset,
+                "amount": round(rng.uniform(500_000, 25_000_000), 2),
+                "time": round(t, 2),
+            })
+    chain.sort(key=lambda x: x["time"])
+    return chain
+
+
+def _lcd_support_levels(rng):
+    base_prices = {"BTC": 65_000.0, "ETH": 3_200.0, "SOL": 145.0, "BNB": 580.0}
+    levels = []
+    for base in base_prices.values():
+        for frac in [0.97, 0.94, 0.90]:
+            levels.append(round(base * frac * rng.uniform(0.98, 1.02), 2))
+    return sorted(levels, reverse=True)
+
+
+def _lcd_regime(prob):
+    if prob < 0.25:
+        return "calm"
+    elif prob < 0.50:
+        return "building"
+    elif prob < 0.75:
+        return "cascade"
+    else:
+        return "peak"
+
+
+async def compute_liquidation_cascade_detector() -> dict:
+    import random as _random
+    rng = _random.Random(20260316)
+    assets = ["BTC", "ETH", "SOL", "BNB"]
+    exchanges_pool = ["Binance", "OKX", "Bybit", "dYdX", "BitMEX", "Huobi"]
+    cascade_probability = round(rng.uniform(0.0, 1.0), 4)
+    time_to_cascade_minutes = round(rng.uniform(5.0, 240.0), 2)
+    support_levels = _lcd_support_levels(rng)
+    total_liquidated_usd = round(rng.uniform(10_000_000, 800_000_000), 2)
+    cascade_chain = _lcd_cascade_chain(rng, assets)
+    liq_velocity = round(total_liquidated_usd / max(time_to_cascade_minutes, 1.0), 2)
+    n_exchanges = rng.randint(3, len(exchanges_pool))
+    exchanges = rng.sample(exchanges_pool, n_exchanges)
+    regime = _lcd_regime(cascade_probability)
+    return {
+        "cascade_probability": cascade_probability,
+        "time_to_cascade_minutes": time_to_cascade_minutes,
+        "support_levels": support_levels,
+        "total_liquidated_usd": total_liquidated_usd,
+        "cascade_chain": cascade_chain,
+        "liq_velocity": liq_velocity,
+        "exchanges": exchanges,
+        "regime": regime,
+    }

@@ -191,6 +191,12 @@ async def health():
     return {"status": "ok", "symbols": get_symbols()}
 
 
+
+@app.get("/api/cross-market-correlation")
+async def cross_market_correlation():
+    from metrics import compute_cross_market_correlation
+    return await compute_cross_market_correlation()
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", "8000"))

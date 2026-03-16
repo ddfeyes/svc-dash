@@ -1,6 +1,7 @@
 """Tests for Smart Money Index (feat/smart-money-index, issue #96)."""
 
 import asyncio
+import math
 import pytest
 import sys
 import os
@@ -10,13 +11,26 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 from metrics import compute_smart_money_index
 
 
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
 def run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 @pytest.fixture(scope="module")
 def result():
     return run(compute_smart_money_index())
+
+
+@pytest.fixture(scope="module")
+def client():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from api import router
+
+    mini_app = FastAPI()
+    mini_app.include_router(router)
+    return TestClient(mini_app)
 
 
 # ── 1. Return type ────────────────────────────────────────────────────────────
@@ -78,12 +92,10 @@ def test_smi_score_le_plus_one(result):
 
 
 def test_smi_score_not_nan(result):
-    import math
     assert not math.isnan(result["smi_score"])
 
 
 def test_smi_score_not_inf(result):
-    import math
     assert math.isfinite(result["smi_score"])
 
 
@@ -94,12 +106,10 @@ def test_institutional_flow_is_float(result):
 
 
 def test_institutional_flow_not_nan(result):
-    import math
     assert not math.isnan(result["institutional_flow"])
 
 
 def test_institutional_flow_finite(result):
-    import math
     assert math.isfinite(result["institutional_flow"])
 
 
@@ -110,12 +120,10 @@ def test_retail_flow_is_float(result):
 
 
 def test_retail_flow_not_nan(result):
-    import math
     assert not math.isnan(result["retail_flow"])
 
 
 def test_retail_flow_finite(result):
-    import math
     assert math.isfinite(result["retail_flow"])
 
 
@@ -126,12 +134,10 @@ def test_divergence_is_float(result):
 
 
 def test_divergence_not_nan(result):
-    import math
     assert not math.isnan(result["divergence"])
 
 
 def test_divergence_finite(result):
-    import math
     assert math.isfinite(result["divergence"])
 
 
@@ -220,17 +226,14 @@ def test_block_ratio_le_one(result):
 
 
 def test_whale_accumulation_finite(result):
-    import math
     assert math.isfinite(result["components"]["whale_accumulation"])
 
 
 def test_oi_skew_finite(result):
-    import math
     assert math.isfinite(result["components"]["oi_skew"])
 
 
 def test_futures_basis_finite(result):
-    import math
     assert math.isfinite(result["components"]["futures_basis"])
 
 
@@ -299,17 +302,6 @@ def test_deterministic_divergence():
 
 
 # ── 11. HTTP endpoint ────────────────────────────────────────────────────────
-
-@pytest.fixture(scope="module")
-def client():
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-    from api import router
-
-    mini_app = FastAPI()
-    mini_app.include_router(router)
-    return TestClient(mini_app)
-
 
 def test_endpoint_status_200(client):
     resp = client.get("/api/smart-money-index")
