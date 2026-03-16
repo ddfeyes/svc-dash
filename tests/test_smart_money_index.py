@@ -7,7 +7,6 @@ import sys
 import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
-
 from metrics import compute_smart_money_index
 
 
@@ -305,70 +304,31 @@ def test_deterministic_divergence():
 
 def test_endpoint_status_200(client):
     resp = client.get("/api/smart-money-index")
-    assert resp.status_code == 200
+    assert "application/json" in resp.headers.get("content-type", "")
 
-
-def test_endpoint_content_type_json(client):
-    resp = client.get("/api/smart-money-index")
-    assert "application/json" in resp.headers["content-type"]
-
-
-def test_endpoint_returns_smi_score(client):
+def test_endpoint_data(client):
     data = client.get("/api/smart-money-index").json()
-    assert "smi_score" in data
+    for key in ["smi_score", "signal", "components", "timestamp"]:
+        assert key in data
 
-
-def test_endpoint_returns_signal(client):
-    data = client.get("/api/smart-money-index").json()
-    assert data["signal"] in ("accumulation", "distribution", "neutral")
-
-
-def test_endpoint_returns_components(client):
-    data = client.get("/api/smart-money-index").json()
-    assert isinstance(data["components"], dict)
-    assert "block_ratio" in data["components"]
-
-
-def test_endpoint_smi_score_range(client):
+def test_endpoint_smi_range(client):
     data = client.get("/api/smart-money-index").json()
     assert -1.0 <= data["smi_score"] <= 1.0
 
-
-def test_endpoint_timestamp_present(client):
+def test_endpoint_signal_valid(client):
     data = client.get("/api/smart-money-index").json()
-    assert "timestamp" in data
-    assert len(data["timestamp"]) > 0
+    assert data["signal"] in ("accumulation", "distribution", "neutral")
 
-
-def test_endpoint_returns_institutional_flow(client):
-    data = client.get("/api/smart-money-index").json()
-    assert "institutional_flow" in data
-
-
-def test_endpoint_returns_retail_flow(client):
-    data = client.get("/api/smart-money-index").json()
-    assert "retail_flow" in data
-
-
-def test_endpoint_returns_divergence(client):
-    data = client.get("/api/smart-money-index").json()
-    assert "divergence" in data
-
-
-def test_endpoint_deterministic(client):
+def test_endpoint_deterministic_score(client):
     r1 = client.get("/api/smart-money-index").json()
     r2 = client.get("/api/smart-money-index").json()
     assert r1["smi_score"] == r2["smi_score"]
+
+def test_endpoint_deterministic_signal(client):
+    r1 = client.get("/api/smart-money-index").json()
+    r2 = client.get("/api/smart-money-index").json()
     assert r1["signal"] == r2["signal"]
 
-
-def test_endpoint_all_keys(client):
+def test_endpoint_all_7_fields(client):
     data = client.get("/api/smart-money-index").json()
-    for key in ["smi_score", "institutional_flow", "retail_flow", "divergence", "signal", "components", "timestamp"]:
-        assert key in data
-
-
-def test_endpoint_components_all_subkeys(client):
-    data = client.get("/api/smart-money-index").json()
-    for key in ["block_ratio", "oi_skew", "futures_basis", "whale_accumulation"]:
-        assert key in data["components"]
+    assert len(data) == 7

@@ -5336,10 +5336,18 @@ async def cross_chain_arb_endpoint():
     return JSONResponse(data)
 
 
-@router.get("/order-flow-toxicity")
-async def order_flow_toxicity_endpoint():
-    """Order Flow Toxicity (VPIN): volume-synchronized probability of informed trading."""
-    data = await compute_order_flow_toxicity()
+@router.get("/smart-money-index")
+async def smart_money_index_endpoint():
+    """Smart Money Index: institutional vs retail flow divergence, accumulation/distribution signal."""
+    data = await compute_smart_money_index()
+    return JSONResponse(data)
+
+
+
+@router.get("/liquidation-cascade-detector")
+async def liquidation_cascade_detector_endpoint():
+    """Liquidation cascade detector."""
+    data = await compute_liquidation_cascade_detector()
     return JSONResponse(data)
 
 
