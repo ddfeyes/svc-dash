@@ -78,6 +78,7 @@ from metrics import (
     compute_realized_volatility_bands,
     detect_ob_walls,
     compute_cross_asset_corr,
+    compute_social_sentiment,
 )
 
 router = APIRouter(prefix="/api")
@@ -5271,4 +5272,11 @@ async def cross_asset_corr_endpoint(
         bucket_seconds=bucket,
         rolling_window=rolling,
     )
+    return JSONResponse(data)
+
+
+@router.get("/social-sentiment")
+async def social_sentiment_endpoint():
+    """Social sentiment aggregator: keyword scoring + Reddit/Twitter volume proxy."""
+    data = await compute_social_sentiment()
     return JSONResponse(data)

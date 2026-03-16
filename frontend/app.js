@@ -2812,9 +2812,79 @@ async function refresh() {
     await delay(200);
     // Batch 15: cross-asset correlation
     await Promise.all([safe(renderCrossAssetCorr)]);
+    // Batch 16: social sentiment
+    await Promise.all([safe(renderSocialSentiment)]);
   } finally {
     _refreshRunning = false;
   }
+}
+
+// ── Social Sentiment ──────────────────────────────────────────────────────────
+async function renderSocialSentiment() {
+  const el    = document.getElementById('social-sentiment-content');
+  const badge = document.getElementById('social-sentiment-badge');
+  if (!el) return;
+  const data = await apiFetch('/social-sentiment');
+  if (!data) { setErr('social-sentiment-content'); return; }
+
+  const sent   = data.sentiment    || {};
+  const vol    = data.social_volume || {};
+  const kw     = data.keywords      || {};
+  const hist   = data.history       || [];
+  const label  = sent.label         || 'neutral';
+  const score  = sent.score         ?? 50;
+  const dir    = sent.direction     || 'stable';
+  const mom    = sent.momentum      ?? 0;
+  const zscore = data.zscore        ?? 0;
+
+  const sigCls = label === 'very_bullish' ? 'badge-green'
+               : label === 'bullish'      ? 'badge-green'
+               : label === 'bearish'      ? 'badge-red'
+               : label === 'very_bearish' ? 'badge-red'
+               : 'badge-blue';
+  const sigLabel = label.replace('_', ' ').toUpperCase();
+  if (badge) {
+    badge.textContent = sigLabel;
+    badge.className   = `card-badge ${sigCls}`;
+    badge.style.display = '';
+  }
+
+  const scoreCol = score >= 60 ? 'var(--green)' : score <= 40 ? 'var(--red)' : 'var(--muted)';
+  const dirCol   = dir === 'rising' ? 'var(--green)' : dir === 'falling' ? 'var(--red)' : 'var(--muted)';
+  const domCol   = kw.dominant === 'bullish' ? 'var(--green)' : kw.dominant === 'bearish' ? 'var(--red)' : 'var(--muted)';
+
+  const sparkbars = hist.slice(-10).map(h => {
+    const col = (h.score || 50) >= 55 ? 'var(--green)' : (h.score || 50) <= 40 ? 'var(--red)' : 'var(--muted)';
+    return `<span style="display:inline-block;width:5px;height:10px;background:${col};margin-right:1px;opacity:0.7"></span>`;
+  }).join('');
+
+  const kwBull = (kw.top_bullish || []).join(', ') || '—';
+  const kwBear = (kw.top_bearish || []).join(', ') || '—';
+
+  el.innerHTML = `
+    <div style="font-size:10px;color:var(--muted);margin-bottom:4px;display:flex;gap:10px;flex-wrap:wrap">
+      <span>score: <b style="color:${scoreCol}">${score.toFixed(1)}/100</b></span>
+      <span>trend: <b style="color:${dirCol}">${dir}</b></span>
+      <span>mom: <b style="color:${mom>=0?'var(--green)':'var(--red)'}">${mom>=0?'+':''}${mom.toFixed(1)}</b></span>
+      <span>z: <b style="color:${zscore>1?'var(--green)':zscore<-1?'var(--red)':'var(--muted)'}">${zscore.toFixed(2)}</b></span>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-bottom:4px;display:flex;gap:10px;flex-wrap:wrap">
+      <span>buzz: <b style="color:var(--fg)">${vol.buzz || '—'}</b></span>
+      <span>vol: <b style="color:var(--fg)">${(vol.volume_proxy||0).toFixed(1)}</b></span>
+      <span>reddit/h: <b style="color:var(--fg)">${vol.reddit_posts_per_hour||0}p ${vol.reddit_comments_per_hour||0}c</b></span>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-bottom:4px">
+      keywords: <span style="color:var(--green)">▲${kw.bullish_count||0}</span>
+      <span style="color:var(--red)"> ▼${kw.bearish_count||0}</span>
+      <span style="color:var(--muted)"> ●${kw.neutral_count||0}</span>
+      dominant: <b style="color:${domCol}">${kw.dominant||'neutral'}</b>
+    </div>
+    <div style="font-size:9px;color:var(--muted);margin-bottom:4px">
+      bull: <span style="color:var(--green)">${kwBull}</span>
+      &nbsp; bear: <span style="color:var(--red)">${kwBear}</span>
+    </div>
+    <div style="margin-top:4px">${sparkbars}</div>
+    ${data.description ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${data.description}</div>` : ''}`;
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
@@ -2876,6 +2946,4 @@ async function init() {
     if (btn) btn.addEventListener('click', toggleTheme);
   });
 })();
-
-document.addEventListener('DOMContentLoaded', init);
 
