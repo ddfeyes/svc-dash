@@ -5,7 +5,7 @@
 const API = window.location.protocol + '//' + window.location.host + '/api';
 const WS  = (window.location.protocol === 'https:' ? 'wss://' : 'ws://') + window.location.host;
 
-const REFRESH_MS   = 15000;  // poll interval (15s to avoid backend overload)
+const REFRESH_MS   = 30000;  // poll interval (30s — sequential loading, avoid socket exhaustion)
 const TRADE_MAX    = 100;    // max rows in tape
 
 
@@ -2443,59 +2443,66 @@ async function renderTopMovers() {
 }
 
 // ── Main Refresh Loop ─────────────────────────────────────────────────────────
+let _refreshRunning = false;
+
 async function refresh() {
   if (!activeSymbol) return;
-  const safe = fn => fn().catch(e => console.warn('[refresh]', fn.name, e.message));
+  if (_refreshRunning) return;  // prevent concurrent refreshes stacking up
+  _refreshRunning = true;
 
-  // Batch 1: core charts + header stats
-  await Promise.all([
-    safe(renderPriceChart),
-    safe(renderOiChart),
-    safe(renderCvdChart),
-    safe(renderFunding),
-    safe(renderFundingMomentum),
-    safe(renderSpread),
-    safe(renderWsStats),
-  ]);
-  // Batch 2: trade data
-  await Promise.all([
-    safe(renderTradeTape),
-    safe(renderVolumeImbalance),
-    safe(renderPhase),
-    safe(renderOiDivergence),
-    safe(renderMicrostructure),
-  ]);
-  // Batch 3: advanced
-  await Promise.all([
-    safe(renderWhaleClustering),
-    safe(renderVwapDeviation),
-    safe(renderOiWeightedPrice),
-    safe(renderRealizedVolBands),
-    safe(renderMarketRegime),
-    safe(renderMomentum),
-    safe(renderMomentumRank),
-    safe(renderRegimeTimeline),
-  ]);
-  // Batch 4: secondary
-  await Promise.all([
-    safe(renderCorrelations),
-    safe(renderCorrHeatmap),
-    safe(renderVolumeProfile),
-    safe(renderAggressorRatio),
-    safe(renderVpin),
-    safe(renderAdaptiveVolumeProfile),
-    safe(renderTapeSpeed),
-    safe(renderAggressorStreak),
-    safe(renderObWalls),
-    safe(renderTopMovers),
-    safe(renderLiqHeatmap),
-    safe(renderCvdMomentum),
-    safe(renderDeltaDivergence),
-    safe(renderFundingExtreme),
-    safe(renderLiqCascade),
-    safe(renderLargeTrades),
-    safe(renderNetTakerDelta),
-  ]);
+  const safe = fn => fn().catch(e => console.warn('[refresh]', fn.name, e.message));
+  const delay = ms => new Promise(r => setTimeout(r, ms));
+
+  try {
+    // Batch 1: core price charts
+    await Promise.all([safe(renderPriceChart), safe(renderOiChart), safe(renderCvdChart)]);
+    await delay(200);
+
+    // Batch 2: header stats
+    await Promise.all([safe(renderFunding), safe(renderFundingMomentum), safe(renderSpread), safe(renderWsStats)]);
+    await delay(200);
+
+    // Batch 3: trade tape + imbalance
+    await Promise.all([safe(renderTradeTape), safe(renderVolumeImbalance), safe(renderPhase)]);
+    await delay(200);
+
+    // Batch 4: OI analysis
+    await Promise.all([safe(renderOiDivergence), safe(renderMicrostructure), safe(renderWhaleClustering)]);
+    await delay(200);
+
+    // Batch 5: price deviation metrics
+    await Promise.all([safe(renderVwapDeviation), safe(renderOiWeightedPrice), safe(renderRealizedVolBands)]);
+    await delay(200);
+
+    // Batch 6: regime & momentum
+    await Promise.all([safe(renderMarketRegime), safe(renderMomentum), safe(renderMomentumRank), safe(renderRegimeTimeline)]);
+    await delay(200);
+
+    // Batch 7: correlations
+    await Promise.all([safe(renderCorrelations), safe(renderCorrHeatmap), safe(renderVolumeProfile)]);
+    await delay(200);
+
+    // Batch 8: aggressor metrics
+    await Promise.all([safe(renderAggressorRatio), safe(renderVpin), safe(renderAdaptiveVolumeProfile)]);
+    await delay(200);
+
+    // Batch 9: tape analysis
+    await Promise.all([safe(renderTapeSpeed), safe(renderAggressorStreak), safe(renderObWalls)]);
+    await delay(200);
+
+    // Batch 10: movers, heatmap, net taker
+    await Promise.all([safe(renderTopMovers), safe(renderLiqHeatmap), safe(renderNetTakerDelta)]);
+    await delay(200);
+
+    // Batch 11: new signal cards
+    await Promise.all([safe(renderCvdMomentum), safe(renderDeltaDivergence), safe(renderFundingExtreme)]);
+    await delay(200);
+
+    // Batch 12: cascade & large trades
+    await Promise.all([safe(renderLiqCascade), safe(renderLargeTrades)]);
+  } finally {
+    _refreshRunning = false;
+  }
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
