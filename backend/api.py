@@ -4993,3 +4993,47 @@ async def ob_walls_endpoint(
         wall_multiplier=wall_multiplier,
     )
     return {"status": "ok", "symbol": target, **data}
+
+
+@router.get("/top-movers")
+async def top_movers_endpoint():
+    """Rank all tracked symbols by absolute % price change over 1h, 4h, 24h."""
+    now = time.time()
+    windows = {"change_1h": 3600, "change_4h": 14400, "change_24h": 86400}
+    symbols = get_symbols()
+
+    movers = []
+    for sym in symbols:
+        # Fetch enough trades to cover the 24h window
+        trades = await get_recent_trades(
+            since=now - 86400 - 60, symbol=sym, limit=5000
+        )
+        if not trades:
+            movers.append({
+                "symbol": sym,
+                "price": None,
+                "change_1h": None,
+                "change_4h": None,
+                "change_24h": None,
+            })
+            continue
+
+        # Current price = most recent trade
+        current_price = float(trades[0]["price"])
+
+        row: dict = {"symbol": sym, "price": current_price}
+        for key, seconds in windows.items():
+            cutoff = now - seconds
+            # Find the oldest trade within the window boundary
+            boundary_trades = [t for t in trades if float(t["ts"]) <= cutoff]
+            if boundary_trades:
+                past_price = float(boundary_trades[0]["price"])
+                row[key] = round((current_price - past_price) / past_price * 100, 4) if past_price else None
+            else:
+                row[key] = None
+        movers.append(row)
+
+    # Sort by abs(change_1h) descending
+    movers.sort(key=lambda r: abs(r.get("change_1h") or 0.0), reverse=True)
+
+    return JSONResponse({"status": "ok", "ts": now, "movers": movers})

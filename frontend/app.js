@@ -1869,6 +1869,67 @@ async function renderObWalls() {
     </table>`;
 }
 
+// ── Top Movers ────────────────────────────────────────────────────────────────
+async function renderTopMovers() {
+  const data = await apiFetch('/top-movers');
+  const el = document.getElementById('top-movers-content');
+  const badge = document.getElementById('top-movers-badge');
+  if (!el) return;
+
+  if (!data) {
+    setErr('top-movers-content');
+    return;
+  }
+
+  const movers = data.movers || [];
+
+  if (movers.length === 0) {
+    el.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:8px 0">No data</div>';
+    return;
+  }
+
+  function fmtPct(v) {
+    if (v == null) return '<span style="color:var(--muted)">—</span>';
+    const sign = v >= 0 ? '+' : '';
+    const col = v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--muted)';
+    return `<span style="color:${col}">${sign}${v.toFixed(2)}%</span>`;
+  }
+  function fmtPrice(v) {
+    if (v == null) return '<span style="color:var(--muted)">—</span>';
+    // Use enough decimals for sub-penny assets
+    const dec = v < 0.01 ? 6 : v < 1 ? 4 : 2;
+    return v.toFixed(dec);
+  }
+
+  const top = movers[0];
+  if (badge && top) {
+    const ch = top.change_1h;
+    badge.textContent = top.symbol.replace('USDT', '');
+    badge.className = 'card-badge ' + (ch == null ? 'badge-blue' : ch > 0 ? 'badge-green' : 'badge-red');
+    badge.style.display = 'inline-block';
+  }
+
+  const rows = movers.map(m => `<tr>
+    <td style="font-weight:600;padding:3px 6px 3px 0;font-size:11px">${m.symbol.replace('USDT','')}</td>
+    <td style="font-family:monospace;padding:3px 6px 3px 0;font-size:11px;color:var(--muted)">${fmtPrice(m.price)}</td>
+    <td style="text-align:right;padding:3px 6px 3px 0;font-size:11px">${fmtPct(m.change_1h)}</td>
+    <td style="text-align:right;padding:3px 6px 3px 0;font-size:11px">${fmtPct(m.change_4h)}</td>
+    <td style="text-align:right;padding:3px 0;font-size:11px">${fmtPct(m.change_24h)}</td>
+  </tr>`).join('');
+
+  el.innerHTML = `
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.05em">
+        <th style="text-align:left;padding:2px 6px 4px 0;font-weight:400">symbol</th>
+        <th style="text-align:left;padding:2px 6px 4px 0;font-weight:400">price</th>
+        <th style="text-align:right;padding:2px 6px 4px 0;font-weight:400">1h</th>
+        <th style="text-align:right;padding:2px 6px 4px 0;font-weight:400">4h</th>
+        <th style="text-align:right;padding:2px 0 4px 0;font-weight:400">24h</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
 // ── Main Refresh Loop ─────────────────────────────────────────────────────────
 async function refresh() {
   if (!activeSymbol) return;
@@ -1912,6 +1973,7 @@ async function refresh() {
     safe(renderTapeSpeed),
     safe(renderAggressorStreak),
     safe(renderObWalls),
+    safe(renderTopMovers),
   ]);
 }
 
