@@ -5320,10 +5320,10 @@ async def nft_market_pulse_endpoint():
     """NFT market pulse: floor trends, wash-adjusted volume, blue-chip index, liquidity signals."""
     data = await compute_nft_market_pulse()
     return JSONResponse(data)
-@router.get("/network-health-score")
-async def network_health_score_endpoint():
-    """Composite network health gauge: hash rate, mempool, active addresses, fee pressure."""
-    data = await compute_network_health_score()
+
+
+@router.get("/holder-distribution-card")
+async def holder_distribution_endpoint():
+    """Holder distribution: wallet bands, Gini, HHI, whale accumulation delta."""
+    data = await compute_holder_distribution_card()
     return JSONResponse(data)
-
-

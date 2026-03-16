@@ -2837,10 +2837,8 @@ async function refresh() {
     await Promise.all([safe(renderTokenVelocityNvt)]);
     // Batch 16: derivatives heatmap
     await Promise.all([safe(renderDerivativesHeatmap)]);
-    // Batch 16: network health score
-    await Promise.all([safe(renderNetworkHealthScore)]);
-    // Batch 24: NFT market pulse (global signal, no symbol)
-    await Promise.all([safe(renderNftMarketPulse)]);
+    // Batch 25: holder distribution card
+    await Promise.all([safe(renderHolderDistribution)]);
   } finally {
     _refreshRunning = false;
   }
