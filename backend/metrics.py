@@ -11027,3 +11027,127 @@ async def compute_exchange_flow_divergence(
         "divergence_score": divergence_score,
         "timestamp_lag": timestamp_lag,
     }
+
+
+# ─── Perpetual vs Spot Basis Monitor ─────────────────────────────────────────
+
+async def compute_perp_spot_basis(
+    *,
+    _spot_overrides: dict = None,
+    _perp_overrides: dict = None,
+    _basis_window_override: dict = None,
+    _force_flat_basis: bool = False,
+) -> dict:
+    """Compute perp/spot basis for BTC, ETH, SOL.
+
+    Uses seeded deterministic mock data (np.random.default_rng(seed=42)).
+    Returns basis_bps, z-score over 20-period window, and contango/backwardation signal.
+
+    Args:
+        _spot_overrides: Override spot prices per symbol (testing only).
+        _perp_overrides: Override perp prices per symbol (testing only).
+        _basis_window_override: Override full basis window per symbol (testing only).
+        _force_flat_basis: If True, force all basis values to be identical (z-score=0).
+    """
+    import numpy as np
+    import time as _time
+
+    rng = np.random.default_rng(seed=42)
+    WINDOW = 20
+
+    # Base spot prices (realistic)
+    BASE_PRICES = {
+        "BTC": 65000.0,
+        "ETH": 3500.0,
+        "SOL": 150.0,
+    }
+
+    # Simulate a 20-period basis history + current value
+    assets = []
+    all_basis_bps = []
+
+    for symbol in ("BTC", "ETH", "SOL"):
+        spot_base = BASE_PRICES[symbol]
+
+        if _basis_window_override and symbol in _basis_window_override:
+            # Use provided window directly
+            basis_window = list(_basis_window_override[symbol])
+            # Derive spot/perp from last basis value
+            spot_price = _spot_overrides.get(symbol, spot_base) if _spot_overrides else spot_base
+            current_basis = basis_window[-1]
+            perp_price = spot_price * (1 + current_basis / 10000)
+        elif _force_flat_basis:
+            # All basis values identical → z-score = 0
+            flat_basis = 5.0
+            basis_window = [flat_basis] * WINDOW
+            spot_price = _spot_overrides.get(symbol, spot_base) if _spot_overrides else spot_base
+            perp_price = spot_price * (1 + flat_basis / 10000)
+            current_basis = flat_basis
+        else:
+            # Seeded simulation
+            spot_price = _spot_overrides.get(symbol, spot_base) if _spot_overrides else spot_base
+            perp_price_default = _perp_overrides.get(symbol, None) if _perp_overrides else None
+
+            # Generate 20-period basis history (small positive premium ~5-25 bps)
+            hist_premiums = rng.uniform(0.0003, 0.0025, size=WINDOW)  # 3–25 bps range
+            basis_window = [round(float(p) * 10000, 4) for p in hist_premiums]
+
+            if perp_price_default is not None:
+                perp_price = float(perp_price_default)
+                current_basis = (perp_price - spot_price) / spot_price * 10000
+                basis_window[-1] = current_basis
+            else:
+                # Use last element as current
+                perp_price = spot_price * (1 + hist_premiums[-1])
+                current_basis = basis_window[-1]
+
+        # basis_bps = (perp - spot) / spot * 10000
+        if _basis_window_override and symbol in _basis_window_override:
+            basis_bps = basis_window[-1]
+        elif _force_flat_basis:
+            basis_bps = current_basis
+        else:
+            basis_bps = (perp_price - spot_price) / spot_price * 10000
+
+        basis_bps = round(float(basis_bps), 4)
+
+        # Z-score over window
+        arr = [float(x) for x in basis_window]
+        mean = sum(arr) / len(arr)
+        variance = sum((x - mean) ** 2 for x in arr) / len(arr)
+        std = variance ** 0.5
+        z_score = round((arr[-1] - mean) / std, 6) if std > 1e-12 else 0.0
+
+        # Per-asset signal
+        if basis_bps > 10:
+            signal = "contango"
+        elif basis_bps < -10:
+            signal = "backwardation"
+        else:
+            signal = "neutral"
+
+        assets.append({
+            "symbol": symbol,
+            "basis_bps": basis_bps,
+            "z_score": float(z_score),
+            "signal": signal,
+            "perp_price": round(float(perp_price), 2),
+            "spot_price": round(float(spot_price), 2),
+        })
+        all_basis_bps.append(basis_bps)
+
+    # Average and market signal
+    avg_basis_bps = round(sum(all_basis_bps) / len(all_basis_bps), 4)
+    if avg_basis_bps > 10:
+        market_signal = "contango"
+    elif avg_basis_bps < -10:
+        market_signal = "backwardation"
+    else:
+        market_signal = "neutral"
+
+    return {
+        "assets": assets,
+        "avg_basis_bps": avg_basis_bps,
+        "market_signal": market_signal,
+        "timestamp": round(_time.time(), 3),
+    }

@@ -79,6 +79,7 @@ from metrics import (
     compute_funding_term_structure,
     compute_liquidation_heatmap,
     compute_exchange_flow_divergence,
+    compute_perp_spot_basis,
 )
 
 router = APIRouter(prefix="/api")
@@ -5471,4 +5472,17 @@ async def exchange_flow_divergence_endpoint():
     and divergence score. Cache TTL: 30s.
     """
     data = await compute_exchange_flow_divergence()
+    return JSONResponse(data)
+
+
+@router.get("/perp-spot-basis")
+@cache_result(ttl_seconds=30)
+async def perp_spot_basis_endpoint():
+    """
+    Perpetual vs Spot Basis Monitor: BTC/ETH/SOL perp premium tracking.
+
+    Returns basis_bps per asset, z-score over 20-period window, contango/backwardation
+    signal per asset, avg_basis_bps, and overall market_signal. Cache TTL: 30s.
+    """
+    data = await compute_perp_spot_basis()
     return JSONResponse(data)

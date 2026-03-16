@@ -3792,6 +3792,60 @@ async function renderExchangeFlowDivergence() {
 }
 
 
+// ── Perp/Spot Basis Monitor ────────────────────────────────────────────────────
+async function renderPerpSpotBasis() {
+  try {
+    const res = await fetch('/api/perp-spot-basis');
+    const data = await res.json();
+    const { assets, avg_basis_bps, market_signal, timestamp } = data;
+
+    const signalColor = (s) => s === 'contango' ? '#27ae60' : s === 'backwardation' ? '#e74c3c' : '#f39c12';
+    const signalLabel = (s) => s === 'contango' ? '▲ Contango' : s === 'backwardation' ? '▼ Backwardation' : '— Neutral';
+
+    const rows = assets.map(asset => {
+      const { symbol, basis_bps, z_score, signal, perp_price, spot_price } = asset;
+      const bpsColor = basis_bps > 10 ? '#27ae60' : basis_bps < -10 ? '#e74c3c' : '#f39c12';
+      const zColor = Math.abs(z_score) > 2 ? '#e74c3c' : Math.abs(z_score) > 1 ? '#f39c12' : '#aaa';
+      return `
+        <div style="display:grid;grid-template-columns:45px 70px 70px 70px 1fr;gap:4px;align-items:center;padding:3px 0;border-bottom:1px solid #2a2a3a;">
+          <div style="font-weight:bold;color:#4a9eff;">${symbol}</div>
+          <div style="text-align:right;color:${bpsColor};font-weight:bold;">${basis_bps.toFixed(1)} bps</div>
+          <div style="text-align:right;color:${zColor};">z=${z_score.toFixed(2)}</div>
+          <div style="text-align:right;font-size:9px;color:#888;">${spot_price.toLocaleString()}</div>
+          <div style="text-align:right;color:${signalColor(signal)};font-size:10px;">${signalLabel(signal)}</div>
+        </div>`;
+    }).join('');
+
+    const html = `
+      <div style="margin-bottom:6px;font-size:10px;color:#888;">
+        <span style="color:${signalColor(market_signal)};font-weight:bold;font-size:12px;">${signalLabel(market_signal)}</span>
+        &nbsp;avg: <span style="color:#4a9eff;">${avg_basis_bps.toFixed(1)} bps</span>
+      </div>
+      <div style="margin-bottom:4px;display:grid;grid-template-columns:45px 70px 70px 70px 1fr;gap:4px;font-size:9px;color:#555;padding-bottom:2px;border-bottom:1px solid #3a3a4a;">
+        <div>Asset</div><div style="text-align:right;">Basis</div><div style="text-align:right;">Z-Score</div><div style="text-align:right;">Spot</div><div style="text-align:right;">Signal</div>
+      </div>
+      ${rows}
+    `;
+
+    document.getElementById('perp-spot-basis-content').innerHTML = html;
+
+    const badge = document.getElementById('perp-spot-basis-badge');
+    if (badge) {
+      badge.textContent = signalLabel(market_signal);
+      badge.style.background = signalColor(market_signal);
+      badge.style.color = '#fff';
+      badge.style.fontSize = '10px';
+      badge.style.padding = '2px 6px';
+      badge.style.display = 'inline-block';
+      badge.style.borderRadius = '3px';
+    }
+  } catch (err) {
+    console.error('Error rendering perp/spot basis:', err);
+    document.getElementById('perp-spot-basis-content').innerHTML = 'Error';
+  }
+}
+
+
 // ── Bootstrap on Load ──────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', init);
 
