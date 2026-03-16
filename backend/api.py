@@ -5128,3 +5128,57 @@ async def trade_size_percentiles(symbol: Optional[str] = None):
         "p99": round(_calc_percentile(sizes, 99), 8),
         "median_usd": round(_calc_percentile(usd_sizes, 50), 2),
     }
+
+
+@router.get("/liquidation-heatmap")
+async def liquidation_heatmap_endpoint(
+    symbol: Optional[str] = None,
+    buckets: int = Query(default=20, ge=5, le=100),
+    window: int = Query(default=86400, ge=3600, le=2592000),
+):
+    """Liquidation heatmap: bucket liquidations by price level."""
+    from storage import DB_PATH
+
+    syms = get_symbols()
+    target = symbol if symbol and symbol in syms else syms[0]
+    since = time.time() - window
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT side, price, qty, value FROM liquidations WHERE symbol=? AND ts>=? ORDER BY ts DESC",
+            (target, since),
+        ) as cur:
+            rows = await cur.fetchall()
+
+    if not rows:
+        return {"status": "ok", "symbol": target, "buckets": [], "total_liqs": 0}
+
+    prices = [float(r["price"]) for r in rows]
+    price_min, price_max = min(prices), max(prices)
+
+    # Avoid division by zero when all liqs are at same price
+    if price_max == price_min:
+        price_max = price_min + 1.0
+
+    bucket_size = (price_max - price_min) / buckets
+    bucket_map: dict = {}  # (bucket_idx, side) -> {count, total_usd}
+
+    for r in rows:
+        price = float(r["price"])
+        side = r["side"]
+        value = float(r["value"] or 0) or float(r["price"]) * float(r["qty"])
+        idx = min(int((price - price_min) / bucket_size), buckets - 1)
+        key = (idx, side)
+        if key not in bucket_map:
+            bucket_map[key] = {"price": price_min + (idx + 0.5) * bucket_size, "count": 0, "total_usd": 0.0, "side": side}
+        bucket_map[key]["count"] += 1
+        bucket_map[key]["total_usd"] = round(bucket_map[key]["total_usd"] + value, 2)
+
+    result_buckets = sorted(bucket_map.values(), key=lambda b: b["price"])
+    return {
+        "status": "ok",
+        "symbol": target,
+        "buckets": result_buckets,
+        "total_liqs": len(rows),
+    }

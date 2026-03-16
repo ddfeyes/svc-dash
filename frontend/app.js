@@ -19,22 +19,18 @@ async function renderWsStats() {
   if (!el) return;
   if (!data) { el.textContent = '— msg/s'; return; }
 
-  const rate = data.aggregate_rate ?? 0;
-  let text;
-  if (rate >= 1000) text = (rate / 1000).toFixed(1) + 'k msg/s';
-  else if (rate > 0) text = rate.toFixed(1) + ' msg/s';
-  else text = '0 msg/s';
+  const rate = data.messages_per_sec ?? 0;
+  const conns = data.connections ?? 0;
 
-  const col = rate >= 100 ? 'var(--green)' : rate >= 20 ? 'var(--yellow)' : rate > 0 ? 'var(--muted)' : 'var(--red)';
-  el.textContent = text;
+  let rateText;
+  if (rate >= 1000) rateText = (rate / 1000).toFixed(1) + 'k msg/s';
+  else if (rate > 0) rateText = rate.toFixed(1) + ' msg/s';
+  else rateText = '0 msg/s';
+
+  const col = rate >= 100 ? 'var(--green)' : rate >= 10 ? 'var(--yellow)' : rate > 0 ? 'var(--muted)' : 'var(--muted)';
+  el.textContent = `${conns}cx · ${rateText}`;
   el.style.color = col;
-
-  // Build tooltip with per-symbol breakdown
-  const syms = data.symbols || {};
-  const lines = Object.entries(syms)
-    .map(([s, d]) => `${s.replace('USDT','')}: ${d.rate} msg/s`)
-    .join('\n');
-  el.title = lines ? `Per symbol (60s):\n${lines}` : 'No WS messages in window';
+  el.title = `WebSocket: ${conns} connection(s) · ${rateText} · uptime ${Math.round(data.uptime_sec || 0)}s · total ${data.total_messages ?? 0} msgs`;
 }
 
 // ── Theme ─────────────────────────────────────────────────────────────────────
