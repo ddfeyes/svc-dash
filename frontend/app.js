@@ -2589,15 +2589,25 @@ async function renderCvdDivergence() {
   if (!el) return;
   const data = await apiFetch(`/cvd-divergence?symbol=${sym}`);
   if (!data) { setErr('cvd-divergence-content'); return; }
-  const sig = (data[activeSymbol] || data).signal || 'none';
-  const sev = (data[activeSymbol] || data).severity || 0;
+
+  const symData = data[activeSymbol] || Object.values(data).find(v => typeof v === 'object' && v !== null && 'signal' in v) || {};
+  const signal = symData.signal || 'none';
+  const severity = symData.severity || 0;
+
+  let badgeLabel = 'none', badgeCls = 'badge-blue';
+  if (signal === 'bearish_divergence') { badgeLabel = 'bearish'; badgeCls = 'badge-red'; }
+  else if (signal === 'bullish_divergence') { badgeLabel = 'bullish'; badgeCls = 'badge-green'; }
+
   if (badge) {
-    badge.textContent = sev > 0 ? sig.toUpperCase() : 'OK';
-    badge.className = `card-badge ${sev >= 2 ? 'badge-red' : sev === 1 ? 'badge-yellow' : 'badge-green'}`;
+    badge.textContent = badgeLabel;
+    badge.className = `card-badge ${badgeCls}`;
     badge.style.display = '';
   }
-  const desc = (data[activeSymbol] || data).description || '—';
-  el.innerHTML = `<div style="font-size:11px;color:var(--fg)">${desc}</div>`;
+
+  el.innerHTML = `<div style="font-size:11px;">
+    <div style="margin-bottom:4px;color:${signal !== 'none' ? 'var(--fg)' : 'var(--muted)'};">${symData.description || 'No divergence detected'}</div>
+    ${severity > 0 ? `<div style="color:var(--muted);font-size:10px;">severity: ${severity}/2 &middot; price \u0394: ${(symData.price_pct || 0).toFixed(2)}% &middot; CVD \u0394: ${(symData.cvd_pct || 0).toFixed(2)}%</div>` : ''}
+  </div>`;
 }
 
 // ── Squeeze Setup W11 ─────────────────────────────────────────────────────────
@@ -2608,14 +2618,31 @@ async function renderSqueezeSetupW11() {
   if (!el) return;
   const data = await apiFetch(`/squeeze-setup?symbol=${sym}`);
   if (!data) { setErr('squeeze-setup-w11-content'); return; }
-  const score = data.score ?? 0;
-  const signal = data.signal || 'none';
+
+  const isActive = data.squeeze_signal === true;
+  const badgeLabel = isActive ? 'SQUEEZE' : 'off';
+  const badgeCls   = isActive ? 'badge-red' : 'badge-blue';
+
   if (badge) {
-    badge.textContent = signal.toUpperCase();
-    badge.className = `card-badge ${score >= 3 ? 'badge-red' : score >= 1 ? 'badge-yellow' : 'badge-blue'}`;
+    badge.textContent = badgeLabel;
+    badge.className = `card-badge ${badgeCls}`;
     badge.style.display = '';
   }
-  el.innerHTML = `<div style="font-size:11px;"><span style="color:var(--muted)">score: </span><span style="font-weight:600">${score}</span> &nbsp; ${data.description || ''}</div>`;
+
+  const fmtFunding = v => v == null ? '\u2014' : (v >= 0 ? '+' : '') + (v * 100).toFixed(4) + '%';
+  const checks = [
+    { label: 'OI surge + crash', ok: data.oi_surge_with_crash },
+    { label: 'Funding normalizing', ok: data.funding_normalizing },
+  ];
+  const checkHtml = checks.map(c =>
+    `<div style="color:${c.ok ? 'var(--green)' : 'var(--muted)'};">${c.ok ? '\u2713' : '\u25cb'} ${c.label}</div>`
+  ).join('');
+
+  el.innerHTML = `<div style="font-size:11px;">
+    <div style="margin-bottom:6px;color:${isActive ? 'var(--fg)' : 'var(--muted)'};">${data.description || 'No squeeze setup'}</div>
+    ${checkHtml}
+    ${data.funding_start != null ? `<div style="color:var(--muted);font-size:10px;margin-top:4px;">funding: ${fmtFunding(data.funding_start)} \u2192 ${fmtFunding(data.funding_end)}</div>` : ''}
+  </div>`;
 }
 
 // ── Flow Imbalance ────────────────────────────────────────────────────────────
@@ -2626,15 +2653,37 @@ async function renderFlowImbalance() {
   if (!el) return;
   const data = await apiFetch(`/flow-imbalance?symbol=${sym}`);
   if (!data) { setErr('flow-imbalance-content'); return; }
-  const imb = data.imbalance ?? 0;
-  const dir = imb > 0.1 ? 'BUY' : imb < -0.1 ? 'SELL' : 'FLAT';
+
+  const summary = data.summary || {};
+  const bias = summary.bias || 'neutral';
+  const biasStrength = summary.bias_strength || 0;
+  const avgRatio = summary.avg_ratio || 0.5;
+
+  let badgeLabel = 'neutral', badgeCls = 'badge-blue';
+  if (bias === 'buy')  { badgeLabel = 'buy heavy';  badgeCls = 'badge-green'; }
+  if (bias === 'sell') { badgeLabel = 'sell heavy'; badgeCls = 'badge-red'; }
+
   if (badge) {
-    badge.textContent = dir;
-    badge.className = `card-badge ${dir === 'BUY' ? 'badge-green' : dir === 'SELL' ? 'badge-red' : 'badge-blue'}`;
+    badge.textContent = badgeLabel;
+    badge.className = `card-badge ${badgeCls}`;
     badge.style.display = '';
   }
-  const col = imb > 0 ? 'var(--green)' : imb < 0 ? 'var(--red)' : 'var(--muted)';
-  el.innerHTML = `<div style="font-size:11px;"><span style="color:var(--muted)">imbalance: </span><span style="color:${col};font-weight:600">${(imb * 100).toFixed(1)}%</span></div>`;
+
+  const barColor = bias === 'buy' ? 'var(--green)' : bias === 'sell' ? 'var(--red)' : 'var(--muted)';
+  const strengthPct = Math.round(biasStrength * 100);
+
+  el.innerHTML = `<div style="font-size:11px;">
+    <div style="margin-bottom:6px;">
+      <span style="color:var(--muted);">avg ratio: </span>
+      <span style="color:var(--fg);font-family:monospace;">${(avgRatio * 100).toFixed(1)}%</span>
+      <span style="color:var(--muted);font-size:10px;margin-left:6px;">(buy share of volume)</span>
+    </div>
+    <div style="margin-bottom:3px;color:var(--muted);font-size:10px;">bias strength</div>
+    <div style="background:var(--border);border-radius:2px;height:6px;overflow:hidden;">
+      <div style="width:${strengthPct}%;height:100%;background:${barColor};transition:width .3s;"></div>
+    </div>
+    <div style="color:var(--muted);font-size:10px;margin-top:3px;">${strengthPct}% &middot; ${summary.buckets || 0} buckets</div>
+  </div>`;
 }
 
 // ── Volatility Regime ─────────────────────────────────────────────────────────
@@ -2645,14 +2694,35 @@ async function renderVolatilityRegime() {
   if (!el) return;
   const data = await apiFetch(`/volatility-regime?symbol=${sym}`);
   if (!data) { setErr('volatility-regime-content'); return; }
+
   const regime = data.regime || 'unknown';
+  const regimeLabel = data.regime_label || regime;
+  const percentile = data.percentile;
+  const atrPct = data.current_atr_pct;
+
+  let badgeLabel = '?', badgeCls = 'badge-blue';
+  if (regime === 'high')   { badgeLabel = 'HIGH';   badgeCls = 'badge-red'; }
+  if (regime === 'medium') { badgeLabel = 'MEDIUM'; badgeCls = 'badge-yellow'; }
+  if (regime === 'low')    { badgeLabel = 'low';    badgeCls = 'badge-green'; }
+
   if (badge) {
-    badge.textContent = regime.toUpperCase();
-    badge.className = `card-badge ${regime === 'high' ? 'badge-red' : regime === 'medium' ? 'badge-yellow' : 'badge-green'}`;
+    badge.textContent = badgeLabel;
+    badge.className = `card-badge ${badgeCls}`;
     badge.style.display = '';
   }
-  const pct = data.percentile != null ? data.percentile.toFixed(1) + '%' : '—';
-  el.innerHTML = `<div style="font-size:11px;"><span style="color:var(--muted)">percentile: </span><span style="font-weight:600">${pct}</span></div>`;
+
+  const fmtPct = v => v == null ? '\u2014' : v.toFixed(1) + '%';
+  const pctileColor = percentile == null ? 'var(--muted)' :
+    percentile >= 75 ? 'var(--red)' : percentile >= 40 ? 'var(--yellow)' : 'var(--green)';
+
+  el.innerHTML = `<div style="font-size:11px;">
+    <div style="margin-bottom:4px;color:var(--fg);">${regimeLabel}</div>
+    <div style="color:var(--muted);">
+      percentile: <span style="color:${pctileColor};font-family:monospace;">${fmtPct(percentile)}</span>
+      &nbsp;&middot;&nbsp; ATR: <span style="font-family:monospace;">${fmtPct(atrPct)}</span>
+    </div>
+    ${data.note ? `<div style="color:var(--muted);font-size:10px;margin-top:4px;">${data.note}</div>` : ''}
+  </div>`;
 }
 
 // ── Price Velocity ────────────────────────────────────────────────────────────
@@ -2663,16 +2733,41 @@ async function renderPriceVelocity() {
   if (!el) return;
   const data = await apiFetch(`/price-velocity?symbol=${sym}`);
   if (!data) { setErr('price-velocity-content'); return; }
-  const symData = data[activeSymbol] || Object.values(data).find(v => v && typeof v === 'object' && 'direction' in v) || data;
-  const dir = symData.direction || 'flat';
-  const score = symData.score ?? 0;
+
+  const symData = data[activeSymbol] || Object.values(data).find(v => typeof v === 'object' && v !== null && 'score' in v) || {};
+  const direction = symData.direction || 'flat';
+  const score = symData.score || 0;
+  const instantPct = symData.instant_pct_per_sec || 0;
+  const trendPct = symData.trend_pct_per_sec || 0;
+
+  let badgeLabel = 'flat', badgeCls = 'badge-blue';
+  if (direction === 'up')   { badgeLabel = 'up';   badgeCls = 'badge-green'; }
+  if (direction === 'down') { badgeLabel = 'down'; badgeCls = 'badge-red'; }
+
   if (badge) {
-    badge.textContent = dir;
-    badge.className = `card-badge ${dir === 'up' ? 'badge-green' : dir === 'down' ? 'badge-red' : 'badge-blue'}`;
+    badge.textContent = badgeLabel;
+    badge.className = `card-badge ${badgeCls}`;
     badge.style.display = '';
   }
-  const col = score > 0 ? 'var(--green)' : score < 0 ? 'var(--red)' : 'var(--muted)';
-  el.innerHTML = `<div style="font-size:11px;"><span style="color:var(--muted)">score: </span><span style="color:${col};font-weight:600">${score > 0 ? '+' : ''}${score}</span></div>`;
+
+  const scorePct = Math.max(0, Math.min(100, (score + 100) / 2));
+  const scoreColor = score > 0 ? 'var(--green)' : score < 0 ? 'var(--red)' : 'var(--muted)';
+  const fmtVel = v => (v >= 0 ? '+' : '') + (v * 10000).toFixed(2) + '\u2030/s';
+
+  el.innerHTML = `<div style="font-size:11px;">
+    <div style="margin-bottom:4px;">
+      <span style="color:var(--muted);">score: </span>
+      <span style="color:${scoreColor};font-family:monospace;font-weight:600;">${score > 0 ? '+' : ''}${score}</span>
+      <span style="color:var(--muted);font-size:10px;"> / &plusmn;100</span>
+    </div>
+    <div style="background:var(--border);border-radius:2px;height:6px;overflow:hidden;margin-bottom:4px;">
+      <div style="margin-left:50%;width:${Math.abs(scorePct - 50)}%;height:100%;background:${scoreColor};${score < 0 ? 'transform:translateX(-100%);' : ''}transition:width .3s;"></div>
+    </div>
+    <div style="color:var(--muted);font-size:10px;">
+      instant: <span style="font-family:monospace;">${fmtVel(instantPct)}</span>
+      &nbsp;&middot;&nbsp; trend: <span style="font-family:monospace;">${fmtVel(trendPct)}</span>
+    </div>
+  </div>`;
 }
 
 // ── Main Refresh Loop ─────────────────────────────────────────────────────────
