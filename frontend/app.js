@@ -3719,6 +3719,79 @@ async function renderLiquidationHeatmap() {
 }
 
 
+// ── Exchange Flow Divergence ──────────────────────────────────────────────────
+async function renderExchangeFlowDivergence() {
+  try {
+    const data = await apiFetch('/exchange-flow-divergence');
+    const binance_cvd = data.binance_cvd || 0;
+    const bybit_cvd = data.bybit_cvd || 0;
+    const correlation = typeof data.correlation === 'number' ? data.correlation : 0;
+    const leader = data.leader || null;
+    const divergence_score = typeof data.divergence_score === 'number' ? data.divergence_score : 0;
+    const timestamp_lag = data.timestamp_lag || 0;
+
+    // Correlation badge color: green >0.8, yellow 0.5-0.8, red <0.5
+    let corrColor = '#c0392b';
+    if (correlation >= 0.8) corrColor = '#27ae60';
+    else if (correlation >= 0.5) corrColor = '#d68910';
+
+    const leaderLabel = leader
+      ? `<span style="color:#4a9eff;font-weight:bold;">${leader.charAt(0).toUpperCase() + leader.slice(1)} leads</span>`
+      : '<span style="color:#888;">In sync</span>';
+
+    const lagLabel = timestamp_lag !== 0
+      ? `${Math.abs(timestamp_lag)}s ${timestamp_lag > 0 ? '(Binance ahead)' : '(Bybit ahead)'}`
+      : '0s (no lag)';
+
+    const html = `
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;margin-bottom:6px;font-size:10px;">
+        <div style="text-align:center;">
+          <div style="color:#f39c12;font-weight:bold;">${binance_cvd.toFixed(2)}</div>
+          <div style="color:#888;font-size:9px;">Binance CVD</div>
+        </div>
+        <div style="text-align:center;">
+          <div style="color:#9b59b6;font-weight:bold;">${bybit_cvd.toFixed(2)}</div>
+          <div style="color:#888;font-size:9px;">Bybit CVD</div>
+        </div>
+        <div style="text-align:center;">
+          <div style="color:${corrColor};font-weight:bold;">${correlation.toFixed(3)}</div>
+          <div style="color:#888;font-size:9px;">Correlation</div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:10px;">
+        <div style="text-align:center;">
+          ${leaderLabel}
+          <div style="color:#888;font-size:9px;">Leader</div>
+        </div>
+        <div style="text-align:center;">
+          <div style="color:#4a9eff;font-weight:bold;">${lagLabel}</div>
+          <div style="color:#888;font-size:9px;">Lag</div>
+        </div>
+      </div>
+      <div style="margin-top:4px;font-size:9px;color:#888;">
+        Divergence score: <span style="color:${divergence_score > 0.5 ? '#e74c3c' : '#27ae60'};">${divergence_score.toFixed(3)}</span>
+      </div>
+    `;
+
+    document.getElementById('exchange-flow-divergence-content').innerHTML = html;
+
+    const badge = document.getElementById('exchange-flow-divergence-badge');
+    if (badge) {
+      badge.textContent = `corr ${correlation.toFixed(2)}`;
+      badge.style.background = corrColor;
+      badge.style.color = '#fff';
+      badge.style.fontSize = '10px';
+      badge.style.padding = '2px 6px';
+      badge.style.display = 'inline-block';
+      badge.style.borderRadius = '3px';
+    }
+  } catch (err) {
+    console.error('Error rendering exchange flow divergence:', err);
+    document.getElementById('exchange-flow-divergence-content').innerHTML = 'Error';
+  }
+}
+
+
 // ── Bootstrap on Load ──────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', init);
 
