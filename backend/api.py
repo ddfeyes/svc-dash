@@ -84,6 +84,7 @@ from metrics import (
     compute_spread_analysis,
     compute_options_skew,
     compute_miner_reserve,
+    compute_macro_liquidity_indicator,
 )
 
 router = APIRouter(prefix="/api")
@@ -5291,4 +5292,11 @@ async def social_sentiment_endpoint():
 async def miner_reserve_endpoint():
     """BTC miner reserve indicator: sell pressure index, reserve trend, exchange flow signal."""
     data = await compute_miner_reserve()
+    return JSONResponse(data)
+
+
+@router.get("/macro-liquidity-indicator")
+async def macro_liquidity_endpoint():
+    """Macro liquidity: M2 proxy, Fed balance sheet, USD/BTC divergence, regime score."""
+    data = await compute_macro_liquidity_indicator()
     return JSONResponse(data)

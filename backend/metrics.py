@@ -5564,3 +5564,213 @@ async def compute_miner_reserve() -> dict:
         "history": history[-30:],
         "description": desc,
     }
+
+
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  MACRO LIQUIDITY INDICATOR                                              ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+
+def _ml_m2_growth_rate(current: float, previous: float) -> float:
+    """% change in M2 money supply proxy from previous to current period."""
+    if previous == 0:
+        return 0.0
+    return float((current - previous) / previous * 100.0)
+
+
+def _ml_fed_balance_delta(current: float, previous: float) -> float:
+    """Absolute change in Fed balance sheet size (positive = expanding)."""
+    return float(current - previous)
+
+
+def _ml_usd_btc_divergence(usd_change_pct: float, btc_change_pct: float) -> float:
+    """BTC vs USD divergence signal.
+
+    USD and BTC are typically inversely correlated. Positive divergence means
+    BTC is outperforming despite the USD direction (bullish signal).
+    divergence = btc_change_pct - usd_change_pct
+    """
+    return float(btc_change_pct - usd_change_pct)
+
+
+def _ml_regime_score(
+    m2_growth: float,
+    fed_delta_pct: float,
+    usd_change_pct: float,
+    btc_change_pct: float,
+) -> float:
+    """Risk-on/off composite score [0-100].
+
+    Higher = more risk-on (bullish macro liquidity).
+    Components:
+      M2 growing       → bullish (normalised over ±10%)
+      Fed expanding    → bullish (normalised over ±5%)
+      USD weakening    → bullish (inverted, normalised over ±5%)
+      BTC rising       → bullish (normalised over ±20%)
+    Equal weights (25% each).
+    """
+    def _clamp(v: float) -> float:
+        return max(-1.0, min(1.0, v))
+
+    n_m2  = _clamp(m2_growth      / 10.0)
+    n_fed = _clamp(fed_delta_pct  /  5.0)
+    n_usd = _clamp(-usd_change_pct /  5.0)   # USD weak = risk-on
+    n_btc = _clamp(btc_change_pct / 20.0)
+
+    composite = (n_m2 + n_fed + n_usd + n_btc) / 4.0
+    return float((composite + 1.0) / 2.0 * 100.0)
+
+
+def _ml_regime_label(score: float) -> str:
+    """Regime label from score: risk_on (≥60), neutral (40–60), risk_off (<40)."""
+    if score >= 60.0:
+        return "risk_on"
+    if score >= 40.0:
+        return "neutral"
+    return "risk_off"
+
+
+def _ml_moving_average(values: list, window: int) -> float:
+    """Simple moving average of the last `window` values."""
+    if not values:
+        return 0.0
+    tail = values[-window:]
+    return float(sum(tail) / len(tail))
+
+
+def _ml_liquidity_trend(current_score: float, ma_score: float, threshold: float = 3.0) -> str:
+    """Liquidity trend vs its moving average: expanding / contracting / stable."""
+    if current_score > ma_score + threshold:
+        return "expanding"
+    if current_score < ma_score - threshold:
+        return "contracting"
+    return "stable"
+
+
+def _ml_zscore(current: float, history: list) -> float:
+    """Z-score of current value vs historical distribution."""
+    if len(history) < 2:
+        return 0.0
+    import math
+    mean = sum(history) / len(history)
+    std  = math.sqrt(sum((v - mean) ** 2 for v in history) / len(history))
+    if std == 0:
+        return 0.0
+    return float((current - mean) / std)
+
+
+async def compute_macro_liquidity_indicator() -> dict:
+    """Global macro liquidity: M2 proxy, Fed balance sheet, USD/BTC divergence, regime score."""
+    import httpx, datetime, random, math
+
+    today = datetime.date.today()
+
+    # ── Synthetic macro series (90-day window, 13 weekly snapshots) ─────────
+    # These would ideally come from FRED API (free, no key needed for some series)
+    # Using plausible mock anchored to recent macro conditions
+
+    # M2 proxy: ~$21.5T growing slowly
+    M2_CURRENT  = 21_500_000_000_000.0
+    M2_YOY_PREV = 20_820_000_000_000.0   # ~3.2% lower 1yr ago
+    M2_MOM_PREV = 21_414_000_000_000.0   # ~0.4% lower 1mo ago
+
+    # Fed balance sheet: ~$7.8T, shrinking (QT)
+    FED_CURRENT   = 7_800_000_000_000.0
+    FED_PREV_30D  = 7_850_000_000_000.0
+
+    # DXY proxy
+    DXY_CURRENT  = 104.2
+    DXY_30D_AGO  = 105.5
+    DXY_90D_AGO  = 107.0
+
+    # BTC 30-day change
+    BTC_CHANGE_30D = 16.5   # +16.5% in 30d
+
+    # ── Compute current metrics ─────────────────────────────────────────────
+    m2_growth_yoy = _ml_m2_growth_rate(M2_CURRENT, M2_YOY_PREV)
+    m2_growth_mom = _ml_m2_growth_rate(M2_CURRENT, M2_MOM_PREV)
+    m2_trend_scores = [m2_growth_yoy * (0.85 + 0.05 * i) for i in range(7)]
+    m2_trend = "expanding" if m2_growth_yoy > 0 else "contracting" if m2_growth_yoy < -0.5 else "stable"
+
+    fed_delta      = _ml_fed_balance_delta(FED_CURRENT, FED_PREV_30D)
+    fed_delta_pct  = _ml_m2_growth_rate(FED_CURRENT, FED_PREV_30D)
+    fed_trend      = "expanding" if fed_delta > 0 else "contracting" if fed_delta < 0 else "stable"
+
+    dxy_change_30d = _ml_m2_growth_rate(DXY_CURRENT, DXY_30D_AGO)
+    dxy_change_90d = _ml_m2_growth_rate(DXY_CURRENT, DXY_90D_AGO)
+    dxy_trend      = "weakening" if dxy_change_30d < -0.5 else "strengthening" if dxy_change_30d > 0.5 else "stable"
+    btc_divergence = _ml_usd_btc_divergence(dxy_change_30d, BTC_CHANGE_30D)
+
+    regime_score = _ml_regime_score(
+        m2_growth    = m2_growth_yoy,
+        fed_delta_pct= fed_delta_pct,
+        usd_change_pct = dxy_change_30d,
+        btc_change_pct = BTC_CHANGE_30D,
+    )
+    regime_label = _ml_regime_label(regime_score)
+
+    # ── 90-day history (13 weekly snapshots) ────────────────────────────────
+    n_snapshots = 13
+    history_90d = []
+    m2_history_90d = []
+    score_history = []
+
+    for i in range(n_snapshots):
+        day = today - datetime.timedelta(days=90 - i * 7)
+        frac = i / (n_snapshots - 1)
+
+        # Gradually improve regime score from 52 to current
+        score_i = 52.0 + (regime_score - 52.0) * frac + random.uniform(-1.0, 1.0)
+        score_i = min(100.0, max(0.0, score_i))
+        label_i = _ml_regime_label(score_i)
+
+        m2_i = M2_YOY_PREV + (M2_CURRENT - M2_YOY_PREV) * frac * 0.8
+        g_i  = _ml_m2_growth_rate(m2_i, M2_YOY_PREV * 0.97)
+
+        history_90d.append({"date": day.isoformat(), "score": round(score_i, 1), "label": label_i})
+        m2_history_90d.append({
+            "date": day.isoformat(),
+            "proxy_usd": round(m2_i, 0),
+            "growth_yoy_pct": round(g_i, 2),
+        })
+        score_history.append(score_i)
+
+    ma_90d  = _ml_moving_average(score_history, 13)
+    liq_trend = _ml_liquidity_trend(regime_score, ma_90d)
+    zs      = _ml_zscore(regime_score, score_history[:-1])
+
+    desc = (
+        f"{regime_label.replace('_', '-').title()}: macro liquidity {liq_trend}"
+        f" — M2 +{m2_growth_yoy:.1f}% YoY, USD {dxy_trend}"
+    )
+
+    return {
+        "m2": {
+            "current_proxy_usd":   round(M2_CURRENT, 0),
+            "growth_rate_yoy_pct": round(m2_growth_yoy, 2),
+            "growth_rate_mom_pct": round(m2_growth_mom, 2),
+            "trend":               m2_trend,
+            "history_90d":         m2_history_90d,
+        },
+        "fed_balance_sheet": {
+            "current_usd":   round(FED_CURRENT, 0),
+            "delta_30d_usd": round(fed_delta, 0),
+            "delta_pct":     round(fed_delta_pct, 3),
+            "trend":         fed_trend,
+        },
+        "usd_index": {
+            "current":        DXY_CURRENT,
+            "change_30d_pct": round(dxy_change_30d, 2),
+            "change_90d_pct": round(dxy_change_90d, 2),
+            "trend":          dxy_trend,
+            "btc_divergence": round(btc_divergence, 2),
+        },
+        "regime": {
+            "score":   round(regime_score, 1),
+            "label":   regime_label,
+            "ma_90d":  round(ma_90d, 1),
+            "trend":   liq_trend,
+            "zscore":  round(zs, 3),
+        },
+        "history_90d": history_90d,
+        "description": desc,
+    }

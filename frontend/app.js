@@ -2831,6 +2831,8 @@ async function refresh() {
     await Promise.all([safe(renderOptionsSkew)]);
     // Batch 23: miner reserve (global BTC signal, no symbol)
     await Promise.all([safe(renderMinerReserve)]);
+    // Batch 24: macro liquidity indicator
+    await Promise.all([safe(renderMacroLiquidity)]);
   } finally {
     _refreshRunning = false;
   }
@@ -2986,6 +2988,86 @@ async function renderMinerReserve() {
     ${spiBar}
     ${sparkline}
     ${data.description ? `<div style="font-size:10px;color:var(--muted)">${data.description}</div>` : ''}`;
+}
+
+// ── Macro Liquidity Indicator ────────────────────────────────────────────
+async function renderMacroLiquidity() {
+  const data  = await apiFetch('/macro-liquidity-indicator');
+  const el    = document.getElementById('macro-liquidity-content');
+  const badge = document.getElementById('macro-liquidity-badge');
+  if (!data || !el) return;
+
+  const regime = data.regime ?? {};
+  const m2     = data.m2 ?? {};
+  const fed    = data.fed_balance_sheet ?? {};
+  const dxy    = data.usd_index ?? {};
+
+  const label  = regime.label ?? 'neutral';
+  const score  = regime.score ?? 50;
+  const trend  = regime.trend ?? 'stable';
+
+  const lblCol = label === 'risk_on' ? 'var(--green)'
+    : label === 'risk_off' ? 'var(--red)' : 'var(--muted)';
+  const trendIcon = trend === 'expanding' ? '↑' : trend === 'contracting' ? '↓' : '→';
+
+  if (badge) {
+    badge.textContent = label.replace('_', '-').toUpperCase();
+    badge.style.display = 'inline-block';
+    badge.style.color = lblCol;
+  }
+
+  const fmtT  = v => { const a = Math.abs(v||0); return a >= 1e12 ? '$' + (a/1e12).toFixed(1) + 'T' : a >= 1e9 ? '$' + (a/1e9).toFixed(0) + 'B' : '$' + a.toFixed(0); };
+  const fmtP  = v => (v >= 0 ? '+' : '') + (v ?? 0).toFixed(2) + '%';
+  const fmtS  = v => (v ?? 0).toFixed(1);
+
+  // Regime score gauge bar
+  const barW   = Math.min(score, 100).toFixed(0);
+  const barCol = score >= 60 ? 'var(--green)' : score >= 40 ? '#f59e0b' : 'var(--red)';
+  const gauge  = `
+    <div style="display:flex;align-items:center;gap:6px;margin:4px 0">
+      <span style="font-size:9px;color:var(--muted);width:36px">SCORE</span>
+      <div style="flex:1;height:6px;background:var(--border);border-radius:3px">
+        <div style="width:${barW}%;height:100%;background:${barCol};border-radius:3px"></div>
+      </div>
+      <span style="font-size:9px;color:${barCol};width:32px;text-align:right">${fmtS(score)}</span>
+    </div>`;
+
+  const fedDelta = fed.delta_30d_usd ?? 0;
+  const fedCol   = fedDelta > 0 ? 'var(--green)' : fedDelta < 0 ? 'var(--red)' : 'var(--muted)';
+  const dxyCol   = (dxy.change_30d_pct ?? 0) < 0 ? 'var(--green)' : 'var(--red)';  // USD weak = bullish
+  const divCol   = (dxy.btc_divergence ?? 0) > 0 ? 'var(--green)' : 'var(--red)';
+
+  el.innerHTML = `
+    <div style="display:flex;gap:12px;margin-bottom:4px;align-items:flex-start">
+      <div>
+        <div style="font-size:9px;color:var(--muted)">REGIME</div>
+        <div style="font-size:15px;font-weight:700;color:${lblCol}">${label.replace('_','-').toUpperCase()}</div>
+        <div style="font-size:9px;color:var(--muted)">${trendIcon} ${trend} vs 90d MA ${fmtS(regime.ma_90d)}</div>
+      </div>
+      <div>
+        <div style="font-size:9px;color:var(--muted)">M2 YOY</div>
+        <div style="font-size:13px;font-weight:600">${fmtP(m2.growth_rate_yoy_pct)}</div>
+      </div>
+      <div>
+        <div style="font-size:9px;color:var(--muted)">DXY 30D</div>
+        <div style="font-size:13px;font-weight:600;color:${dxyCol}">${fmtP(dxy.change_30d_pct)}</div>
+      </div>
+      <div>
+        <div style="font-size:9px;color:var(--muted)">BTC DIV</div>
+        <div style="font-size:13px;font-weight:600;color:${divCol}">${fmtP(dxy.btc_divergence)}</div>
+      </div>
+    </div>
+    ${gauge}
+    <div style="display:flex;gap:8px;margin-top:4px;font-size:9px">
+      <span style="color:var(--muted)">FED:</span>
+      <span style="color:${fedCol}">${fmtT(Math.abs(fedDelta))} ${fedDelta >= 0 ? 'QE' : 'QT'}</span>
+      <span style="color:var(--muted);margin-left:6px">FED TOTAL:</span>
+      <span>${fmtT(fed.current_usd)}</span>
+      <span style="color:var(--muted);margin-left:6px">M2:</span>
+      <span>${fmtT(m2.current_proxy_usd)}</span>
+    </div>
+    <div style="font-size:9px;color:var(--muted);margin-top:4px">${data.description ?? ''}</div>
+  `;
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
