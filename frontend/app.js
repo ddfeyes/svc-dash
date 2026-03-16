@@ -2465,6 +2465,101 @@ async function renderTradeCountRate() {
     <div style="font-size:11px;color:var(--muted)">${buckets.length} buckets · ${trend} trend</div>`;
 }
 
+// ── Session Volume Profile ────────────────────────────────────────────────────
+async function renderSessionVolumeProfile() {
+  const sym   = encodeURIComponent(activeSymbol);
+  const el    = document.getElementById('session-volume-profile-content');
+  const badge = document.getElementById('session-volume-profile-badge');
+  if (!el) return;
+  const data = await apiFetch(`/session-volume-profile?symbol=${sym}&bins=25`);
+  if (!data) { setErr('session-volume-profile-content'); return; }
+
+  const cur = data.current_session || 'none';
+  const SESSION_BADGE = {
+    asia: ['ASIA', 'badge-blue'], eu: ['EU', 'badge-yellow'],
+    us: ['US', 'badge-green'],   overlap: ['OVERLAP', 'badge-red'],
+    none: ['—', 'badge-blue'],
+  };
+  const [bLabel, bCls] = SESSION_BADGE[cur] || ['—', 'badge-blue'];
+  if (badge) {
+    badge.textContent = bLabel;
+    badge.className   = `card-badge ${bCls}`;
+    badge.style.display = '';
+  }
+
+  const sessions = data.sessions || {};
+  const SESSION_ORDER = ['asia', 'eu', 'us'];
+  const SESSION_COLORS = { asia: 'var(--blue)', eu: 'var(--yellow)', us: 'var(--green)' };
+
+  function fmtP(p) {
+    if (p == null) return '—';
+    return p < 0.01 ? p.toFixed(6) : p < 1 ? p.toFixed(4) : p.toFixed(2);
+  }
+  function fmtV(v) {
+    if (!v) return '0';
+    if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+    if (v >= 1e3) return (v / 1e3).toFixed(1) + 'k';
+    return v.toFixed(1);
+  }
+
+  let html = '';
+  for (const key of SESSION_ORDER) {
+    const s = sessions[key];
+    if (!s) continue;
+    const col   = SESSION_COLORS[key];
+    const isAct = s.active;
+    const bins  = s.bins || [];
+
+    // Mini horizontal volume profile (up to 15 bars shown)
+    let profileHtml = '';
+    if (bins.length > 0) {
+      const step  = Math.max(1, Math.floor(bins.length / 15));
+      const shown = bins.filter((_, i) => i % step === 0).slice(-15);
+      profileHtml = `<div style="display:flex;gap:1px;align-items:flex-end;height:28px;margin:4px 0">`;
+      for (const b of shown) {
+        const w    = Math.max(4, b.pct_of_max);
+        const isPoc = b.is_poc;
+        const inVa  = b.in_value_area;
+        const bg    = isPoc ? col : inVa ? col + '88' : 'var(--bg3)';
+        const outline = isPoc ? `outline:1px solid ${col};` : '';
+        profileHtml += `<div title="${fmtP(b.price)}: ${fmtV(b.volume)}" style="flex:1;height:${w}%;background:${bg};${outline}border-radius:1px 1px 0 0;min-height:2px"></div>`;
+      }
+      profileHtml += `</div>`;
+      // Price range labels
+      if (bins.length > 0) {
+        const lo = bins[0].price, hi = bins[bins.length - 1].price;
+        profileHtml += `<div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted);margin-bottom:2px"><span>${fmtP(lo)}</span><span>${fmtP(hi)}</span></div>`;
+      }
+    } else {
+      profileHtml = `<div style="font-size:10px;color:var(--muted);padding:4px 0">No data for this session</div>`;
+    }
+
+    // VPOC + VAH/VAL line
+    let levelsHtml = '';
+    if (s.poc != null) {
+      levelsHtml = `
+        <div style="display:flex;gap:8px;font-size:10px;flex-wrap:wrap;color:var(--muted);margin-bottom:2px">
+          <span>VPOC <span style="color:${col};font-weight:700;font-family:monospace">${fmtP(s.poc)}</span></span>
+          <span>VAH  <span style="color:var(--fg);font-family:monospace">${fmtP(s.vah)}</span></span>
+          <span>VAL  <span style="color:var(--fg);font-family:monospace">${fmtP(s.val)}</span></span>
+          <span style="margin-left:auto">vol ${fmtV(s.total_volume)}</span>
+        </div>`;
+    }
+
+    html += `<div style="margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border)">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">
+        <span style="font-size:11px;font-weight:700;color:${col}">${s.name}</span>
+        <span style="font-size:9px;color:var(--muted)">${s.hours}</span>
+        ${isAct ? `<span class="card-badge badge-green" style="font-size:9px;padding:1px 4px">LIVE</span>` : ''}
+      </div>
+      ${levelsHtml}
+      ${profileHtml}
+    </div>`;
+  }
+
+  el.innerHTML = html || '<div class="text-muted" style="font-size:11px;">No session data</div>';
+}
+
 // ── Top Movers ────────────────────────────────────────────────────────────────
 async function renderTopMovers() {
   const data = await apiFetch('/top-movers');
@@ -2958,6 +3053,10 @@ async function refresh() {
 
     // Batch 15: rv-iv card
     await Promise.all([safe(renderRVIV)]);
+    await delay(200);
+
+    // Batch 16: session volume profile
+    await Promise.all([safe(renderSessionVolumeProfile)]);
   } finally {
     _refreshRunning = false;
   }
