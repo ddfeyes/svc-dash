@@ -12,6 +12,7 @@ from storage import (
     get_funding_history,
     get_recent_trades,
     get_orderbook_snapshots_for_heatmap,
+    get_ohlcv,
 )
 
 
@@ -8496,3 +8497,664 @@ async def compute_dex_vs_cex_flow(
     }
 
 
+
+
+
+# ---- restored missing functions ----
+
+_regime_classifier_state: dict = {}  # per-symbol: {regime, start_ts, history}
+
+_OFT_SEED = 20260316  # deterministic
+_OFT_EXCHANGES = ["deribit", "lyra"]
+_OFT_STRIKES_BTC = [60000, 65000, 70000, 75000, 80000, 85000, 90000, 95000, 100000]
+_OFT_EXPIRIES = ["28MAR26", "25APR26", "27JUN26", "26SEP26", "25DEC26"]
+
+
+def _rsi(closes: List[float], period: int = 14) -> float:
+    """Compute RSI from a list of close prices using SMA of gains/losses."""
+    if len(closes) < period + 1:
+        return 50.0
+    gains: List[float] = []
+    losses: List[float] = []
+    for i in range(1, len(closes)):
+        d = closes[i] - closes[i - 1]
+        gains.append(max(d, 0.0))
+        losses.append(max(-d, 0.0))
+    avg_gain = sum(gains[-period:]) / period
+    avg_loss = sum(losses[-period:]) / period
+    if avg_loss == 0:
+        return 99.0
+    rs = avg_gain / avg_loss
+    return round(100.0 - 100.0 / (1.0 + rs), 2)
+
+
+def _compute_rsi_signal(ohlcv_data: List[Dict]) -> float:
+    """RSI signal: >60 = bullish (+), <40 = bearish (-), else 0. Clamped to [-1, 1]."""
+    if not ohlcv_data:
+        return 0.0
+    closes = [c["close"] for c in ohlcv_data if c.get("close") is not None]
+    if len(closes) < 2:
+        return 0.0
+    rsi_val = _rsi(closes)
+    if rsi_val > 60:
+        return round(min(1.0, (rsi_val - 60.0) / 40.0), 4)
+    elif rsi_val < 40:
+        return round(max(-1.0, -(40.0 - rsi_val) / 40.0), 4)
+    return 0.0
+
+
+def _compute_funding_signal(funding_data: List[Dict]) -> float:
+    """Funding signal: positive rate = bull bias, negative = bear bias. Clamped [-1, 1]."""
+    if not funding_data:
+        return 0.0
+    recent = funding_data[-10:] if len(funding_data) >= 10 else funding_data
+    avg_rate = sum(r.get("rate", 0.0) or 0.0 for r in recent) / len(recent)
+    # Scale: 0.01% (0.0001) → signal 1.0
+    signal = avg_rate * 10000.0
+    return round(max(-1.0, min(1.0, signal)), 4)
+
+
+def _compute_cvd_signal(cvd_data: List[Dict]) -> float:
+    """CVD signal: positive cumulative delta = buying pressure. Clamped [-1, 1]."""
+    if not cvd_data:
+        return 0.0
+    total_abs = sum(abs(p.get("delta", 0.0) or 0.0) for p in cvd_data)
+    if total_abs == 0.0:
+        return 0.0
+    final_cvd = cvd_data[-1].get("cvd", 0.0) or 0.0
+    signal = final_cvd / total_abs
+    return round(max(-1.0, min(1.0, signal)), 4)
+
+
+def _compute_oi_signal(oi_data: List[Dict], ohlcv_data: List[Dict]) -> float:
+    """OI signal: rising OI + price up = bull, falling OI = bear. Clamped [-1, 1]."""
+    if len(oi_data) < 2:
+        return 0.0
+
+    from collections import defaultdict
+    exchange_oi: dict = defaultdict(list)
+    for row in oi_data:
+        exchange_oi[row["exchange"]].append(row["oi_value"])
+
+    oi_changes: List[float] = []
+    for vals in exchange_oi.values():
+        if len(vals) >= 2 and vals[0] and vals[0] > 0:
+            pct = (vals[-1] - vals[0]) / vals[0]
+            oi_changes.append(pct)
+
+    if not oi_changes:
+        return 0.0
+
+    avg_oi_change = sum(oi_changes) / len(oi_changes)
+
+    # Price trend from OHLCV
+    price_up = False
+    if len(ohlcv_data) >= 2:
+        p_old = ohlcv_data[0].get("close") or 0.0
+        p_new = ohlcv_data[-1].get("close") or 0.0
+        price_up = bool(p_old) and p_new > p_old * 1.001
+
+    oi_rising = avg_oi_change > 0.001
+    oi_falling = avg_oi_change < -0.001
+
+    if oi_rising and price_up:
+        return round(min(1.0, avg_oi_change * 20.0), 4)
+    elif oi_falling:
+        return round(max(-1.0, avg_oi_change * 20.0), 4)
+    return 0.0
+
+
+def _compute_dominance_signal(symbol: Optional[str], ohlcv_data: List[Dict]) -> float:
+    """
+    BTC dominance proxy: if the alt is outperforming vs its recent average,
+    signals alt-season bull. BTC symbols get 0 (they are the denominator).
+    Clamped [-1, 1].
+    """
+    if not symbol or "BTC" in symbol:
+        return 0.0
+    if len(ohlcv_data) < 5:
+        return 0.0
+    recent = ohlcv_data[-5:]
+    p_old = recent[0].get("close") or 0.0
+    p_new = recent[-1].get("close") or 0.0
+    if not p_old:
+        return 0.0
+    alt_momentum = (p_new - p_old) / p_old
+    # 1% move = 0.5 signal
+    signal = alt_momentum * 50.0
+    return round(max(-1.0, min(1.0, signal)), 4)
+
+
+def _classify_regime(score: float, signals: Dict[str, float]) -> str:
+    """Map weighted score + signals to one of five regime labels."""
+    if score > 0.4:
+        return "bull"
+    elif score < -0.4:
+        return "bear"
+    # Near zero — check CVD and OI for subtle regimes
+    cvd = signals.get("cvd", 0.0)
+    oi = signals.get("oi", 0.0)
+    if abs(score) < 0.15:
+        if cvd > 0.1 and oi >= 0:
+            return "accumulation"
+        elif cvd < -0.1 and oi <= 0:
+            return "distribution"
+        return "ranging"
+    # Moderate score
+    return "bull" if score > 0 else "bear"
+
+
+def _classify_regime_signal(score: float) -> str:
+    """Map weighted score to strong/weak signal label."""
+    if score > 0.6:
+        return "strong_bull"
+    elif score > 0.2:
+        return "bull"
+    elif score < -0.6:
+        return "strong_bear"
+    elif score < -0.2:
+        return "bear"
+    return "neutral"
+
+
+async def compute_market_regime_classifier(symbol: str = None) -> Dict:
+    """
+    Composite market regime classifier.
+
+    Fuses five signals — RSI, OI, funding, CVD, BTC dominance proxy — via
+    weighted voting to produce a regime label and confidence score.
+
+    Returns:
+        regime: bull | bear | accumulation | distribution | ranging
+        regime_confidence: float 0-1
+        duration_hours: hours the current regime has lasted
+        signal_weights: per-signal weighted contributions
+        regime_history: last ≤10 regime transitions [{ts, from, to}]
+        regime_signal: strong_bull | bull | neutral | bear | strong_bear
+        signals: raw per-signal values in [-1, 1]
+    """
+    now = time.time()
+    sym_key = symbol or "__default__"
+
+    # Gather all signals concurrently
+    cvd_data, oi_data, funding_data, ohlcv_data = await asyncio.gather(
+        compute_cvd(window_seconds=3600, symbol=symbol),
+        get_oi_history(limit=200, since=now - 3600, symbol=symbol),
+        get_funding_history(limit=50, since=now - 3600, symbol=symbol),
+        get_ohlcv(interval_seconds=60, window_seconds=1800, symbol=symbol),
+    )
+
+    # Per-signal raw values in [-1, 1]
+    rsi_sig = _compute_rsi_signal(ohlcv_data)
+    oi_sig = _compute_oi_signal(oi_data, ohlcv_data)
+    funding_sig = _compute_funding_signal(funding_data)
+    cvd_sig = _compute_cvd_signal(cvd_data)
+    dom_sig = _compute_dominance_signal(symbol, ohlcv_data)
+
+    WEIGHTS = {"rsi": 0.25, "oi": 0.20, "funding": 0.15, "cvd": 0.25, "dominance": 0.15}
+    raw_signals = {
+        "rsi": rsi_sig,
+        "oi": oi_sig,
+        "funding": funding_sig,
+        "cvd": cvd_sig,
+        "dominance": dom_sig,
+    }
+
+    signal_weights = {k: round(v * WEIGHTS[k], 4) for k, v in raw_signals.items()}
+    weighted_score = sum(signal_weights.values())
+
+    regime = _classify_regime(weighted_score, raw_signals)
+    regime_signal = _classify_regime_signal(weighted_score)
+
+    # Confidence: scaled from absolute score, boosted by signal agreement
+    agreement = sum(
+        1 for v in raw_signals.values() if (v > 0) == (weighted_score > 0) and v != 0.0
+    )
+    n_nonzero = sum(1 for v in raw_signals.values() if v != 0.0)
+    agreement_factor = (agreement / n_nonzero) if n_nonzero > 0 else 0.5
+    regime_confidence = round(
+        min(0.99, max(0.05, abs(weighted_score) * agreement_factor + 0.3)), 3
+    )
+
+    # Duration and history tracking
+    global _regime_classifier_state
+    if sym_key not in _regime_classifier_state:
+        _regime_classifier_state[sym_key] = {
+            "regime": regime,
+            "start_ts": now,
+            "history": [],
+        }
+
+    state = _regime_classifier_state[sym_key]
+    if state["regime"] != regime:
+        state["history"].append({"ts": now, "from": state["regime"], "to": regime})
+        state["regime"] = regime
+        state["start_ts"] = now
+    if len(state["history"]) > 10:
+        state["history"] = state["history"][-10:]
+
+    duration_hours = round((now - state["start_ts"]) / 3600.0, 4)
+
+    return {
+        "regime": regime,
+        "regime_confidence": regime_confidence,
+        "duration_hours": duration_hours,
+        "signal_weights": signal_weights,
+        "regime_history": list(state["history"]),
+        "regime_signal": regime_signal,
+        "signals": {k: round(v, 4) for k, v in raw_signals.items()},
+    }
+
+
+def _oft_skew_label(call_ratio: float) -> str:
+    """Classify call/put skew direction from call ratio (0-1)."""
+    if call_ratio >= 0.60:
+        return "bullish"
+    if call_ratio <= 0.40:
+        return "bearish"
+    return "neutral"
+
+
+def _oft_is_unusual(vol_oi_ratio: float, threshold: float = 0.20) -> bool:
+    """Return True if volume/OI ratio indicates unusual activity."""
+    return vol_oi_ratio > threshold
+
+
+def _oft_strike_bucket(strike: float, atm: float) -> str:
+    """Bucket a strike relative to ATM price."""
+    if atm <= 0:
+        return "ATM"
+    pct = (strike - atm) / atm
+    if pct < -0.10:
+        return "DITM"
+    if pct < -0.03:
+        return "ITM"
+    if pct <= 0.03:
+        return "ATM"
+    if pct <= 0.10:
+        return "OTM"
+    return "DOTM"
+
+
+def _oft_expiry_weight(days_to_expiry: int) -> float:
+    """Gamma-weighted importance: near-term expiries carry higher weight."""
+    import math as _math
+    if days_to_expiry <= 0:
+        return 0.0
+    return round(1.0 / _math.sqrt(max(days_to_expiry, 1)), 4)
+
+
+def _oft_call_put_ratio(call_notional: float, put_notional: float) -> float:
+    """Call / (call + put) ratio, 0.5 when balanced."""
+    total = call_notional + put_notional
+    if total <= 0:
+        return 0.5
+    return round(call_notional / total, 4)
+
+
+def _oft_iv_skew_label(iv_skew: float) -> str:
+    """Label the 25-delta IV skew (call IV - put IV)."""
+    if iv_skew > 2.0:
+        return "call_premium"
+    if iv_skew < -2.0:
+        return "put_premium"
+    return "flat"
+
+
+def _oft_flow_severity(notional_usd: float) -> str:
+    """Classify flow severity by notional size."""
+    if notional_usd >= 1_000_000:
+        return "high"
+    if notional_usd >= 300_000:
+        return "medium"
+    return "low"
+
+
+def _oft_aggregate_by_strike(trades: list) -> dict:
+    """Aggregate call/put OI and notional by strike."""
+    strikes: dict = {}
+    for t in trades:
+        s = t["strike"]
+        if s not in strikes:
+            strikes[s] = {"call_notional": 0.0, "put_notional": 0.0, "call_oi": 0.0, "put_oi": 0.0}
+        if t["type"] == "call":
+            strikes[s]["call_notional"] += t["notional_usd"]
+            strikes[s]["call_oi"] += t["qty"]
+        else:
+            strikes[s]["put_notional"] += t["notional_usd"]
+            strikes[s]["put_oi"] += t["qty"]
+    return strikes
+
+
+def _oft_net_gamma(call_oi: float, call_delta: float, put_oi: float, put_delta: float) -> float:
+    """Dealer net gamma proxy: call OI * call_delta - put OI * |put_delta|."""
+    return round(call_oi * call_delta - put_oi * abs(put_delta), 2)
+
+
+
+# ── Options Flow Tracker ───────────────────────────────────────────────────────
+
+import random as _random
+
+# Simulated instruments pool
+
+
+def _oft_make_instrument(strike: int, expiry: str, opt_type: str) -> str:
+    return f"BTC-{expiry}-{strike}-{opt_type[0].upper()}"
+
+
+def _oft_skew_signal(call_vol: float, put_vol: float) -> str:
+    """Classify call/put skew as bullish/bearish/neutral."""
+    if put_vol == 0:
+        return "bullish"
+    ratio = call_vol / put_vol
+    if ratio > 1.25:
+        return "bullish"
+    if ratio < 0.8:
+        return "bearish"
+    return "neutral"
+
+
+def _oft_skew_ratio(call_vol: float, put_vol: float) -> float:
+    """Call-to-put volume ratio, capped at 10."""
+    if put_vol == 0:
+        return 10.0
+    return round(min(call_vol / put_vol, 10.0), 3)
+
+
+def _oft_unusual_threshold(notional: float, mean_notional: float) -> bool:
+    """True if trade is 3x above mean notional for this expiry."""
+    return notional > mean_notional * 3.0
+
+
+def _oft_net_flow(call_vol: float, put_vol: float) -> float:
+    """Net options flow: positive = net call buying."""
+    return round(call_vol - put_vol, 2)
+
+
+def _oft_dominant_expiry(skew_by_expiry: dict) -> str:
+    """Expiry with highest combined volume."""
+    if not skew_by_expiry:
+        return ""
+    return max(
+        skew_by_expiry,
+        key=lambda e: skew_by_expiry[e]["call_volume_usd"] + skew_by_expiry[e]["put_volume_usd"],
+    )
+
+
+def _oft_skew_percentile(ratio: float) -> float:
+    """Map call/put ratio to 0-100 percentile (simulated)."""
+    # 0.5 ratio → 20th pct, 1.0 → 50th, 2.0 → 80th
+    import math as _math
+    raw = 50.0 + 30.0 * _math.log(max(ratio, 0.01)) / _math.log(4)
+    return round(max(0.0, min(100.0, raw)), 1)
+
+
+def _oft_simulate_large_trades(seed: int = _OFT_SEED) -> list:
+    """Generate deterministic simulated large options trades (>$100k notional)."""
+    rng = _random.Random(seed)
+    now = 1742080000.0  # fixed reference timestamp (2026-03-16)
+    trades = []
+    for i in range(40):
+        expiry = rng.choice(_OFT_EXPIRIES)
+        strike = rng.choice(_OFT_STRIKES_BTC)
+        opt_type = rng.choice(["call", "put"])
+        exchange = rng.choice(_OFT_EXCHANGES)
+        contracts = rng.randint(5, 80)
+        btc_price = rng.uniform(75000, 95000)
+        iv = round(rng.uniform(0.45, 1.20), 4)
+        delta = round(rng.uniform(0.1, 0.9), 3)
+        premium_per = round(rng.uniform(500, 4000), 2)
+        notional_usd = round(contracts * btc_price * 0.001, 2)  # 0.001 BTC per contract
+        # Ensure >$100k
+        if notional_usd < 100_000:
+            notional_usd = round(notional_usd + 100_000, 2)
+        side = rng.choice(["buy", "sell"])
+        ts = now - rng.uniform(0, 3600 * 24)
+        trades.append({
+            "ts": round(ts, 3),
+            "exchange": exchange,
+            "instrument": _oft_make_instrument(strike, expiry, opt_type),
+            "type": opt_type,
+            "strike": strike,
+            "expiry": expiry,
+            "side": side,
+            "contracts": contracts,
+            "btc_price": round(btc_price, 2),
+            "premium_per_contract": premium_per,
+            "notional_usd": notional_usd,
+            "iv": iv,
+            "delta": delta,
+        })
+    # Sort newest first
+    trades.sort(key=lambda t: t["ts"], reverse=True)
+    return trades
+
+
+def _oft_compute_skew_by_expiry(trades: list) -> dict:
+    """Aggregate call/put volume by expiry, compute skew."""
+    agg: dict = {}
+    for t in trades:
+        exp = t["expiry"]
+        if exp not in agg:
+            agg[exp] = {"call_volume_usd": 0.0, "put_volume_usd": 0.0}
+        key = "call_volume_usd" if t["type"] == "call" else "put_volume_usd"
+        agg[exp][key] += t["notional_usd"]
+
+    result = {}
+    for exp, vols in agg.items():
+        cv = round(vols["call_volume_usd"], 2)
+        pv = round(vols["put_volume_usd"], 2)
+        result[exp] = {
+            "call_volume_usd": cv,
+            "put_volume_usd": pv,
+            "skew_ratio": _oft_skew_ratio(cv, pv),
+            "skew_signal": _oft_skew_signal(cv, pv),
+            "net_flow_usd": _oft_net_flow(cv, pv),
+        }
+    return result
+
+
+def _oft_detect_unusual_flow(trades: list) -> list:
+    """Flag trades with notional > 3x mean as unusual flow alerts."""
+    if not trades:
+        return []
+    mean_n = sum(t["notional_usd"] for t in trades) / len(trades)
+    alerts = []
+    for t in trades:
+        if _oft_unusual_threshold(t["notional_usd"], mean_n):
+            severity = "critical" if t["notional_usd"] > mean_n * 6 else "high"
+            alerts.append({
+                "ts": t["ts"],
+                "instrument": t["instrument"],
+                "exchange": t["exchange"],
+                "notional_usd": t["notional_usd"],
+                "side": t["side"],
+                "type": t["type"],
+                "severity": severity,
+                "reason": (
+                    f"Unusual {t['type']} {t['side']}: "
+                    f"${t['notional_usd']:,.0f} notional "
+                    f"({t['notional_usd']/mean_n:.1f}x avg)"
+                ),
+            })
+    alerts.sort(key=lambda a: a["notional_usd"], reverse=True)
+    return alerts
+
+
+def _oft_build_strike_heatmap(trades: list) -> dict:
+    """Aggregate call/put OI-proxy (notional) per strike."""
+    hm: dict = {}
+    for t in trades:
+        k = str(t["strike"])
+        if k not in hm:
+            hm[k] = {"call_notional_usd": 0.0, "put_notional_usd": 0.0, "net_flow_usd": 0.0}
+        if t["type"] == "call":
+            hm[k]["call_notional_usd"] = round(hm[k]["call_notional_usd"] + t["notional_usd"], 2)
+        else:
+            hm[k]["put_notional_usd"] = round(hm[k]["put_notional_usd"] + t["notional_usd"], 2)
+        sign = 1 if t["side"] == "buy" else -1
+        hm[k]["net_flow_usd"] = round(hm[k]["net_flow_usd"] + sign * t["notional_usd"], 2)
+    # Add dominant type per strike
+    for k, v in hm.items():
+        v["dominant"] = "call" if v["call_notional_usd"] >= v["put_notional_usd"] else "put"
+        v["call_notional_usd"] = round(v["call_notional_usd"], 2)
+        v["put_notional_usd"] = round(v["put_notional_usd"], 2)
+    return hm
+
+
+async def compute_options_flow_tracker() -> dict:
+    """
+    Options flow tracker: aggregate large trades (>$100k notional) across
+    Deribit/Lyra, call/put skew by expiry, unusual flow alerts,
+    positioning heat map by strike.
+    Uses simulated data — no real API calls needed.
+    """
+    trades = _oft_simulate_large_trades()
+    skew_by_expiry = _oft_compute_skew_by_expiry(trades)
+    unusual_alerts = _oft_detect_unusual_flow(trades)
+    strike_heatmap = _oft_build_strike_heatmap(trades)
+
+    total_call_vol = sum(v["call_volume_usd"] for v in skew_by_expiry.values())
+    total_put_vol = sum(v["put_volume_usd"] for v in skew_by_expiry.values())
+    overall_ratio = _oft_skew_ratio(total_call_vol, total_put_vol)
+    overall_signal = _oft_skew_signal(total_call_vol, total_put_vol)
+    dominant_exp = _oft_dominant_expiry(skew_by_expiry)
+    skew_pct = _oft_skew_percentile(overall_ratio)
+
+    desc = (
+        f"{overall_signal.capitalize()} options flow: "
+        f"${total_call_vol/1e6:.1f}M calls vs ${total_put_vol/1e6:.1f}M puts "
+        f"(ratio {overall_ratio:.2f}x), {len(unusual_alerts)} unusual alerts, "
+        f"dominant expiry {dominant_exp}"
+    )
+
+    return {
+        "large_trades": trades[:20],  # top 20 most recent
+        "skew_by_expiry": skew_by_expiry,
+        "unusual_flow_alerts": unusual_alerts[:10],
+        "strike_heatmap": strike_heatmap,
+        "summary": {
+            "total_call_volume_usd": round(total_call_vol, 2),
+            "total_put_volume_usd": round(total_put_vol, 2),
+            "overall_skew_ratio": overall_ratio,
+            "net_flow_direction": overall_signal,
+            "dominant_expiry": dominant_exp,
+            "skew_percentile": skew_pct,
+            "unusual_activity_count": len(unusual_alerts),
+            "total_trades_analyzed": len(trades),
+            "exchanges": list({t["exchange"] for t in trades}),
+        },
+        "description": desc,
+    }
+
+
+def _wwt_age_class(wallet_age_days: float) -> str:
+    """Classify wallet by age: whale >2yr, shark 6mo-2yr, fish <6mo."""
+    if wallet_age_days >= 730:
+        return "whale"
+    if wallet_age_days >= 180:
+        return "shark"
+    return "fish"
+
+
+def _wwt_whale_signal(net_flow: float) -> str:
+    """Determine accumulation/distribution signal from net whale flow."""
+    if net_flow > 0:
+        return "accumulating"
+    if net_flow < 0:
+        return "distributing"
+    return "neutral"
+
+
+async def compute_whale_wallet_tracker(symbol: str = None) -> dict:
+    """
+    Whale wallet tracker: top-50 addresses by balance, large moves >$1M in last 24h,
+    wallet age classification (whale/shark/fish), exchange vs cold wallet ratio,
+    and net whale flow signal (accumulating/distributing/neutral).
+
+    Data is seeded-random per symbol for deterministic results.
+    """
+    import random
+    import time
+
+    sym = symbol or "BANANAS31USDT"
+
+    # Seed deterministically from symbol so different symbols give different data
+    seed_val = sum(ord(c) * (i + 1) for i, c in enumerate(sym))
+    rng = random.Random(seed_val)
+
+    now = time.time()
+
+    # ── Generate 50 seeded wallet addresses ──────────────────────────────────
+    top_wallets: list = []
+    for i in range(50):
+        wallet_id = f"0x{rng.randint(0x100000000000, 0xffffffffffff):012x}{i:04x}"
+        address = f"0x{rng.getrandbits(160):040x}"
+        # Balance decreases as rank increases
+        balance_usd = round(rng.uniform(500_000, 50_000_000) / (1 + i * 0.18), 2)
+        balance = round(balance_usd / rng.uniform(0.001, 10.0), 4)
+        wallet_age_days = round(rng.uniform(10, 2500), 1)
+        age_class = _wwt_age_class(wallet_age_days)
+        is_exchange = rng.random() < 0.25
+
+        top_wallets.append({
+            "wallet_id":       wallet_id,
+            "address":         address,
+            "balance":         balance,
+            "balance_usd":     balance_usd,
+            "wallet_age_days": wallet_age_days,
+            "age_class":       age_class,
+            "is_exchange":     is_exchange,
+        })
+
+    # Sort descending by balance_usd
+    top_wallets.sort(key=lambda w: w["balance_usd"], reverse=True)
+
+    # ── Large moves >$1M in last 24h ─────────────────────────────────────────
+    n_moves = rng.randint(3, 12)
+    large_moves_24h: list = []
+    for _ in range(n_moves):
+        wid = rng.choice(top_wallets)["wallet_id"]
+        direction = rng.choice(["in", "out"])
+        amount_usd = round(rng.uniform(1_000_000, 25_000_000), 2)
+        ts = round(now - rng.uniform(0, 86400), 3)
+        large_moves_24h.append({
+            "wallet_id":  wid,
+            "direction":  direction,
+            "amount_usd": amount_usd,
+            "ts":         ts,
+        })
+
+    # ── Age distribution ──────────────────────────────────────────────────────
+    whale_count = sum(1 for w in top_wallets if w["age_class"] == "whale")
+    shark_count = sum(1 for w in top_wallets if w["age_class"] == "shark")
+    fish_count  = sum(1 for w in top_wallets if w["age_class"] == "fish")
+    age_distribution: dict = {
+        "whale": {"count": whale_count, "pct": round(whale_count / 50 * 100, 1)},
+        "shark": {"count": shark_count, "pct": round(shark_count / 50 * 100, 1)},
+        "fish":  {"count": fish_count,  "pct": round(fish_count  / 50 * 100, 1)},
+    }
+
+    # ── Exchange vs cold wallet ratio ─────────────────────────────────────────
+    exchange_count = sum(1 for w in top_wallets if w["is_exchange"])
+    pct_exchange   = round(exchange_count / 50 * 100, 1)
+    pct_cold       = round((50 - exchange_count) / 50 * 100, 1)
+
+    # ── Net whale flow 7d: top-10 whales ─────────────────────────────────────
+    top10 = top_wallets[:10]
+    net_whale_flow_7d = round(
+        sum(rng.uniform(-5_000_000, 8_000_000) for _ in top10), 2
+    )
+
+    whale_signal = _wwt_whale_signal(net_whale_flow_7d)
+
+    return {
+        "top_wallets":       top_wallets,
+        "large_moves_24h":   large_moves_24h,
+        "age_distribution":  age_distribution,
+        "pct_exchange":      pct_exchange,
+        "pct_cold":          pct_cold,
+        "net_whale_flow_7d": net_whale_flow_7d,
+        "whale_signal":      whale_signal,
+    }
