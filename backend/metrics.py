@@ -9824,3 +9824,135 @@ async def compute_liquidation_cascade_detector() -> dict:
         "exchanges": exchanges,
         "regime": regime,
     }
+
+
+def compute_cross_correlation_signal(
+    series_a: List[float],
+    series_b: List[float],
+) -> Dict:
+    """
+    Cross-correlation signal detector for two price series.
+    
+    Computes rolling cross-correlation with window=20, deterministic via seed 20260316.
+    
+    Args:
+        series_a: First price series (list of floats)
+        series_b: Second price series (list of floats)
+    
+    Returns:
+        Dict with:
+        - correlation_score: Overall correlation coefficient [-1, 1]
+        - signal_strength: Normalized strength [0, 1]
+        - divergence_detected: Boolean for divergence
+        - window_size: Rolling window (20)
+        - rolling_correlations: List of 20 rolling correlation values
+        - signal_type: "bullish", "bearish", or "neutral"
+        - confidence_level: [0, 1] confidence in signal
+        - timestamp: ISO timestamp of computation
+    """
+    import random as _random
+    from math import sqrt, isnan
+    from datetime import datetime, timezone
+    
+    rng = _random.Random(20260316)
+    
+    # Validate inputs
+    if not series_a or not series_b:
+        return {
+            "correlation_score": 0.0,
+            "signal_strength": 0.0,
+            "divergence_detected": False,
+            "window_size": 20,
+            "rolling_correlations": [],
+            "signal_type": "neutral",
+            "confidence_level": 0.0,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    
+    # Ensure equal length by truncating to shortest
+    min_len = min(len(series_a), len(series_b))
+    series_a = series_a[:min_len]
+    series_b = series_b[:min_len]
+    
+    # Compute mean and std for full series
+    def mean(s: List[float]) -> float:
+        return sum(s) / len(s) if s else 0.0
+    
+    def std(s: List[float]) -> float:
+        if not s or len(s) < 2:
+            return 0.0
+        m = mean(s)
+        variance = sum((x - m) ** 2 for x in s) / len(s)
+        return sqrt(variance) if variance > 0 else 0.0
+    
+    def correlation(x: List[float], y: List[float]) -> float:
+        """Pearson correlation coefficient."""
+        if not x or not y or len(x) != len(y):
+            return 0.0
+        mx, my = mean(x), mean(y)
+        sx, sy = std(x), std(y)
+        if sx == 0 or sy == 0:
+            return 0.0
+        cov = sum((x[i] - mx) * (y[i] - my) for i in range(len(x))) / len(x)
+        r = cov / (sx * sy)
+        return 0.0 if isnan(r) else max(-1.0, min(1.0, r))
+    
+    # Compute overall correlation
+    overall_correlation = correlation(series_a, series_b)
+    
+    # Compute rolling correlations (window=20)
+    window = 20
+    rolling_correlations = []
+    if len(series_a) >= window:
+        for i in range(len(series_a) - window + 1):
+            segment_a = series_a[i : i + window]
+            segment_b = series_b[i : i + window]
+            corr = correlation(segment_a, segment_b)
+            rolling_correlations.append(round(corr, 4))
+        # Keep only the last 20 rolling windows
+        rolling_correlations = rolling_correlations[-20:]
+    else:
+        rolling_correlations = [overall_correlation] * min(len(series_a), 20)
+    
+    # Pad to 20 if needed
+    while len(rolling_correlations) < 20:
+        rolling_correlations.insert(0, rolling_correlations[0] if rolling_correlations else 0.0)
+    rolling_correlations = rolling_correlations[-20:]
+    
+    # Detect divergence: high variance in rolling correlations
+    corr_mean = mean(rolling_correlations) if rolling_correlations else 0.0
+    corr_std = std(rolling_correlations) if rolling_correlations else 0.0
+    divergence_detected = corr_std > 0.3
+    
+    # Compute signal strength based on correlation magnitude and consistency
+    signal_strength = abs(overall_correlation) * (1.0 - min(corr_std / 2.0, 1.0))
+    signal_strength = round(max(0.0, min(1.0, signal_strength)), 4)
+    
+    # Determine signal type based on correlation and trend
+    if divergence_detected:
+        signal_type = "neutral"
+    elif overall_correlation > 0.3:
+        signal_type = "bullish"
+    elif overall_correlation < -0.3:
+        signal_type = "bearish"
+    else:
+        signal_type = "neutral"
+    
+    # Confidence level: based on consistency of rolling correlations
+    consistency = 1.0 - (corr_std / 2.0)  # Lower std = higher confidence
+    confidence_level = round(max(0.0, min(1.0, consistency)), 4)
+    
+    # Add random component seeded at 20260316 for reproducibility
+    random_boost = rng.uniform(-0.05, 0.05)
+    confidence_level = round(max(0.0, min(1.0, confidence_level + random_boost)), 4)
+    
+    return {
+        "correlation_score": round(max(-1.0, min(1.0, overall_correlation)), 4),
+        "signal_strength": signal_strength,
+        "divergence_detected": divergence_detected,
+        "window_size": 20,
+        "rolling_correlations": rolling_correlations,
+        "signal_type": signal_type,
+        "confidence_level": confidence_level,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }

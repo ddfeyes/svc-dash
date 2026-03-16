@@ -75,6 +75,7 @@ from metrics import (
     compute_order_flow_toxicity,
     compute_volatility_regime_detector,
     compute_smart_money_index,
+    compute_cross_correlation_signal,
 )
 
 router = APIRouter(prefix="/api")
@@ -5340,6 +5341,13 @@ async def cross_chain_arb_endpoint():
 async def order_flow_toxicity_endpoint():
     """Order Flow Toxicity (VPIN): volume-synchronized probability of informed trading."""
     data = await compute_order_flow_toxicity()
+    return JSONResponse(data)
+
+
+@router.get("/volatility-regime-detector")
+async def volatility_regime_detector_endpoint():
+    """Volatility regime detector: classifies market into low/medium/high/extreme vol regimes."""
+    data = await compute_volatility_regime_detector()
     return JSONResponse(data)
 
 

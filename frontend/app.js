@@ -3335,6 +3335,125 @@ async function refreshOptionsFlowTracker() {
 }
 
 
+// ── Cross-Correlation Signal ──────────────────────────────────────────────────────
+
+async function renderCrossCorrelationSignal() {
+  try {
+    const resp = await fetch('/api/cross-correlation-signal');
+    const data = await resp.json();
+    
+    if (!data || typeof data !== 'object') {
+      document.getElementById('cross-correlation-signal-content').innerHTML = 
+        '<div style="color:var(--error);">Invalid response</div>';
+      return;
+    }
+    
+    // Extract fields with defaults
+    const corrScore = parseFloat(data.correlation_score) || 0;
+    const signalStrength = parseFloat(data.signal_strength) || 0;
+    const divergence = !!data.divergence_detected;
+    const signalType = (data.signal_type || 'neutral').toLowerCase();
+    const confidence = parseFloat(data.confidence_level) || 0;
+    const rollingCorrs = data.rolling_correlations || [];
+    
+    // Determine colors based on signal type and strength
+    let signalColor = '#888';
+    if (signalType === 'bullish') {
+      signalColor = '#2ecc71';
+    } else if (signalType === 'bearish') {
+      signalColor = '#e74c3c';
+    }
+    
+    let signalBgColor = '#555';
+    if (signalType === 'bullish') {
+      signalBgColor = '#27ae60';
+    } else if (signalType === 'bearish') {
+      signalBgColor = '#c0392b';
+    }
+    
+    // Format score color based on value
+    let scoreColor = '#888';
+    if (corrScore > 0.5) scoreColor = '#2ecc71';
+    else if (corrScore > 0.2) scoreColor = '#4a9eff';
+    else if (corrScore < -0.5) scoreColor = '#e74c3c';
+    else if (corrScore < -0.2) scoreColor = '#f39c12';
+    
+    // Render sparkline
+    let sparklineHtml = '';
+    if (rollingCorrs.length > 0) {
+      const minVal = Math.min(...rollingCorrs);
+      const maxVal = Math.max(...rollingCorrs);
+      const range = maxVal - minVal || 1;
+      const w = 100 / rollingCorrs.length;
+      const h = 40;
+      const padding = 2;
+      
+      rollingCorrs.forEach((val, i) => {
+        const normalized = (val - minVal) / range;
+        const barHeight = Math.max(2, (h - 2 * padding) * normalized);
+        const y = h - padding - barHeight;
+        const x = i * w + w/4;
+        const barColor = val > 0 ? '#2ecc71' : val < 0 ? '#e74c3c' : '#888';
+        
+        sparklineHtml += `<rect x="${x}" y="${y}" width="${w/2}" height="${barHeight}" fill="${barColor}" opacity="0.7" />`;
+      });
+    }
+    
+    // Render badge
+    let badgeColor = divergence ? '#e74c3c' : '#2ecc71';
+    let badgeText = divergence ? 'Divergence' : 'Normal';
+    
+    const html = `
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px;">
+        <div style="text-align:center;">
+          <div style="font-size:24px; font-weight:bold; color:${scoreColor};">${corrScore.toFixed(3)}</div>
+          <div style="font-size:10px; color:#888;">Correlation</div>
+        </div>
+        <div style="text-align:center;">
+          <div style="font-size:24px; font-weight:bold; color:${signalColor};">${(signalStrength * 100).toFixed(0)}%</div>
+          <div style="font-size:10px; color:#888;">Signal Strength</div>
+        </div>
+      </div>
+      <div style="display:flex; justify-content:space-between; margin-bottom:12px; align-items:center;">
+        <span style="font-size:11px;">Type:</span>
+        <span style="padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold; background:${signalBgColor}; color:#fff;">${signalType.toUpperCase()}</span>
+      </div>
+      <div style="display:flex; justify-content:space-between; margin-bottom:12px; align-items:center;">
+        <span style="font-size:11px;">Confidence:</span>
+        <span style="font-size:11px; font-weight:bold; color:${signalColor};">${(confidence * 100).toFixed(0)}%</span>
+      </div>
+      <div style="margin-bottom:12px;">
+        <div style="font-size:10px; color:#888; margin-bottom:4px;">Status</div>
+        <div style="display:inline-block; padding:4px 8px; border-radius:4px; font-size:10px; background:${badgeColor}; color:#fff;">${badgeText}</div>
+      </div>
+      <div>
+        <div style="font-size:10px; color:#888; margin-bottom:4px;">Rolling Correlations (${rollingCorrs.length} windows)</div>
+        <svg width="100%" height="40" style="border:1px solid #333; background:#1a1a1a; border-radius:4px;">
+          ${sparklineHtml}
+        </svg>
+      </div>
+    `;
+    
+    document.getElementById('cross-correlation-signal-content').innerHTML = html;
+    
+    // Update badge
+    const badge = document.getElementById('cross-correlation-signal-badge');
+    badge.textContent = signalType.toUpperCase();
+    badge.style.background = signalBgColor;
+    badge.style.color = '#fff';
+    badge.style.fontSize = '10px';
+    badge.style.padding = '2px 6px';
+    badge.style.display = 'inline-block';
+    badge.style.borderRadius = '3px';
+    
+  } catch (err) {
+    console.error('Error rendering cross-correlation signal:', err);
+    document.getElementById('cross-correlation-signal-content').innerHTML = 
+      '<div style="color:var(--error);">Error loading signal</div>';
+  }
+}
+
+
 // ── Bootstrap on Load ──────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', init);
 
