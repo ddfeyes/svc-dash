@@ -72,7 +72,8 @@ from metrics import (
     compute_layer2_metrics,
     compute_derivatives_heatmap,
     compute_network_health_score,
-    compute_staking_yield_tracker,
+    compute_protocol_revenue_card,
+    compute_leverage_ratio_heatmap,
 )
 
 router = APIRouter(prefix="/api")
@@ -5291,6 +5292,17 @@ async def macro_liquidity_endpoint():
 async def token_velocity_nvt_endpoint():
     """Token velocity + NVT signal: on-chain BTC valuation using tx volume / market cap."""
     data = await compute_token_velocity_nvt()
+@router.get("/protocol-revenue-card")
+async def protocol_revenue_endpoint():
+    """Protocol revenue: top 10 DeFi protocols by revenue, P/E ratio, growth momentum."""
+    data = await compute_protocol_revenue_card()
+    return JSONResponse(data)
+
+
+@router.get("/leverage-ratio-heatmap")
+async def leverage_ratio_heatmap_endpoint():
+    """Leverage ratio heatmap: OI/mcap across BTC/ETH/SOL/BNB perps with risk signals."""
+    data = await compute_leverage_ratio_heatmap()
     return JSONResponse(data)
 
 
