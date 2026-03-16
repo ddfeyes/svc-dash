@@ -2835,6 +2835,8 @@ async function refresh() {
     await Promise.all([safe(renderMacroLiquidity)]);
     // Batch 24: token velocity + NVT
     await Promise.all([safe(renderTokenVelocityNvt)]);
+    // Batch 16: derivatives heatmap
+    await Promise.all([safe(renderDerivativesHeatmap)]);
   } finally {
     _refreshRunning = false;
   }
@@ -3156,6 +3158,121 @@ async function renderTokenVelocityNvt() {
     ${data.description ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${data.description}</div>` : ''}`;
 }
 
+// ── Derivatives Heatmap ───────────────────────────────────────────────────────
+async function renderDerivativesHeatmap() {
+  const el    = document.getElementById('derivatives-heatmap-content');
+  const badge = document.getElementById('derivatives-heatmap-badge');
+  if (!el) return;
+  const data = await apiFetch('/derivatives-heatmap?asset=BTC');
+  if (!data) { setErr('derivatives-heatmap-content'); return; }
+
+  const mp      = data.max_pain   || {};
+  const gex     = data.gex        || {};
+  const heatmap = data.oi_heatmap || {};
+  const summary = data.summary    || {};
+  const spot    = data.spot_price ?? 0;
+
+  const mpStrike = mp.strike    ?? 0;
+  const mpDist   = mp.distance_pct ?? 0;
+  const pcr      = summary.put_call_ratio ?? 0;
+  const conc     = summary.oi_concentration ?? 0;
+  const totalGex = gex.total ?? 0;
+  const flipPt   = gex.flip_point ?? 0;
+
+  // Badge: overbought / oversold based on PCR
+  const pcrLabel = pcr > 1.2 ? 'PUT HEAVY' : pcr < 0.7 ? 'CALL HEAVY' : 'BALANCED';
+  const pcrCls   = pcr > 1.2 ? 'badge-red' : pcr < 0.7 ? 'badge-green' : 'badge-blue';
+  if (badge) {
+    badge.textContent = pcrLabel;
+    badge.className   = `card-badge ${pcrCls}`;
+    badge.style.display = '';
+  }
+
+  const fmtK = v => v >= 1000 ? '$' + (v / 1000).toFixed(0) + 'k' : '$' + v.toFixed(0);
+  const fmtB = v => {
+    const a = Math.abs(v);
+    const s = v < 0 ? '-' : '+';
+    if (a >= 1e9) return s + '$' + (a / 1e9).toFixed(1) + 'B';
+    if (a >= 1e6) return s + '$' + (a / 1e6).toFixed(1) + 'M';
+    return s + '$' + a.toFixed(0);
+  };
+
+  const mpCol    = mpDist < 0 ? 'var(--red)' : 'var(--green)';
+  const gexCol   = totalGex >= 0 ? 'var(--green)' : 'var(--red)';
+  const gexLabel = totalGex >= 0 ? 'LONG γ' : 'SHORT γ';
+
+  // OI heatmap table (strikes × expiries)
+  const strikes  = heatmap.strikes  || [];
+  const expiries = heatmap.expiries || [];
+  const calls    = heatmap.calls    || {};
+  const puts     = heatmap.puts     || {};
+
+  const maxOI = Math.max(1, ...strikes.flatMap(s => {
+    const sk = String(s);
+    return expiries.flatMap(e => [
+      (calls[sk] || {})[e] || 0,
+      (puts[sk]  || {})[e] || 0,
+    ]);
+  }));
+
+  const expHeaders = expiries.map(e => {
+    const parts = e.split('-');
+    return parts.length === 3 ? parts[1] + '/' + parts[2] : e;
+  });
+
+  const tableRows = strikes.map(s => {
+    const sk = String(s);
+    const isMp = Math.abs(s - mpStrike) < 1;
+    const cells = expiries.map(e => {
+      const c = (calls[sk] || {})[e] || 0;
+      const p = (puts[sk]  || {})[e] || 0;
+      const total = c + p;
+      const pct   = Math.min(total / maxOI * 100, 100).toFixed(0);
+      const col   = c > p ? 'var(--green)' : p > c ? 'var(--red)' : 'var(--muted)';
+      return `<td style="font-size:9px;text-align:right;padding:1px 4px">
+        <div style="background:${col};opacity:0.15;width:${pct}%;height:6px;border-radius:2px;margin-left:auto"></div>
+        <span style="color:${col}">${total > 0 ? total.toFixed(0) : '—'}</span>
+      </td>`;
+    }).join('');
+    const rowStyle = isMp
+      ? 'background:rgba(255,200,0,0.08);border-left:2px solid var(--yellow)'
+      : '';
+    return `<tr style="${rowStyle}">
+      <td style="font-size:9px;color:${isMp?'var(--yellow)':'var(--muted)'};padding:1px 4px;white-space:nowrap">
+        ${fmtK(s)}${isMp?' ★':''}
+      </td>
+      ${cells}
+    </tr>`;
+  }).join('');
+
+  const expCols = expHeaders.map(h =>
+    `<th style="font-size:8px;color:var(--muted);text-align:right;padding:1px 4px">${h}</th>`
+  ).join('');
+
+  el.innerHTML = `
+    <div style="font-size:10px;color:var(--muted);margin-bottom:4px;display:flex;gap:10px;flex-wrap:wrap">
+      <span>spot: <b style="color:var(--fg)">${fmtK(spot)}</b></span>
+      <span>max pain: <b style="color:${mpCol}">${fmtK(mpStrike)}</b>
+        <span style="font-size:9px">(${mpDist >= 0 ? '+' : ''}${mpDist.toFixed(1)}%)</span></span>
+      <span>PCR: <b style="color:${pcr>1?'var(--red)':'var(--green)'}">${pcr.toFixed(2)}</b></span>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-bottom:4px;display:flex;gap:10px;flex-wrap:wrap">
+      <span>GEX: <b style="color:${gexCol}">${gexLabel} ${fmtB(totalGex)}</b></span>
+      <span>flip: <b style="color:var(--muted)">${fmtK(flipPt)}</b></span>
+      <span>conc: <b style="color:var(--fg)">${(conc * 100).toFixed(0)}%</b></span>
+    </div>
+    <div style="overflow-x:auto;margin-top:4px">
+      <table style="border-collapse:collapse;width:100%;font-size:9px">
+        <thead><tr>
+          <th style="font-size:8px;color:var(--muted);text-align:left;padding:1px 4px">strike</th>
+          ${expCols}
+        </tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+    </div>
+    ${data.description ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${data.description}</div>` : ''}`;
+}
+
 
 // ── Holder Distribution ───────────────────────────────────────────────────
 async function renderHolderDistribution() {
@@ -3190,6 +3307,95 @@ async function renderHolderDistribution() {
     </div>
     <div style="margin-top:4px;color:#666;font-size:10px">${data.description ?? ''}</div>
   `;
+}
+
+// ── Layer 2 Metrics ───────────────────────────────────────────────────────────
+async function renderLayer2Metrics() {
+  const data  = await apiFetch('/layer2-metrics');
+  const el    = document.getElementById('layer2-metrics-content');
+  const badge = document.getElementById('layer2-metrics-badge');
+  if (!el) return;
+
+  const mom   = data.momentum?.label ?? 'neutral';
+  const score = (data.momentum?.score ?? 0).toFixed(1);
+  const momClass = { strong_growth: 'badge-green', growing: 'badge-green',
+                     neutral: 'badge-gray', declining: 'badge-red' };
+  if (badge) {
+    badge.textContent   = mom.replace('_', ' ').toUpperCase();
+    badge.className     = 'card-badge ' + (momClass[mom] ?? 'badge-gray');
+    badge.style.display = '';
+  }
+
+  const totalTvl = data.aggregate?.total_tvl_usd ?? 0;
+  const ch24     = (data.aggregate?.total_tvl_change_24h_pct ?? 0);
+  const ch24Str  = (ch24 >= 0 ? '+' : '') + ch24.toFixed(2) + '%';
+  const ch24Col  = ch24 >= 0 ? 'var(--green)' : 'var(--red)';
+  const gasSav   = (data.aggregate?.avg_gas_savings_pct ?? 0).toFixed(1);
+  const topChain = data.aggregate?.top_chain ?? '—';
+  const leader   = data.momentum?.leader ?? '—';
+
+  const fmtB = v => v >= 1e9 ? '$' + (v / 1e9).toFixed(1) + 'B'
+             : v >= 1e6 ? '$' + (v / 1e6).toFixed(0) + 'M' : '$' + v.toFixed(0);
+
+  // Per-chain TVL bars
+  const CHAIN_ORDER = ['Arbitrum', 'Optimism', 'Base', 'Polygon', 'zkSync'];
+  const CHAIN_COLS  = { Arbitrum: '#1a91ff', Optimism: '#ff0420', Base: '#0052ff',
+                        Polygon: '#8247e5', zkSync: '#4e529a' };
+  const chains = data.chains ?? {};
+  const maxTvl  = Math.max(...CHAIN_ORDER.map(c => (chains[c]?.tvl_usd ?? 0)));
+
+  const chainRows = CHAIN_ORDER.map(name => {
+    const c   = chains[name] ?? {};
+    const tvl = c.tvl_usd ?? 0;
+    const w   = maxTvl > 0 ? (tvl / maxTvl * 100).toFixed(0) : 0;
+    const ch  = c.tvl_change_24h_pct ?? 0;
+    const chStr = (ch >= 0 ? '+' : '') + ch.toFixed(1) + '%';
+    const chCol = ch >= 0 ? 'var(--green)' : 'var(--red)';
+    const dir  = c.bridge_direction ?? 'neutral';
+    const dirIcon = dir === 'inflow' ? '↓' : dir === 'outflow' ? '↑' : '→';
+    const col  = CHAIN_COLS[name] ?? 'var(--muted)';
+    return `<div style="display:flex;align-items:center;gap:4px;margin-bottom:2px;font-size:9px">
+      <span style="width:52px;color:var(--muted);overflow:hidden;text-overflow:ellipsis">${name}</span>
+      <div style="flex:1;height:5px;background:var(--border);border-radius:2px">
+        <div style="width:${w}%;height:100%;background:${col};border-radius:2px"></div>
+      </div>
+      <span style="color:var(--fg);min-width:32px;text-align:right">${fmtB(tvl)}</span>
+      <span style="color:${chCol};min-width:36px;text-align:right">${chStr}</span>
+      <span style="color:${dir==='inflow'?'var(--green)':dir==='outflow'?'var(--red)':'var(--muted)'}">${dirIcon}</span>
+    </div>`;
+  }).join('');
+
+  // 7d sparkline
+  const sp = data.history_7d ?? [];
+  let sparkSvg = '';
+  if (sp.length >= 2) {
+    const vals = sp.map(p => p.total_tvl_usd ?? 0);
+    const mn = Math.min(...vals) * 0.998;
+    const mx = Math.max(...vals) * 1.002;
+    const W = 200, H = 22;
+    const px = i => (i / (sp.length - 1)) * W;
+    const py = v => H - ((v - mn) / (mx - mn || 1)) * H;
+    const path = vals.map((v,i) => `${i===0?'M':'L'}${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(' ');
+    sparkSvg = `<svg width="${W}" height="${H}" style="display:block;margin-bottom:4px">
+      <path d="${path}" stroke="var(--green)" stroke-width="1.2" fill="none"/>
+    </svg>`;
+  }
+
+  el.innerHTML = `
+    <div style="font-size:10px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:4px">
+      <span>TVL: <b style="color:var(--fg)">${fmtB(totalTvl)}</b> <span style="color:${ch24Col}">${ch24Str} 24h</span></span>
+      <span>gas saved: <b style="color:var(--green)">${gasSav}%</b></span>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-bottom:4px">
+      ${chainRows}
+    </div>
+    <div style="font-size:10px;color:var(--muted);display:flex;gap:12px;margin-bottom:4px">
+      <span>top: <b style="color:var(--fg)">${topChain}</b></span>
+      <span>momentum leader: <b style="color:var(--green)">${leader}</b></span>
+      <span>score: <b style="color:var(--fg)">${score}</b></span>
+    </div>
+    ${sparkSvg}
+    ${data.description ? `<div style="font-size:10px;color:var(--muted)">${data.description}</div>` : ''}`;
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
