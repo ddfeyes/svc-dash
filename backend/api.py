@@ -76,6 +76,7 @@ from metrics import (
     compute_volatility_regime_detector,
     compute_smart_money_index,
     compute_cross_correlation_signal,
+    compute_funding_term_structure,
 )
 
 router = APIRouter(prefix="/api")
@@ -600,6 +601,69 @@ async def cascade_predictor_endpoint(
         sr_proximity_pct=sr_proximity,
     )
     return {"status": "ok", "symbol": target, **data}
+
+
+@router.get("/funding-term-structure")
+async def funding_term_structure(symbol: Optional[str] = None):
+    """
+    Funding rate term structure analysis (#105).
+    
+    Returns 1d, 7d, 30d average funding rates, shape (normal/inverted/flat),
+    exhaustion score, and trend.
+    
+    Performance:
+    - Single symbol: <200ms
+    - All symbols: <500ms
+    
+    Query params:
+    - symbol: optional, default all symbols (returns dict of results)
+    
+    Response:
+    {
+        "status": "ok",
+        "data": {
+            "symbol": str,
+            "rates": {"d1": float, "d7": float, "d30": float},
+            "shape": "normal" | "inverted" | "flat",
+            "exhaustion_score": 0.0-1.0,
+            "trend": "up" | "down" | "neutral",
+            "timestamp": float
+        }
+        // or if symbol=None:
+        "all_symbols": {symbol -> data dict}
+    }
+    """
+    import time
+    start = time.time()
+    
+    if symbol:
+        # Single symbol
+        syms = get_symbols()
+        target = symbol if symbol in syms else syms[0] if syms else symbol
+        data = await compute_funding_term_structure(symbol=target)
+        return {
+            "status": "ok",
+            "symbol": target,
+            "data": data,
+            "response_time_ms": round((time.time() - start) * 1000, 2),
+        }
+    else:
+        # All symbols
+        syms = get_symbols()
+        if not syms:
+            return {"status": "ok", "all_symbols": {}}
+        
+        # Compute in parallel with timeout
+        tasks = [compute_funding_term_structure(symbol=sym) for sym in syms]
+        results = await asyncio.gather(*tasks)
+        
+        all_data = {sym: data for sym, data in zip(syms, results)}
+        return {
+            "status": "ok",
+            "all_symbols": all_data,
+            "symbol_count": len(syms),
+            "response_time_ms": round((time.time() - start) * 1000, 2),
+        }
 
 
 @router.get("/oi-mcap")

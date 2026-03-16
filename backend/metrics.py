@@ -9956,3 +9956,154 @@ def compute_cross_correlation_signal(
         "confidence_level": confidence_level,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+
+
+# ── Funding Rate Term Structure Analysis (#105) ────────────────────────────────
+
+
+async def compute_funding_term_structure(symbol: str = None) -> Dict:
+    """
+    Compute funding rate term structure: 1d, 7d, 30d average rates.
+    
+    Detects term structure shape:
+    - normal: d1 < d7 < d30 (typical contango, carry trade available)
+    - inverted: d1 > d7 > d30 (backwardation, shorts paid heavily)
+    - flat: all rates approximately equal (neutral structure)
+    
+    Exhaustion score (0-1):
+    - Measures how extreme current funding is relative to historical norms
+    - High score = longs (if positive) or shorts (if negative) overextended
+    - Based on absolute magnitude and accumulated extremeness
+    
+    Returns:
+        {
+            rates: {d1, d7, d30},        # Average funding rates for each period
+            shape: str,                   # "normal" | "inverted" | "flat"
+            exhaustion_score: float,      # 0.0 to 1.0
+            trend: str,                   # "up" | "down" | "neutral"
+            symbol: str,
+            timestamp: float
+        }
+    """
+    now = time.time()
+    
+    # Fetch funding history: 1d, 7d, 30d windows
+    funding_rows = await get_funding_history(
+        limit=1000,  # Enough for 30+ days at 8-hour intervals
+        since=now - 86400 * 30,
+        symbol=symbol
+    )
+    
+    if not funding_rows:
+        return {
+            "rates": {"d1": 0.0, "d7": 0.0, "d30": 0.0},
+            "shape": "flat",
+            "exhaustion_score": 0.0,
+            "trend": "neutral",
+            "symbol": symbol,
+            "timestamp": now,
+        }
+    
+    # Organize by time window and aggregate by exchange
+    rates_1d = []   # [ts - 86400, now)
+    rates_7d = []   # [ts - 86400*7, now)
+    rates_30d = []  # [ts - 86400*30, now)
+    
+    for row in funding_rows:
+        ts = row["ts"]
+        rate = float(row["rate"])
+        
+        if ts >= now - 86400:
+            rates_1d.append(rate)
+        if ts >= now - 86400 * 7:
+            rates_7d.append(rate)
+        if ts >= now - 86400 * 30:
+            rates_30d.append(rate)
+    
+    # Compute period averages
+    def safe_avg(rates_list):
+        if not rates_list:
+            return 0.0
+        return sum(rates_list) / len(rates_list)
+    
+    avg_1d = safe_avg(rates_1d)
+    avg_7d = safe_avg(rates_7d)
+    avg_30d = safe_avg(rates_30d)
+    
+    # Detect term structure shape
+    # Use threshold to account for rounding/noise
+    threshold = 0.00001
+    
+    if abs(avg_1d - avg_7d) < threshold and abs(avg_7d - avg_30d) < threshold:
+        shape = "flat"
+    elif avg_1d < avg_7d < avg_30d:
+        shape = "normal"
+    elif avg_1d > avg_7d > avg_30d:
+        shape = "inverted"
+    elif avg_1d < avg_30d and avg_7d < avg_30d:
+        # Both shorter terms lower than long-term
+        shape = "normal"
+    elif avg_1d > avg_30d and avg_7d > avg_30d:
+        # Both shorter terms higher than long-term
+        shape = "inverted"
+    else:
+        # Mixed pattern (some up, some down) -> flat
+        shape = "flat"
+    
+    # Compute exhaustion score
+    # High exhaustion when funding rates are extreme (very positive or very negative)
+    # Thresholds: 0.01% = 1 basis point (normal), 0.1% = extreme (100 bp)
+    
+    all_rates = rates_1d + rates_7d + rates_30d
+    if not all_rates:
+        exhaustion_score = 0.0
+    else:
+        abs_rates = [abs(r) for r in all_rates]
+        max_abs = max(abs_rates)
+        
+        # Score based on max absolute value
+        # 0.0001 (0.01%) -> score 0.2
+        # 0.001  (0.1%)  -> score 0.8
+        # 0.01   (1%)    -> score 1.0 (capped)
+        if max_abs < 0.00001:
+            exhaustion_score = 0.0
+        elif max_abs < 0.0001:
+            exhaustion_score = (max_abs / 0.0001) * 0.2
+        elif max_abs < 0.001:
+            exhaustion_score = 0.2 + ((max_abs - 0.0001) / 0.0009) * 0.6
+        else:
+            exhaustion_score = min(1.0, 0.8 + ((max_abs - 0.001) / 0.009) * 0.2)
+        
+        exhaustion_score = round(min(1.0, exhaustion_score), 4)
+    
+    # Detect trend: are rates moving up, down, or stable?
+    # Use first vs last recent rates
+    trend = "neutral"
+    if len(all_rates) >= 2:
+        recent_rates = all_rates[-10:] if len(all_rates) >= 10 else all_rates
+        older_rates = all_rates[:len(all_rates)//2]
+        
+        if recent_rates and older_rates:
+            recent_avg = sum(recent_rates) / len(recent_rates)
+            older_avg = sum(older_rates) / len(older_rates)
+            
+            trend_delta = recent_avg - older_avg
+            if trend_delta > 0.00001:
+                trend = "up"
+            elif trend_delta < -0.00001:
+                trend = "down"
+            else:
+                trend = "neutral"
+    
+    return {
+        "rates": {
+            "d1": round(avg_1d, 8),
+            "d7": round(avg_7d, 8),
+            "d30": round(avg_30d, 8),
+        },
+        "shape": shape,
+        "exhaustion_score": exhaustion_score,
+        "trend": trend,
+        "symbol": symbol,
+        "timestamp": now,
+    }
