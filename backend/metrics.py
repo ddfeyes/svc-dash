@@ -8537,3 +8537,142 @@ async def compute_cross_chain_bridge_monitor() -> dict:
         "zscore":           float(zscore),
         "description":      desc,
     }
+
+
+# ─── On-Chain Transaction Velocity ──────────────────────────────────────────
+
+# Base TPS per chain (approximate real-world values)
+_OCTV_BASE_TPS: dict = {"ETH": 15.0, "SOL": 3_000.0, "BNB": 100.0}
+# Max theoretical TPS per chain
+_OCTV_MAX_TPS: dict  = {"ETH": 50.0,  "SOL": 65_000.0, "BNB": 300.0}
+# Average fee per transaction in USD
+_OCTV_FEE_PER_TX: dict  = {"ETH": 5.0, "SOL": 0.00025, "BNB": 0.08}
+# Block time in seconds
+_OCTV_BLOCK_TIME: dict  = {"ETH": 12.0, "SOL": 0.4, "BNB": 3.0}
+# Average transaction value in USD
+_OCTV_AVG_TX_USD: dict  = {"ETH": 850.0, "SOL": 120.0, "BNB": 300.0}
+# Deterministic seeds per tracked symbol
+_OCTV_SYMBOL_SEEDS: dict = {
+    "BANANAS31USDT": 1001,
+    "COSUSDT":        1002,
+    "DEXEUSDT":       1003,
+    "LYNUSDT":        1004,
+}
+
+
+def _octv_seed_for_symbol(symbol: str) -> int:
+    """Return a deterministic integer seed for the given symbol."""
+    return _OCTV_SYMBOL_SEEDS.get(symbol, sum(ord(c) for c in symbol))
+
+
+def _octv_tps(chain: str, rng) -> float:
+    """TPS for *chain* with ±20 % seeded variation."""
+    base = _OCTV_BASE_TPS.get(chain, 10.0)
+    variation = rng.uniform(-0.20, 0.20)
+    return round(base * (1.0 + variation), 2)
+
+
+def _octv_fee_revenue_per_block(chain: str, tps: float) -> float:
+    """Fee revenue per block in USD: fee_per_tx × txs_per_block."""
+    fee       = _OCTV_FEE_PER_TX.get(chain, 0.1)
+    block_t   = _OCTV_BLOCK_TIME.get(chain, 12.0)
+    txs_block = tps * block_t
+    return round(txs_block * fee, 4)
+
+
+def _octv_avg_tx_value(chain: str, rng) -> float:
+    """Average transaction value in USD with ±15 % seeded variation."""
+    base      = _OCTV_AVG_TX_USD.get(chain, 100.0)
+    variation = rng.uniform(-0.15, 0.15)
+    return round(base * (1.0 + variation), 2)
+
+
+def _octv_congestion_index(tps: float, chain: str) -> float:
+    """Congestion index 0–100 based on TPS vs theoretical max capacity."""
+    max_tps = _OCTV_MAX_TPS.get(chain, 100.0)
+    if max_tps <= 0:
+        return 0.0
+    raw = max(tps, 0.0) / max_tps * 100.0
+    return round(min(raw, 100.0), 2)
+
+
+def _octv_throughput_percentile(tps_history: list, current_tps: float) -> float:
+    """Percentile rank of *current_tps* within *tps_history* (0–100)."""
+    if not tps_history:
+        return 50.0
+    below = sum(1 for v in tps_history if v <= current_tps)
+    return round(below / len(tps_history) * 100.0, 2)
+
+
+def _octv_trend(tps_history: list) -> str:
+    """Classify TPS trend as 'rising', 'falling', or 'stable'."""
+    if len(tps_history) < 2:
+        return "stable"
+    mid        = len(tps_history) // 2
+    first_half = tps_history[:mid]
+    second_half = tps_history[mid:]
+    avg_first  = sum(first_half)  / len(first_half)
+    avg_second = sum(second_half) / len(second_half)
+    if avg_second > avg_first * 1.02:
+        return "rising"
+    if avg_second < avg_first * 0.98:
+        return "falling"
+    return "stable"
+
+
+async def compute_on_chain_tx_velocity(symbol: str = "BANANAS31USDT") -> dict:
+    """
+    On-chain transaction velocity tracker for ETH/SOL/BNB.
+
+    Returns seeded-simulation data (no external calls):
+      eth_tps, sol_tps, bnb_tps, fee_revenue_block (USD), avg_tx_value (USD),
+      congestion_index (0-100), throughput_percentile (0-100),
+      trend (rising/stable/falling), tps_history_24h (list of 24 dicts).
+    """
+    import random as _rand  # noqa: PLC0415
+
+    seed = _octv_seed_for_symbol(symbol)
+    rng  = _rand.Random(seed)
+
+    # Current TPS per chain
+    eth_tps = _octv_tps("ETH", rng)
+    sol_tps = _octv_tps("SOL", rng)
+    bnb_tps = _octv_tps("BNB", rng)
+
+    # Fee revenue per block (ETH-denominated as primary)
+    fee_revenue_block = _octv_fee_revenue_per_block("ETH", eth_tps)
+
+    # Average tx value (ETH as primary chain)
+    avg_tx_value = _octv_avg_tx_value("ETH", rng)
+
+    # Congestion index based on ETH
+    congestion_index = _octv_congestion_index(eth_tps, "ETH")
+
+    # Build 24h hourly history with a separate rng stream
+    hist_rng = _rand.Random(seed + 100)
+    tps_history_24h: list = []
+    eth_history: list     = []
+    for _ in range(24):
+        h_eth = _octv_tps("ETH", hist_rng)
+        h_sol = _octv_tps("SOL", hist_rng)
+        h_bnb = _octv_tps("BNB", hist_rng)
+        eth_history.append(h_eth)
+        tps_history_24h.append({"eth": h_eth, "sol": h_sol, "bnb": h_bnb})
+
+    # Throughput percentile for ETH
+    throughput_percentile = _octv_throughput_percentile(eth_history, eth_tps)
+
+    # Trend direction
+    trend = _octv_trend(eth_history)
+
+    return {
+        "eth_tps":               eth_tps,
+        "sol_tps":               sol_tps,
+        "bnb_tps":               bnb_tps,
+        "fee_revenue_block":     fee_revenue_block,
+        "avg_tx_value":          avg_tx_value,
+        "congestion_index":      congestion_index,
+        "throughput_percentile": throughput_percentile,
+        "trend":                 trend,
+        "tps_history_24h":       tps_history_24h,
+    }

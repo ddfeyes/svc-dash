@@ -2499,6 +2499,8 @@ async function refresh() {
     // Batch 24: macro liquidity indicator
     // Batch 24: token velocity + NVT
     await Promise.all([safe(renderTokenVelocityNvt)]);
+    // Batch 27: on-chain tx velocity
+    await Promise.all([safe(renderOnChainTxVelocity)]);
     // Batch 16: derivatives heatmap
         // Batch 25: holder distribution card
         // Batch 26: cross-chain bridge monitor
@@ -2743,6 +2745,64 @@ async function renderTokenVelocityNvt() {
     </div>
     <div style="margin-top:4px">${sparkbars}</div>
     ${data.description ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${data.description}</div>` : ''}`;
+}
+
+// ── On-Chain TX Velocity ──────────────────────────────────────────────────────
+async function renderOnChainTxVelocity() {
+  const el    = document.getElementById('on-chain-tx-velocity-content');
+  const badge = document.getElementById('on-chain-tx-velocity-badge');
+  if (!el) return;
+  const sym  = window._currentSymbol || 'BANANAS31USDT';
+  const data = await apiFetch(`/on-chain-tx-velocity?symbol=${sym}`);
+  if (!data) { setErr('on-chain-tx-velocity-content'); return; }
+
+  const trend  = data.trend || 'stable';
+  const ci     = data.congestion_index ?? 0;
+  const tp     = data.throughput_percentile ?? 0;
+
+  const trendCol = trend === 'rising'  ? 'var(--green)'
+                 : trend === 'falling' ? 'var(--red)'
+                 : 'var(--muted)';
+  const ciCol    = ci > 70 ? 'var(--red)' : ci > 40 ? 'var(--yellow, #f59e0b)' : 'var(--green)';
+
+  if (badge) {
+    badge.textContent   = trend.toUpperCase();
+    badge.className     = `card-badge ${trend === 'rising' ? 'badge-green' : trend === 'falling' ? 'badge-red' : 'badge-blue'}`;
+    badge.style.display = '';
+  }
+
+  const hist = data.tps_history_24h || [];
+  const sparkbars = hist.map(h => {
+    const v   = h.eth ?? 0;
+    const pct = Math.min(v / 25 * 100, 100);
+    const col = v > 18 ? 'var(--red)' : v > 12 ? 'var(--yellow, #f59e0b)' : 'var(--green)';
+    return `<span style="display:inline-block;width:4px;height:${Math.max(pct * 0.12, 2).toFixed(0)}px;background:${col};margin-right:1px;vertical-align:bottom;opacity:0.8"></span>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="font-size:10px;color:var(--muted);margin-bottom:6px">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
+        <span style="font-size:9px;color:var(--muted);width:70px">Congestion</span>
+        <div style="flex:1;background:var(--border);height:8px;border-radius:3px">
+          <div style="width:${ci.toFixed(1)}%;background:${ciCol};height:100%;border-radius:3px"></div>
+        </div>
+        <b style="color:${ciCol};font-size:10px;min-width:36px;text-align:right">${ci.toFixed(1)}</b>
+      </div>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-bottom:4px;display:flex;gap:10px;flex-wrap:wrap">
+      <span>ETH: <b style="color:var(--fg)">${(data.eth_tps??0).toFixed(1)} TPS</b></span>
+      <span>SOL: <b style="color:var(--fg)">${(data.sol_tps??0).toFixed(0)} TPS</b></span>
+      <span>BNB: <b style="color:var(--fg)">${(data.bnb_tps??0).toFixed(1)} TPS</b></span>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-bottom:4px;display:flex;gap:10px;flex-wrap:wrap">
+      <span>Fee/block: <b style="color:var(--fg)">$${(data.fee_revenue_block??0).toFixed(2)}</b></span>
+      <span>Avg tx: <b style="color:var(--fg)">$${(data.avg_tx_value??0).toFixed(0)}</b></span>
+      <span>Pctile: <b style="color:var(--fg)">${tp.toFixed(1)}%</b></span>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-bottom:4px">
+      Trend: <b style="color:${trendCol}">${trend}</b>
+    </div>
+    <div style="margin-top:4px;line-height:1">${sparkbars}</div>`;
 }
 
 // ── Derivatives Heatmap ───────────────────────────────────────────────────────

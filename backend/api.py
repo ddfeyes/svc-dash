@@ -72,6 +72,7 @@ from metrics import (
     compute_layer2_metrics,
     compute_nft_market_pulse,
     compute_cross_chain_bridge_monitor,
+    compute_on_chain_tx_velocity,
 )
 
 router = APIRouter(prefix="/api")
@@ -5326,4 +5327,11 @@ async def holder_distribution_endpoint():
 async def cross_chain_bridge_monitor_endpoint():
     """Cross-chain bridge monitor: flows across ETH/BSC/ARB/OP/BASE, top bridges, anomaly detection."""
     data = await compute_cross_chain_bridge_monitor()
+    return JSONResponse(data)
+
+
+@router.get("/on-chain-tx-velocity")
+async def on_chain_tx_velocity_endpoint(symbol: str = Query(default="BANANAS31USDT")):
+    """On-chain transaction velocity: TPS trend for ETH/SOL/BNB, fee revenue, congestion index."""
+    data = await compute_on_chain_tx_velocity(symbol)
     return JSONResponse(data)
