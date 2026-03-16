@@ -2428,51 +2428,39 @@ async function refresh() {
   try {
     // Batch 1: core price charts
     await Promise.all([safe(renderPriceChart), safe(renderOiChart), safe(renderCvdChart)]);
-    await delay(200);
 
     // Batch 2: header stats
     await Promise.all([safe(renderFunding), safe(renderFundingMomentum), safe(renderSpread), safe(renderWsStats)]);
-    await delay(200);
 
     // Batch 3: trade tape + imbalance
     await Promise.all([safe(renderTradeTape), safe(renderVolumeImbalance), safe(renderPhase)]);
-    await delay(200);
 
     // Batch 4: OI analysis
     await Promise.all([safe(renderOiDivergence), safe(renderMicrostructure), safe(renderWhaleClustering)]);
-    await delay(200);
 
     // Batch 5: price deviation metrics
     await Promise.all([safe(renderVwapDeviation), safe(renderOiWeightedPrice), safe(renderRealizedVolBands)]);
-    await delay(200);
 
     // Batch 6: regime & momentum
     await Promise.all([safe(renderMarketRegime), safe(renderMomentum), safe(renderMomentumRank), safe(renderRegimeTimeline)]);
-    await delay(200);
 
     // Batch 7: correlations
     await Promise.all([safe(renderCorrelations), safe(renderCorrHeatmap), safe(renderVolumeProfile)]);
-    await delay(200);
 
     // Batch 8: aggressor metrics
     await Promise.all([safe(renderAggressorRatio), safe(renderVpin), safe(renderAdaptiveVolumeProfile)]);
-    await delay(200);
 
     // Batch 9: tape analysis
     await Promise.all([safe(renderTapeSpeed), safe(renderAggressorStreak), safe(renderObWalls)]);
-    await delay(200);
 
     // Batch 10: movers, heatmap, net taker
     await Promise.all([safe(renderTopMovers), safe(renderLiqHeatmap), safe(renderNetTakerDelta)]);
-    await delay(200);
 
     // Batch 11: new signal cards
     await Promise.all([safe(renderCvdMomentum), safe(renderDeltaDivergence), safe(renderFundingExtreme)]);
-    await delay(200);
 
     // Batch 12: cascade & large trades
     await Promise.all([safe(renderLiqCascade), safe(renderLargeTrades)]);
-    await delay(200);
 
     // Batch 13: alerts, oi-delta, squeeze, volume spike, trade count rate
     await Promise.all([
@@ -2482,7 +2470,6 @@ async function refresh() {
       safe(renderVolumeSpikeCard),
       safe(renderTradeCountRate),
     ]);
-    await delay(200);
 
     // Batch 14: wave 11 cards
     await Promise.all([
@@ -2493,15 +2480,13 @@ async function refresh() {
       safe(renderPriceVelocity),
     ]);
 
-    await delay(200);
     // Batch 15: cross-asset correlation
     await Promise.all([safe(renderCrossAssetCorr)]);
     // Batch 16: social sentiment
     await Promise.all([safe(renderSocialSentiment)]);
 
     // Batch 17: rv-iv card
-        await delay(200);
-
+    
     // Batch 18: session volume profile
         // Batch 19: OFT
         // Batch 20: momentum divergence
