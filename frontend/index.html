@@ -126,9 +126,12 @@
   <section class="card" id="card-alerts">
     <div class="card-header">
       <span class="card-title">Alerts</span>
-      <span class="card-meta">live feed</span>
+      <span id="alerts-badge" class="card-badge" style="display:none"></span>
+      <span class="card-meta">active alerts · all symbols</span>
     </div>
-    <div id="alerts-feed"></div>
+    <div id="alerts-content">
+      <div class="text-muted" style="font-size:11px;">Loading…</div>
+    </div>
   </section>
 
   <!-- Phase / Market Regime -->
@@ -452,6 +455,114 @@
       <span class="card-meta">buy − sell vol · 1h · all symbols</span>
     </div>
     <div id="net-taker-delta-content">
+      <div class="text-muted" style="font-size:11px;">Loading…</div>
+    </div>
+  </section>
+
+  <!-- OI Delta -->
+  <section class="card" id="card-oi-delta">
+    <div class="card-header">
+      <span class="card-title">OI Delta</span>
+      <span id="oi-delta-badge" class="card-badge" style="display:none"></span>
+      <span class="card-meta">OI change per candle · 1h</span>
+    </div>
+    <div id="oi-delta-content">
+      <div class="text-muted" style="font-size:11px;">Loading…</div>
+    </div>
+  </section>
+
+  <!-- Squeeze Setup -->
+  <section class="card" id="card-squeeze-setup">
+    <div class="card-header">
+      <span class="card-title">Squeeze Setup</span>
+      <span id="squeeze-setup-badge" class="card-badge" style="display:none"></span>
+      <span class="card-meta">OI surge + funding normalize</span>
+    </div>
+    <div id="squeeze-setup-content">
+      <div class="text-muted" style="font-size:11px;">Loading…</div>
+    </div>
+  </section>
+
+  <!-- Volume Spike -->
+  <section class="card" id="card-volume-spike">
+    <div class="card-header">
+      <span class="card-title">Volume Spike</span>
+      <span id="volume-spike-badge" class="card-badge" style="display:none"></span>
+      <span class="card-meta">recent vs baseline · 30s window</span>
+    </div>
+    <div id="volume-spike-content">
+      <div class="text-muted" style="font-size:11px;">Loading…</div>
+    </div>
+  </section>
+
+  <!-- Trade Count Rate -->
+  <section class="card" id="card-trade-count-rate">
+    <div class="card-header">
+      <span class="card-title">Trade Count Rate</span>
+      <span id="trade-count-rate-badge" class="card-badge" style="display:none"></span>
+      <span class="card-meta">trades/min · 30 min</span>
+    </div>
+    <div id="trade-count-rate-content">
+      <div class="text-muted" style="font-size:11px;">Loading…</div>
+    </div>
+  </section>
+
+  <!-- CVD Divergence -->
+  <section class="card" id="card-cvd-divergence">
+    <div class="card-header">
+      <span class="card-title">CVD Divergence</span>
+      <span id="cvd-divergence-badge" class="card-badge" style="display:none"></span>
+      <span class="card-meta">price vs CVD · divergence signal</span>
+    </div>
+    <div id="cvd-divergence-content">
+      <div class="text-muted" style="font-size:11px;">Loading…</div>
+    </div>
+  </section>
+
+  <!-- Squeeze Setup W11 -->
+  <section class="card" id="card-squeeze-setup-w11">
+    <div class="card-header">
+      <span class="card-title">Squeeze Setup (W11)</span>
+      <span id="squeeze-setup-w11-badge" class="card-badge" style="display:none"></span>
+      <span class="card-meta">OI surge · price crash · funding normalize</span>
+    </div>
+    <div id="squeeze-setup-w11-content">
+      <div class="text-muted" style="font-size:11px;">Loading…</div>
+    </div>
+  </section>
+
+  <!-- Flow Imbalance -->
+  <section class="card" id="card-flow-imbalance">
+    <div class="card-header">
+      <span class="card-title">Flow Imbalance</span>
+      <span id="flow-imbalance-badge" class="card-badge" style="display:none"></span>
+      <span class="card-meta">buy/sell ratio · 1h · rolling</span>
+    </div>
+    <div id="flow-imbalance-content">
+      <div class="text-muted" style="font-size:11px;">Loading…</div>
+    </div>
+  </section>
+
+  <!-- Volatility Regime -->
+  <section class="card" id="card-volatility-regime">
+    <div class="card-header">
+      <span class="card-title">Volatility Regime</span>
+      <span id="volatility-regime-badge" class="card-badge" style="display:none"></span>
+      <span class="card-meta">ATR percentile · regime classifier</span>
+    </div>
+    <div id="volatility-regime-content">
+      <div class="text-muted" style="font-size:11px;">Loading…</div>
+    </div>
+  </section>
+
+  <!-- Price Velocity -->
+  <section class="card" id="card-price-velocity">
+    <div class="card-header">
+      <span class="card-title">Price Velocity</span>
+      <span id="price-velocity-badge" class="card-badge" style="display:none"></span>
+      <span class="card-meta">velocity · acceleration · score</span>
+    </div>
+    <div id="price-velocity-content">
       <div class="text-muted" style="font-size:11px;">Loading…</div>
     </div>
   </section>

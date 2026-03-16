@@ -2381,6 +2381,216 @@ async function renderNetTakerDelta() {
   </table>`;
 }
 
+// ── Alerts ────────────────────────────────────────────────────────────────────
+async function renderAlerts() {
+  const el    = document.getElementById('alerts-content');
+  const badge = document.getElementById('alerts-badge');
+  if (!el) return;
+  const data = await apiFetch('/alerts?limit=20');
+  if (!data) { setErr('alerts-content'); return; }
+
+  const count = data.count || 0;
+  if (badge) {
+    badge.textContent = count > 0 ? String(count) : '0';
+    badge.className = `card-badge ${count > 0 ? 'badge-red' : 'badge-blue'}`;
+    badge.style.display = '';
+  }
+
+  if (!count || !data.data || !data.data.length) {
+    el.innerHTML = '<div class="text-muted" style="font-size:11px;">No active alerts</div>';
+    return;
+  }
+
+  const rows = data.data.slice(0, 10).map(a => {
+    const sev = a.severity || 'info';
+    const sevCls = sev === 'critical' ? 'badge-red' : sev === 'warning' ? 'badge-yellow' : 'badge-blue';
+    return `<div style="margin-bottom:4px;font-size:11px;">
+      <span class="card-badge ${sevCls}" style="font-size:9px;margin-right:4px;">${sev}</span>
+      <span style="color:var(--muted);margin-right:4px;">${(a.symbol||'').replace('USDT','')}</span>
+      <span>${a.message || a.type || ''}</span>
+    </div>`;
+  }).join('');
+  el.innerHTML = rows;
+}
+
+// ── OI Delta ──────────────────────────────────────────────────────────────────
+async function renderOiDelta() {
+  const sym   = encodeURIComponent(activeSymbol);
+  const el    = document.getElementById('oi-delta-content');
+  const badge = document.getElementById('oi-delta-badge');
+  if (!el) return;
+  const data = await apiFetch(`/oi-delta?symbol=${sym}&interval=300&window=3600`);
+  if (!data) { setErr('oi-delta-content'); return; }
+
+  const candles = data.candles || [];
+  const totalChange = candles.reduce((sum, c) => sum + (c.oi_change || 0), 0);
+
+  const dir = totalChange > 0 ? 'up' : totalChange < 0 ? 'down' : 'flat';
+  const dirCls = totalChange > 0 ? 'badge-green' : totalChange < 0 ? 'badge-red' : 'badge-blue';
+  if (badge) {
+    badge.textContent = dir;
+    badge.className = `card-badge ${dirCls}`;
+    badge.style.display = '';
+  }
+
+  if (!candles.length) {
+    el.innerHTML = '<div class="text-muted" style="font-size:11px;">No OI data</div>';
+    return;
+  }
+
+  function fmtOi(v) {
+    const abs = Math.abs(v);
+    if (abs >= 1e6) return (v >= 0 ? '+' : '') + (v / 1e6).toFixed(2) + 'M';
+    if (abs >= 1e3) return (v >= 0 ? '+' : '') + (v / 1e3).toFixed(1) + 'k';
+    return (v >= 0 ? '+' : '') + v.toFixed(0);
+  }
+
+  const totalCol = totalChange >= 0 ? 'var(--green)' : 'var(--red)';
+  const recent = candles.slice(-5);
+  const sparkRows = recent.map(c => {
+    const col = c.oi_change >= 0 ? 'var(--green)' : 'var(--red)';
+    return `<span style="color:${col};font-size:10px;margin-right:6px;">${fmtOi(c.oi_change)}</span>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="font-size:18px;font-weight:700;color:${totalCol};margin-bottom:6px">${fmtOi(totalChange)}</div>
+    <div style="font-size:10px;color:var(--muted);margin-bottom:4px">last ${recent.length} candles:</div>
+    <div style="flex-wrap:wrap">${sparkRows}</div>`;
+}
+
+// ── Squeeze Setup ─────────────────────────────────────────────────────────────
+async function renderSqueezeSetup() {
+  const sym   = encodeURIComponent(activeSymbol);
+  const el    = document.getElementById('squeeze-setup-content');
+  const badge = document.getElementById('squeeze-setup-badge');
+  if (!el) return;
+  const data = await apiFetch(`/squeeze-setup?symbol=${sym}`);
+  if (!data) { setErr('squeeze-setup-content'); return; }
+
+  const isSqueeze = !!data.squeeze_signal;
+  const bLbl = isSqueeze ? 'SQUEEZE' : 'off';
+  const bCls = isSqueeze ? 'badge-red' : 'badge-blue';
+  if (badge) {
+    badge.textContent = bLbl;
+    badge.className = `card-badge ${bCls}`;
+    badge.style.display = '';
+  }
+
+  function fmtRate(v) {
+    if (v == null) return '—';
+    const sign = v >= 0 ? '+' : '';
+    return `${sign}${(v * 100).toFixed(4)}%`;
+  }
+
+  const oiSurge = data.oi_surge_with_crash;
+  const fundNorm = data.funding_normalizing;
+  const signals = [
+    `<span style="color:${oiSurge ? 'var(--green)' : 'var(--muted)'}">OI surge+crash: ${oiSurge ? 'yes' : 'no'}</span>`,
+    `<span style="color:${fundNorm ? 'var(--green)' : 'var(--muted)'}">Funding normalizing: ${fundNorm ? 'yes' : 'no'}</span>`,
+  ].join('<span style="color:var(--muted);margin:0 6px">·</span>');
+
+  el.innerHTML = `
+    <div style="font-size:${isSqueeze ? '16px' : '13px'};font-weight:700;color:${isSqueeze ? 'var(--red)' : 'var(--muted)'};margin-bottom:6px">
+      ${isSqueeze ? 'SQUEEZE SETUP' : 'No squeeze signal'}
+    </div>
+    <div style="font-size:11px;margin-bottom:6px">${signals}</div>
+    ${data.funding_start != null ? `<div style="font-size:10px;color:var(--muted)">Funding: ${fmtRate(data.funding_start)} → ${fmtRate(data.funding_end)}</div>` : ''}
+    <div style="font-size:10px;color:var(--muted);margin-top:4px">${data.description || ''}</div>`;
+}
+
+// ── Volume Spike ──────────────────────────────────────────────────────────────
+async function renderVolumeSpikeCard() {
+  const sym   = encodeURIComponent(activeSymbol);
+  const el    = document.getElementById('volume-spike-content');
+  const badge = document.getElementById('volume-spike-badge');
+  if (!el) return;
+  const data = await apiFetch(`/volume-spike?symbol=${sym}`);
+  if (!data) { setErr('volume-spike-content'); return; }
+
+  const isSpike = !!data.spike;
+  const bLbl = isSpike ? 'SPIKE' : 'normal';
+  const bCls = isSpike ? 'badge-red' : 'badge-blue';
+  if (badge) {
+    badge.textContent = bLbl;
+    badge.className = `card-badge ${bCls}`;
+    badge.style.display = '';
+  }
+
+  function fmtUsdK(v) {
+    if (!v) return '$0';
+    if (v >= 1e6) return '$' + (v / 1e6).toFixed(2) + 'M';
+    if (v >= 1e3) return '$' + (v / 1e3).toFixed(1) + 'k';
+    return '$' + v.toFixed(0);
+  }
+
+  const ratio = (data.ratio || 0).toFixed(2);
+  const dominant = (data.dominant || '—').toUpperCase();
+  const domCls = dominant === 'BUY' ? 'var(--green)' : dominant === 'SELL' ? 'var(--red)' : 'var(--muted)';
+  const domPct = (data.dominant_pct || 0).toFixed(1);
+
+  el.innerHTML = `
+    <div style="font-size:18px;font-weight:700;color:${isSpike ? 'var(--red)' : 'var(--fg)'};margin-bottom:6px">
+      ${ratio}× <span style="font-size:12px;font-weight:400;color:var(--muted)">vs baseline</span>
+    </div>
+    <div style="display:flex;gap:12px;font-size:11px;margin-bottom:4px">
+      <span style="color:var(--muted)">Recent: <span style="color:var(--fg);font-weight:600">${fmtUsdK(data.recent_usd)}</span></span>
+      <span style="color:var(--muted)">Baseline: <span style="color:var(--fg)">${fmtUsdK(data.baseline_usd_per_period)}</span></span>
+    </div>
+    <div style="font-size:11px">
+      Dominant: <span style="color:${domCls};font-weight:700">${dominant}</span>
+      <span style="color:var(--muted);margin-left:4px">${domPct}%</span>
+    </div>`;
+}
+
+// ── Trade Count Rate ──────────────────────────────────────────────────────────
+async function renderTradeCountRate() {
+  const sym   = encodeURIComponent(activeSymbol);
+  const el    = document.getElementById('trade-count-rate-content');
+  const badge = document.getElementById('trade-count-rate-badge');
+  if (!el) return;
+  const data = await apiFetch(`/trade-count-rate?symbol=${sym}&interval=60&window=1800`);
+  if (!data) { setErr('trade-count-rate-content'); return; }
+
+  const buckets = data.buckets || [];
+  const currentTpm = buckets.length ? buckets[buckets.length - 1].trades_per_min : 0;
+
+  // compute trend from first half vs second half
+  let trend = 'flat';
+  if (buckets.length >= 2) {
+    const mid = Math.floor(buckets.length / 2);
+    const firstHalf  = buckets.slice(0, mid);
+    const secondHalf = buckets.slice(mid);
+    const avgFirst  = firstHalf.reduce((s, b) => s + b.trades_per_min, 0) / firstHalf.length;
+    const avgSecond = secondHalf.reduce((s, b) => s + b.trades_per_min, 0) / secondHalf.length;
+    if (avgFirst > 0) {
+      const pctChange = (avgSecond - avgFirst) / avgFirst;
+      if (pctChange > 0.10)       trend = 'rising';
+      else if (pctChange < -0.10) trend = 'falling';
+    }
+  }
+
+  const trendArrow = trend === 'rising' ? '↑' : trend === 'falling' ? '↓' : '→';
+  const trendCol   = trend === 'rising' ? 'var(--green)' : trend === 'falling' ? 'var(--red)' : 'var(--muted)';
+
+  if (badge) {
+    badge.textContent = trend;
+    badge.className = `card-badge ${trend === 'rising' ? 'badge-green' : trend === 'falling' ? 'badge-red' : 'badge-blue'}`;
+    badge.style.display = '';
+  }
+
+  if (!buckets.length) {
+    el.innerHTML = '<div class="text-muted" style="font-size:11px;">No trade rate data</div>';
+    return;
+  }
+
+  el.innerHTML = `
+    <div style="font-size:18px;font-weight:700;color:var(--fg);margin-bottom:6px">
+      ${currentTpm.toFixed(1)} <span style="font-size:12px;font-weight:400;color:var(--muted)">trades/min</span>
+      <span style="font-size:16px;color:${trendCol};margin-left:6px">${trendArrow}</span>
+    </div>
+    <div style="font-size:11px;color:var(--muted)">${buckets.length} buckets · ${trend} trend</div>`;
+}
+
 // ── Top Movers ────────────────────────────────────────────────────────────────
 async function renderTopMovers() {
   const data = await apiFetch('/top-movers');
@@ -2500,6 +2710,16 @@ async function refresh() {
 
     // Batch 12: cascade & large trades
     await Promise.all([safe(renderLiqCascade), safe(renderLargeTrades)]);
+    await delay(200);
+
+    // Batch 13: alerts, oi-delta, squeeze, volume spike, trade count rate
+    await Promise.all([
+      safe(renderAlerts),
+      safe(renderOiDelta),
+      safe(renderSqueezeSetup),
+      safe(renderVolumeSpikeCard),
+      safe(renderTradeCountRate),
+    ]);
   } finally {
     _refreshRunning = false;
   }
