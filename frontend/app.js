@@ -26,7 +26,6 @@ let regimeTimelineChart = null;  // Chart.js
 let wsAlerts     = null;
 
 let refreshTimer = null;
-let _refreshRunning = false;
 let _lastPrice   = null;   // most recent close price (for OI USDT calc)
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1894,7 +1893,6 @@ async function renderLargeTrades() {
   }
 
   function fmtUsd(v) {
-    if (v == null || isNaN(v)) return '—';
     if (v >= 1e6) return '$' + (v/1e6).toFixed(2) + 'M';
     if (v >= 1e3) return '$' + (v/1e3).toFixed(1) + 'k';
     return '$' + v.toFixed(0);
@@ -1904,7 +1902,6 @@ async function renderLargeTrades() {
     return d.toTimeString().slice(0,8);
   }
   function fmtPrice(p) {
-    if (p == null) return '—';
     return p < 0.01 ? p.toFixed(6) : p < 1 ? p.toFixed(4) : p.toFixed(2);
   }
 
@@ -2423,46 +2420,56 @@ async function renderCrossAssetCorr() {
 // ── Main Refresh Loop ─────────────────────────────────────────────────────────
 async function refresh() {
   if (!activeSymbol) return;
-  if (_refreshRunning) return;
-  _refreshRunning = true;
   const safe = fn => fn().catch(e => console.warn('[refresh]', fn.name, e.message));
 
   try {
     // Batch 1: core price charts
     await Promise.all([safe(renderPriceChart), safe(renderOiChart), safe(renderCvdChart)]);
+    await delay(200);
 
     // Batch 2: header stats
     await Promise.all([safe(renderFunding), safe(renderFundingMomentum), safe(renderSpread), safe(renderWsStats)]);
+    await delay(200);
 
     // Batch 3: trade tape + imbalance
     await Promise.all([safe(renderTradeTape), safe(renderVolumeImbalance), safe(renderPhase)]);
+    await delay(200);
 
-    // Batch 4: OI analysis + microstructure
-    await Promise.all([safe(renderMicrostructure), safe(renderWhaleClustering)]);
+    // Batch 4: OI analysis
+    await Promise.all([safe(renderOiDivergence), safe(renderMicrostructure), safe(renderWhaleClustering)]);
+    await delay(200);
 
     // Batch 5: price deviation metrics
-    await Promise.all([safe(renderVwapDeviation), safe(renderOiWeightedPrice)]);
+    await Promise.all([safe(renderVwapDeviation), safe(renderOiWeightedPrice), safe(renderRealizedVolBands)]);
+    await delay(200);
 
     // Batch 6: regime & momentum
     await Promise.all([safe(renderMarketRegime), safe(renderMomentum), safe(renderMomentumRank), safe(renderRegimeTimeline)]);
+    await delay(200);
 
     // Batch 7: correlations
     await Promise.all([safe(renderCorrelations), safe(renderCorrHeatmap), safe(renderVolumeProfile)]);
+    await delay(200);
 
     // Batch 8: aggressor metrics
     await Promise.all([safe(renderAggressorRatio), safe(renderVpin), safe(renderAdaptiveVolumeProfile)]);
+    await delay(200);
 
-    // Batch 9: OB walls
-    await Promise.all([safe(renderObWalls)]);
+    // Batch 9: tape analysis
+    await Promise.all([safe(renderTapeSpeed), safe(renderAggressorStreak), safe(renderObWalls)]);
+    await delay(200);
 
-    // Batch 10: movers, heatmap
-    await Promise.all([safe(renderTopMovers), safe(renderLiqHeatmap)]);
+    // Batch 10: movers, heatmap, net taker
+    await Promise.all([safe(renderTopMovers), safe(renderLiqHeatmap), safe(renderNetTakerDelta)]);
+    await delay(200);
 
     // Batch 11: new signal cards
     await Promise.all([safe(renderCvdMomentum), safe(renderDeltaDivergence), safe(renderFundingExtreme)]);
+    await delay(200);
 
     // Batch 12: cascade & large trades
     await Promise.all([safe(renderLiqCascade), safe(renderLargeTrades)]);
+    await delay(200);
 
     // Batch 13: alerts, oi-delta, squeeze, volume spike, trade count rate
     await Promise.all([
@@ -2472,6 +2479,7 @@ async function refresh() {
       safe(renderVolumeSpikeCard),
       safe(renderTradeCountRate),
     ]);
+    await delay(200);
 
     // Batch 14: wave 11 cards
     await Promise.all([
@@ -2482,13 +2490,15 @@ async function refresh() {
       safe(renderPriceVelocity),
     ]);
 
+    await delay(200);
     // Batch 15: cross-asset correlation
     await Promise.all([safe(renderCrossAssetCorr)]);
     // Batch 16: social sentiment
     await Promise.all([safe(renderSocialSentiment)]);
 
     // Batch 17: rv-iv card
-    
+        await delay(200);
+
     // Batch 18: session volume profile
         // Batch 19: OFT
         // Batch 20: momentum divergence
@@ -2497,13 +2507,16 @@ async function refresh() {
         // Batch 23: miner reserve (global BTC signal, no symbol)
     await Promise.all([safe(renderMinerReserve)]);
     // Batch 24: macro liquidity indicator
+    await Promise.all([safe(renderMacroLiquidity)]);
     // Batch 24: token velocity + NVT
     await Promise.all([safe(renderTokenVelocityNvt)]);
     // Batch 16: derivatives heatmap
         // Batch 25: holder distribution card
         // Batch 26: cross-chain bridge monitor
-    // Batch 27: whale wallet tracker
-    await Promise.all([safe(renderWhaleWalletTracker)]);
+    await Promise.all([safe(renderCrossChainBridge)]);
+    // Batch 27: options flow tracker
+    await delay(200);
+    await Promise.all([safe(refreshOptionsFlowTracker)]);
   } finally {
     _refreshRunning = false;
   }
@@ -2663,6 +2676,135 @@ async function renderMinerReserve() {
     ${data.description ? `<div style="font-size:10px;color:var(--muted)">${data.description}</div>` : ''}`;
 }
 
+// ── Macro Liquidity Indicator ────────────────────────────────────────────
+async function renderMacroLiquidity() {
+  const data  = await apiFetch('/macro-liquidity-indicator');
+  const el    = document.getElementById('macro-liquidity-content');
+  const badge = document.getElementById('macro-liquidity-badge');
+  if (!data || !el) return;
+
+  const regime = data.regime ?? {};
+  const m2     = data.m2 ?? {};
+  const fed    = data.fed_balance_sheet ?? {};
+  const dxy    = data.usd_index ?? {};
+
+  const label  = regime.label ?? 'neutral';
+  const score  = regime.score ?? 50;
+  const trend  = regime.trend ?? 'stable';
+
+  const lblCol = label === 'risk_on' ? 'var(--green)'
+    : label === 'risk_off' ? 'var(--red)' : 'var(--muted)';
+  const trendIcon = trend === 'expanding' ? '↑' : trend === 'contracting' ? '↓' : '→';
+
+  if (badge) {
+    badge.textContent = label.replace('_', '-').toUpperCase();
+    badge.style.display = 'inline-block';
+    badge.style.color = lblCol;
+  }
+
+  const fmtT  = v => { const a = Math.abs(v||0); return a >= 1e12 ? '$' + (a/1e12).toFixed(1) + 'T' : a >= 1e9 ? '$' + (a/1e9).toFixed(0) + 'B' : '$' + a.toFixed(0); };
+  const fmtP  = v => (v >= 0 ? '+' : '') + (v ?? 0).toFixed(2) + '%';
+  const fmtS  = v => (v ?? 0).toFixed(1);
+
+  // Regime score gauge bar
+  const barW   = Math.min(score, 100).toFixed(0);
+  const barCol = score >= 60 ? 'var(--green)' : score >= 40 ? '#f59e0b' : 'var(--red)';
+  const gauge  = `
+    <div style="display:flex;align-items:center;gap:6px;margin:4px 0">
+      <span style="font-size:9px;color:var(--muted);width:36px">SCORE</span>
+      <div style="flex:1;height:6px;background:var(--border);border-radius:3px">
+        <div style="width:${barW}%;height:100%;background:${barCol};border-radius:3px"></div>
+      </div>
+      <span style="font-size:9px;color:${barCol};width:32px;text-align:right">${fmtS(score)}</span>
+    </div>`;
+
+  const fedDelta = fed.delta_30d_usd ?? 0;
+  const fedCol   = fedDelta > 0 ? 'var(--green)' : fedDelta < 0 ? 'var(--red)' : 'var(--muted)';
+  const dxyCol   = (dxy.change_30d_pct ?? 0) < 0 ? 'var(--green)' : 'var(--red)';  // USD weak = bullish
+  const divCol   = (dxy.btc_divergence ?? 0) > 0 ? 'var(--green)' : 'var(--red)';
+
+  el.innerHTML = `
+    <div style="display:flex;gap:12px;margin-bottom:4px;align-items:flex-start">
+      <div>
+        <div style="font-size:9px;color:var(--muted)">REGIME</div>
+        <div style="font-size:15px;font-weight:700;color:${lblCol}">${label.replace('_','-').toUpperCase()}</div>
+        <div style="font-size:9px;color:var(--muted)">${trendIcon} ${trend} vs 90d MA ${fmtS(regime.ma_90d)}</div>
+      </div>
+      <div>
+        <div style="font-size:9px;color:var(--muted)">M2 YOY</div>
+        <div style="font-size:13px;font-weight:600">${fmtP(m2.growth_rate_yoy_pct)}</div>
+      </div>
+      <div>
+        <div style="font-size:9px;color:var(--muted)">DXY 30D</div>
+        <div style="font-size:13px;font-weight:600;color:${dxyCol}">${fmtP(dxy.change_30d_pct)}</div>
+      </div>
+      <div>
+        <div style="font-size:9px;color:var(--muted)">BTC DIV</div>
+        <div style="font-size:13px;font-weight:600;color:${divCol}">${fmtP(dxy.btc_divergence)}</div>
+      </div>
+    </div>
+    ${gauge}
+    <div style="display:flex;gap:8px;margin-top:4px;font-size:9px">
+      <span style="color:var(--muted)">FED:</span>
+      <span style="color:${fedCol}">${fmtT(Math.abs(fedDelta))} ${fedDelta >= 0 ? 'QE' : 'QT'}</span>
+      <span style="color:var(--muted);margin-left:6px">FED TOTAL:</span>
+      <span>${fmtT(fed.current_usd)}</span>
+      <span style="color:var(--muted);margin-left:6px">M2:</span>
+      <span>${fmtT(m2.current_proxy_usd)}</span>
+    </div>
+    <div style="font-size:9px;color:var(--muted);margin-top:4px">${data.description ?? ''}</div>
+  `;
+}
+
+// ── Layer 2 Metrics ────────────────────────────────────────────────────────────────
+async function renderLayer2Metrics() {
+  const data  = await apiFetch('/layer2-metrics');
+  const el    = document.getElementById('layer2-metrics-content');
+  const badge = document.getElementById('layer2-metrics-badge');
+  if (!el) return;
+  const mom  = data.momentum?.label ?? 'neutral';
+  const score = (data.momentum?.score ?? 0).toFixed(1);
+  const momClass = { strong_growth: 'badge-green', growing: 'badge-green', neutral: 'badge-gray', declining: 'badge-red' };
+  if (badge) { badge.textContent = mom.replace('_',' ').toUpperCase(); badge.className = 'card-badge ' + (momClass[mom]??'badge-gray'); badge.style.display = ''; }
+  const totalTvl = data.aggregate?.total_tvl_usd ?? 0;
+  const ch24 = (data.aggregate?.total_tvl_change_24h_pct ?? 0);
+  const ch24Str = (ch24>=0?'+':'') + ch24.toFixed(2) + '%';
+  const ch24Col = ch24 >= 0 ? 'var(--green)' : 'var(--red)';
+  const gasSav = (data.aggregate?.avg_gas_savings_pct ?? 0).toFixed(1);
+  const topChain = data.aggregate?.top_chain ?? 'Arbitrum';
+  const leader = data.momentum?.leader ?? topChain;
+  const fmtB = v => v>=1e9?'$'+(v/1e9).toFixed(1)+'B':v>=1e6?'$'+(v/1e6).toFixed(0)+'M':'$'+v.toFixed(0);
+  const CHAIN_ORDER = ['Arbitrum','Optimism','Base','Polygon','zkSync'];
+  const CHAIN_COLS = {Arbitrum:'#1a91ff',Optimism:'#ff0420',Base:'#0052ff',Polygon:'#8247e5',zkSync:'#4e529a'};
+  const chains = data.chains ?? {};
+  const maxTvl = Math.max(...CHAIN_ORDER.map(c=>(chains[c]?.tvl_usd??0)),1);
+  const chainRows = CHAIN_ORDER.map(name=>{
+    const c=chains[name]??{}; const tvl=c.tvl_usd??0; const w=(tvl/maxTvl*100).toFixed(0);
+    const ch=c.tvl_change_24h_pct??0; const chStr=(ch>=0?'+':'')+ch.toFixed(1)+'%';
+    const chCol=ch>=0?'var(--green)':'var(--red)'; const dir=c.bridge_direction??'neutral';
+    const dirIcon=dir==='inflow'?'↓':dir==='outflow'?'↑':'→'; const col=CHAIN_COLS[name]??'var(--muted)';
+    return '<div style="display:flex;align-items:center;gap:4px;margin-bottom:2px;font-size:9px">'+
+      '<span style="width:52px;color:var(--muted)">'+name+'</span>'+
+      '<div style="flex:1;height:5px;background:var(--border);border-radius:2px">'+
+      '<div style="width:'+w+'%;height:100%;background:'+col+';border-radius:2px"></div></div>'+
+      '<span style="color:var(--fg);min-width:32px;text-align:right">'+fmtB(tvl)+'</span>'+
+      '<span style="color:'+chCol+';min-width:36px;text-align:right">'+chStr+'</span>'+
+      '<span style="color:'+(dir==='inflow'?'var(--green)':dir==='outflow'?'var(--red)':'var(--muted)')+'">'+dirIcon+'</span></div>';
+  }).join('');
+  const sp=data.history_7d??[];
+  let sparkSvg='';
+  if(sp.length>=2){const vals=sp.map(p=>p.total_tvl_usd??0);const mn=Math.min(...vals)*0.998;const mx=Math.max(...vals)*1.002;const W=200,H=22;const px=i=>(i/(sp.length-1))*W;const py=v=>H-((v-mn)/(mx-mn||1))*H;const path=vals.map((v,i)=>(i===0?'M':'L')+px(i).toFixed(1)+','+py(v).toFixed(1)).join(' ');sparkSvg='<svg width="'+W+'" height="'+H+'" style="display:block;margin-bottom:4px"><path d="'+path+'" stroke="var(--green)" stroke-width="1.2" fill="none"/></svg>';}
+  el.innerHTML='<div style="font-size:10px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:4px">'+
+    '<span>TVL: <b style="color:var(--fg)">'+fmtB(totalTvl)+'</b> <span style="color:'+ch24Col+'">'+ch24Str+' 24h</span></span>'+
+    '<span>gas saved: <b style="color:var(--green)">'+gasSav+'%</b></span></div>'+
+    '<div style="font-size:10px;color:var(--muted);margin-bottom:4px">'+chainRows+'</div>'+
+    '<div style="font-size:10px;color:var(--muted);display:flex;gap:12px;margin-bottom:4px">'+
+    '<span>top: <b style="color:var(--fg)">'+topChain+'</b></span>'+
+    '<span>leader: <b style="color:var(--green)">'+leader+'</b></span>'+
+    '<span>score: <b style="color:var(--fg)">'+score+'</b></span></div>'+
+    sparkSvg+(data.description?'<div style="font-size:10px;color:var(--muted)">'+data.description+'</div>':'');
+}
+
 // ── Token Velocity + NVT ──────────────────────────────────────────────────────
 async function renderTokenVelocityNvt() {
   const el    = document.getElementById('token-velocity-nvt-content');
@@ -2749,97 +2891,228 @@ async function renderTokenVelocityNvt() {
 
 // ── Derivatives Heatmap ───────────────────────────────────────────────────────
 // ── Holder Distribution ───────────────────────────────────────────────────
-
-// ── Whale Wallet Tracker ──────────────────────────────────────────────────────
-async function renderWhaleWalletTracker() {
-  const el    = document.getElementById('whale-wallet-tracker-content');
-  const badge = document.getElementById('whale-wallet-tracker-badge');
+// ── Cross-Chain Bridge Monitor ────────────────────────────────────────────────
+async function renderCrossChainBridge() {
+  const el = document.getElementById('bridge-monitor-content');
   if (!el) return;
-  const sym  = encodeURIComponent(activeSymbol);
-  const data = await apiFetch(`/whale-wallet-tracker?symbol=${sym}`);
-  if (!data) { setErr('whale-wallet-tracker-content'); return; }
-
-  const signal      = data.whale_signal || 'neutral';
-  const moves       = data.large_moves_24h || [];
-  const ad          = data.age_distribution || {};
-  const topWallets  = data.top_wallets || [];
-  const netFlow     = data.net_whale_flow_7d ?? 0;
-
-  const sigCls = signal === 'accumulating' ? 'badge-green'
-               : signal === 'distributing' ? 'badge-red'
-               : 'badge-blue';
+  const data = await fetchJSON('/api/cross-chain-bridge-monitor');
+  if (!data) { el.textContent = 'Unavailable'; return; }
+  const badge = document.getElementById('bridge-monitor-badge');
+  const cong = data.congestion?.label ?? 'unknown';
+  const congColor = { low: '#26a69a', moderate: '#ffa726', high: '#ef5350', severe: '#b71c1c' }[cong] ?? '#888';
   if (badge) {
-    badge.textContent  = signal.toUpperCase();
-    badge.className    = `card-badge ${sigCls}`;
-    badge.style.display = '';
+    badge.textContent = cong.toUpperCase();
+    badge.style.background = congColor;
+    badge.style.display = 'inline-block';
+  }
+  const chains = data.chains ?? {};
+  const chainNames = ['ETH', 'BSC', 'ARB', 'OP', 'BASE'];
+  const flowColor = f => f > 5 ? '#26a69a' : f < -5 ? '#ef5350' : '#888';
+  const chainRows = chainNames.map(c => {
+    const d = chains[c] ?? {};
+    return `<tr><td style="color:#aaa;width:45px">${c}</td><td>+${(d.inflow_24h??0).toFixed(0)}</td><td style="color:#666">-${(d.outflow_24h??0).toFixed(0)}</td><td style="color:${flowColor(d.net_flow??0)}">${(d.net_flow??0)>0?'+':''}${(d.net_flow??0).toFixed(1)}</td></tr>`;
+  }).join('');
+  const bridges = (data.bridges ?? []).slice(0,5);
+  const bridgeList = bridges.map(b => `<span style="color:#aaa">${b.rank}.${b.name} <b>${(b.volume_24h??0).toFixed(0)}M</b></span>`).join(' · ');
+  const dom = data.dominance ?? {};
+  const anomalies = data.anomalies ?? [];
+  const anomalyTxt = anomalies.length ? anomalies.map(a => `${a.chain} ${a.ratio}x avg`).join(', ') : 'none';
+  el.innerHTML = `
+    <table style="width:100%;border-collapse:collapse;margin-bottom:4px;font-size:10px">
+      <tr style="color:#555"><th>Chain</th><th>In($M)</th><th>Out($M)</th><th>Net</th></tr>
+      ${chainRows}
+    </table>
+    <div style="font-size:10px;color:#aaa;margin-bottom:3px">${bridgeList}</div>
+    <div style="display:flex;gap:10px;font-size:10px;color:#aaa;flex-wrap:wrap">
+      <span>Dom: <b>${dom.chain??'?'}</b> ${(dom.inflow_pct??0).toFixed(1)}%</span>
+      <span>Vol: <b>${(data.total_volume_24h??0).toFixed(0)}M</b></span>
+      <span>Anomaly: <b style="color:${anomalies.length?'#ef5350':'#26a69a'}">${anomalyTxt}</b></span>
+    </div>
+    <div style="margin-top:3px;color:#666;font-size:10px">${data.description ?? ''}</div>
+  `;
+}
+
+// ── Validator Activity ────────────────────────────────────────────────────────
+// ── NFT Market Pulse ──────────────────────────────────────────────────────
+async function renderNftMarketPulse() {
+  const data  = await apiFetch('/nft-market-pulse');
+  const el    = document.getElementById('nft-market-pulse-content');
+  const badge = document.getElementById('nft-market-pulse-badge');
+  if (!data || !el) return;
+
+  const idx   = data.bluechip_index ?? {};
+  const mkt   = data.market ?? {};
+  const trend = idx.trend ?? 'stable';
+  const liq   = mkt.market_liquidity ?? 'cool';
+
+  const trendCol = trend === 'rising' ? 'var(--green)'
+    : trend === 'falling' ? 'var(--red)' : 'var(--muted)';
+  const liqCol = liq === 'hot' ? 'var(--green)'
+    : liq === 'warm' ? '#f59e0b'
+    : liq === 'cool' ? 'var(--muted)' : 'var(--red)';
+
+  if (badge) {
+    badge.textContent = trend.toUpperCase();
+    badge.style.display = 'inline-block';
+    badge.style.color = trendCol;
   }
 
-  const netFlowCol  = netFlow > 0 ? 'var(--green)' : netFlow < 0 ? 'var(--red)' : 'var(--muted)';
-  const netFlowIcon = netFlow > 0 ? '↑' : netFlow < 0 ? '↓' : '→';
+  const fmtEth = v => (v ?? 0).toFixed(1) + ' ETH';
+  const fmtPct = v => (v >= 0 ? '+' : '') + (v ?? 0).toFixed(1) + '%';
 
-  // Age distribution bar
-  const whalePct = ad.whale ? ad.whale.pct : 0;
-  const sharkPct = ad.shark ? ad.shark.pct : 0;
-  const fishPct  = ad.fish  ? ad.fish.pct  : 0;
-  const ageBars = `
-    <div style="display:flex;height:6px;border-radius:3px;overflow:hidden;margin-bottom:4px">
-      <div style="width:${whalePct}%;background:var(--blue)" title="whale ${whalePct}%"></div>
-      <div style="width:${sharkPct}%;background:#f59e0b" title="shark ${sharkPct}%"></div>
-      <div style="width:${fishPct}%;background:var(--green)" title="fish ${fishPct}%"></div>
-    </div>
-    <div style="display:flex;gap:8px;font-size:9px;color:var(--muted);margin-bottom:6px">
-      <span><span style="color:var(--blue)">■</span> whale ${whalePct}%</span>
-      <span><span style="color:#f59e0b">■</span> shark ${sharkPct}%</span>
-      <span><span style="color:var(--green)">■</span> fish ${fishPct}%</span>
-    </div>`;
-
-  // Top-5 wallets table
-  const top5 = topWallets.slice(0, 5);
-  const walletRows = top5.map((w, i) => {
-    const ageCls = w.age_class === 'whale' ? 'var(--blue)'
-                 : w.age_class === 'shark' ? '#f59e0b'
-                 : 'var(--green)';
-    const exchTag = w.is_exchange
-      ? `<span style="font-size:8px;color:var(--muted)">[CEX]</span>`
-      : `<span style="font-size:8px;color:var(--muted)">[cold]</span>`;
+  // Collection rows
+  const colls = data.collections ?? {};
+  const rows = Object.entries(colls).map(([name, c]) => {
+    const chgCol = (c.floor_change_24h_pct ?? 0) >= 0 ? 'var(--green)' : 'var(--red)';
+    const lCol   = c.liquidity === 'hot' ? 'var(--green)'
+      : c.liquidity === 'warm' ? '#f59e0b'
+      : c.liquidity === 'cold' ? 'var(--red)' : 'var(--muted)';
     return `<tr>
-      <td style="color:var(--muted);font-size:9px">#${i + 1}</td>
-      <td style="font-family:monospace;font-size:9px;color:var(--fg)">${w.address.slice(0, 10)}…</td>
-      <td style="text-align:right;font-size:9px;color:var(--fg)">${fmtUsd(w.balance_usd)}</td>
-      <td style="text-align:center;font-size:9px;color:${ageCls}">${w.age_class}</td>
-      <td style="text-align:right;font-size:9px">${exchTag}</td>
+      <td style="color:var(--text);font-size:9px">${name.replace(' ', '\u00a0').substring(0,14)}</td>
+      <td style="text-align:right;font-size:9px">${fmtEth(c.floor_eth)}</td>
+      <td style="text-align:right;font-size:9px;color:${chgCol}">${fmtPct(c.floor_change_24h_pct)}</td>
+      <td style="text-align:right;font-size:9px;color:${lCol}">${(c.liquidity ?? '').toUpperCase()}</td>
     </tr>`;
   }).join('');
 
-  // Recent large moves (last 3)
-  const recentMoves = moves.slice(0, 3).map(m => {
-    const dirCol  = m.direction === 'in' ? 'var(--green)' : 'var(--red)';
-    const dirIcon = m.direction === 'in' ? '↙' : '↗';
-    return `<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-bottom:2px">
-      <span style="font-family:monospace;font-size:9px">${String(m.wallet_id).slice(0, 14)}…</span>
-      <span style="color:${dirCol}">${dirIcon} ${fmtUsd(m.amount_usd)}</span>
-    </div>`;
-  }).join('');
+  const corr = idx.btc_correlation ?? 0;
+  const corrCol = corr > 0.5 ? 'var(--green)' : corr < -0.5 ? 'var(--red)' : 'var(--muted)';
 
   el.innerHTML = `
-    <div style="font-size:10px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:6px">
-      <span>net 7d: <b style="color:${netFlowCol}">${netFlowIcon} ${fmtUsd(Math.abs(netFlow))}</b></span>
-      <span>exch: <b style="color:var(--fg)">${data.pct_exchange ?? 0}%</b></span>
-      <span>cold: <b style="color:var(--fg)">${data.pct_cold ?? 0}%</b></span>
-      <span>moves 24h: <b style="color:var(--fg)">${moves.length}</b></span>
+    <div style="display:flex;gap:12px;margin-bottom:6px">
+      <div>
+        <div style="font-size:9px;color:var(--muted)">BLUE-CHIP INDEX</div>
+        <div style="font-size:16px;font-weight:700;color:${trendCol}">${(idx.value ?? 0).toFixed(1)}</div>
+      </div>
+      <div>
+        <div style="font-size:9px;color:var(--muted)">BTC CORR</div>
+        <div style="font-size:13px;font-weight:600;color:${corrCol}">${corr.toFixed(2)}</div>
+      </div>
+      <div>
+        <div style="font-size:9px;color:var(--muted)">WASH %</div>
+        <div style="font-size:13px;font-weight:600;color:var(--muted)">${(mkt.wash_trade_pct ?? 0).toFixed(1)}%</div>
+      </div>
+      <div>
+        <div style="font-size:9px;color:var(--muted)">LIQUIDITY</div>
+        <div style="font-size:13px;font-weight:600;color:${liqCol}">${liq.toUpperCase()}</div>
+      </div>
     </div>
-    ${ageBars}
-    <table style="width:100%;border-collapse:collapse;margin-bottom:6px">
-      <thead><tr style="font-size:9px;color:var(--muted)">
-        <th style="text-align:left">#</th>
-        <th style="text-align:left">address</th>
-        <th style="text-align:right">balance</th>
-        <th style="text-align:center">age</th>
-        <th style="text-align:right">type</th>
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr>
+        <th style="font-size:8px;color:var(--muted);text-align:left;font-weight:500">COLLECTION</th>
+        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">FLOOR</th>
+        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">24H</th>
+        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">LIQ</th>
       </tr></thead>
-      <tbody>${walletRows}</tbody>
+      <tbody>${rows}</tbody>
     </table>
-    ${moves.length > 0 ? `<div style="font-size:9px;color:var(--muted);margin-bottom:3px">large moves &gt;$1M</div>${recentMoves}` : ''}`;
+    <div style="font-size:9px;color:var(--muted);margin-top:4px">${data.description ?? ''}</div>
+  `;
+}
+
+// ── Options Flow Tracker ───────────────────────────────────────────────────────
+async function refreshOptionsFlowTracker() {
+  const el = document.getElementById('options-flow-content');
+  const badge = document.getElementById('options-flow-badge');
+  if (!el) return;
+
+  const data = await apiFetch('/options-flow-tracker');
+  if (!data) { el.innerHTML = '<span class="card-badge badge-red" style="display:inline-block">Error</span>'; return; }
+
+  const summary = data.summary || {};
+  const direction = summary.net_flow_direction || 'neutral';
+  const dirCol = direction === 'bullish' ? 'var(--green)' : direction === 'bearish' ? 'var(--red)' : 'var(--muted)';
+
+  if (badge) {
+    badge.textContent = direction.toUpperCase();
+    badge.className = 'card-badge ' + (direction === 'bullish' ? 'badge-green' : direction === 'bearish' ? 'badge-red' : 'badge-blue');
+    badge.style.display = 'inline-block';
+  }
+
+  const fmtM = v => '$' + ((v || 0) / 1e6).toFixed(2) + 'M';
+
+  // Skew by expiry rows
+  const skew_by_expiry = data.skew_by_expiry || {};
+  const skewRows = Object.entries(skew_by_expiry).sort((a, b) => {
+    const tv = e => (e[1].call_volume_usd || 0) + (e[1].put_volume_usd || 0);
+    return tv(b) - tv(a);
+  }).slice(0, 5).map(([exp, v]) => {
+    const sc = v.skew_signal === 'bullish' ? 'var(--green)' : v.skew_signal === 'bearish' ? 'var(--red)' : 'var(--muted)';
+    return '<tr>' +
+      '<td style="font-size:9px;color:var(--text)">' + exp + '</td>' +
+      '<td style="font-size:9px;text-align:right;color:var(--green)">' + fmtM(v.call_volume_usd) + '</td>' +
+      '<td style="font-size:9px;text-align:right;color:var(--red)">' + fmtM(v.put_volume_usd) + '</td>' +
+      '<td style="font-size:9px;text-align:right;color:' + sc + '">' + (v.skew_signal || '').toUpperCase() + '</td>' +
+      '<td style="font-size:9px;text-align:right;color:var(--muted)">' + (v.skew_ratio || 0).toFixed(2) + 'x</td>' +
+      '</tr>';
+  }).join('');
+
+  // Unusual flow alert rows
+  const alerts = data.unusual_flow_alerts || [];
+  const alertRows = alerts.slice(0, 4).map(a => {
+    const ac = a.severity === 'critical' ? 'var(--red)' : '#f59e0b';
+    return '<tr>' +
+      '<td style="font-size:9px;color:var(--text)">' + (a.instrument || '').substring(0, 22) + '</td>' +
+      '<td style="font-size:9px;text-align:right">' + fmtM(a.notional_usd) + '</td>' +
+      '<td style="font-size:9px;text-align:right;color:' + (a.side === 'buy' ? 'var(--green)' : 'var(--red)') + '">' + (a.side || '').toUpperCase() + '</td>' +
+      '<td style="font-size:9px;text-align:right;color:' + ac + '">' + (a.severity || '').toUpperCase() + '</td>' +
+      '</tr>';
+  }).join('');
+
+  // Strike heatmap — top 5 by total notional
+  const strike_heatmap = data.strike_heatmap || {};
+  const hmRows = Object.entries(strike_heatmap).sort((a, b) => {
+    const tn = e => (e[1].call_notional_usd || 0) + (e[1].put_notional_usd || 0);
+    return tn(b) - tn(a);
+  }).slice(0, 5).map(([strike, h]) => {
+    const nc = (h.net_flow_usd || 0) >= 0 ? 'var(--green)' : 'var(--red)';
+    const dc = h.dominant === 'call' ? 'var(--green)' : 'var(--red)';
+    return '<tr>' +
+      '<td style="font-size:9px;color:var(--text)">$' + Number(strike).toLocaleString() + '</td>' +
+      '<td style="font-size:9px;text-align:right;color:var(--green)">' + fmtM(h.call_notional_usd) + '</td>' +
+      '<td style="font-size:9px;text-align:right;color:var(--red)">' + fmtM(h.put_notional_usd) + '</td>' +
+      '<td style="font-size:9px;text-align:right;color:' + nc + '">' + ((h.net_flow_usd || 0) >= 0 ? '+' : '') + fmtM(h.net_flow_usd) + '</td>' +
+      '<td style="font-size:9px;text-align:right;color:' + dc + '">' + (h.dominant || '').toUpperCase() + '</td>' +
+      '</tr>';
+  }).join('');
+
+  el.innerHTML =
+    '<div style="display:flex;gap:12px;margin-bottom:6px;flex-wrap:wrap">' +
+      '<div><div style="font-size:9px;color:var(--muted)">CALLS</div>' +
+        '<div style="font-size:14px;font-weight:700;color:var(--green)">' + fmtM(summary.total_call_volume_usd) + '</div></div>' +
+      '<div><div style="font-size:9px;color:var(--muted)">PUTS</div>' +
+        '<div style="font-size:14px;font-weight:700;color:var(--red)">' + fmtM(summary.total_put_volume_usd) + '</div></div>' +
+      '<div><div style="font-size:9px;color:var(--muted)">C/P RATIO</div>' +
+        '<div style="font-size:14px;font-weight:700;color:' + dirCol + '">' + (summary.overall_skew_ratio || 0).toFixed(2) + 'x</div></div>' +
+      '<div><div style="font-size:9px;color:var(--muted)">SKEW %ile</div>' +
+        '<div style="font-size:14px;font-weight:700;color:' + dirCol + '">' + (summary.skew_percentile || 0).toFixed(1) + '</div></div>' +
+      '<div><div style="font-size:9px;color:var(--muted)">ALERTS</div>' +
+        '<div style="font-size:14px;font-weight:700;color:' + ((summary.unusual_activity_count || 0) > 0 ? '#f59e0b' : 'var(--muted)') + '">' + (summary.unusual_activity_count || 0) + '</div></div>' +
+    '</div>' +
+    '<div style="font-size:9px;color:var(--muted);margin-bottom:2px;font-weight:600">SKEW BY EXPIRY</div>' +
+    '<table style="width:100%;border-collapse:collapse;margin-bottom:6px"><thead><tr>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:left;font-weight:500">EXPIRY</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">CALLS</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">PUTS</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">SIGNAL</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">RATIO</th>' +
+    '</tr></thead><tbody>' + (skewRows || '<tr><td colspan="5" style="font-size:9px;color:var(--muted)">No data</td></tr>') + '</tbody></table>' +
+    '<div style="font-size:9px;color:var(--muted);margin-bottom:2px;font-weight:600">UNUSUAL FLOW ALERTS</div>' +
+    '<table style="width:100%;border-collapse:collapse;margin-bottom:6px"><thead><tr>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:left;font-weight:500">INSTRUMENT</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">NOTIONAL</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">SIDE</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">SEV</th>' +
+    '</tr></thead><tbody>' + (alertRows || '<tr><td colspan="4" style="font-size:9px;color:var(--muted)">No unusual flow</td></tr>') + '</tbody></table>' +
+    '<div style="font-size:9px;color:var(--muted);margin-bottom:2px;font-weight:600">STRIKE HEATMAP (TOP 5)</div>' +
+    '<table style="width:100%;border-collapse:collapse"><thead><tr>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:left;font-weight:500">STRIKE</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">CALLS</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">PUTS</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">NET</th>' +
+      '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">DOM</th>' +
+    '</tr></thead><tbody>' + (hmRows || '<tr><td colspan="5" style="font-size:9px;color:var(--muted)">No data</td></tr>') + '</tbody></table>' +
+    '<div style="font-size:9px;color:var(--muted);margin-top:4px">' + (data.description || '') + '</div>';
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
@@ -2851,11 +3124,20 @@ async function init() {
   safeInit(initFundingChart);
   safeInit(initSpreadChart);
   safeInit(initAggressorChart);
-  // initVolumeProfileChart, initRegimeTimelineChart, initAdaptiveVpChart
-  // are Chart.js instances created inline in their render functions
+  safeInit(initVolumeProfileChart);
+  safeInit(initRegimeTimelineChart);
+  safeInit(initAdaptiveVpChart);
   connectAlerts();
 
-  // Error timeout removed — render functions handle their own errors
+  // After 10s replace any still-Loading cards with Error badge
+  setTimeout(() => {
+    document.querySelectorAll('[id$="-content"]').forEach(el => {
+      const txt = el.textContent.trim();
+      if (txt.startsWith('Loading') || txt === 'No data available') {
+        el.innerHTML = '<span class="card-badge badge-red" style="display:inline-block">Error</span>';
+      }
+    });
+  }, 10000);
 
   await loadSymbols();
   await refresh();
@@ -2894,10 +3176,6 @@ async function init() {
 })();
 
 // ── Bootstrap on Load ──────────────────────────────────────────────────────────
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', init);
-} else {
-  init();
-}
+document.addEventListener('DOMContentLoaded', init);
 
 

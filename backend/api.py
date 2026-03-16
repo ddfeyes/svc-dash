@@ -46,7 +46,6 @@ from metrics import (
     detect_funding_extreme,
     detect_cvd_momentum,
     compute_market_regime,
-    compute_market_regime_classifier,
     detect_accumulation_distribution_pattern,
     detect_cross_symbol_oi_spike,
     detect_funding_arbitrage,
@@ -72,8 +71,7 @@ from metrics import (
     compute_token_velocity_nvt,
     compute_layer2_metrics,
     compute_nft_market_pulse,
-    compute_cross_chain_bridge_monitor,
-    compute_whale_wallet_tracker,
+    compute_options_flow_tracker,
 )
 
 router = APIRouter(prefix="/api")
@@ -862,17 +860,6 @@ async def market_regime_all():
     syms = get_symbols()
     results = await asyncio.gather(*[compute_market_regime(symbol=s) for s in syms])
     return {"status": "ok", "symbols": {s: r for s, r in zip(syms, results)}}
-
-
-@router.get("/market-regime-classifier")
-async def market_regime_classifier_endpoint(
-    symbol: Optional[str] = None,
-):
-    """Composite market regime classifier: bull/bear/accumulation/distribution/ranging."""
-    syms = get_symbols()
-    target = symbol if symbol and symbol in syms else syms[0]
-    data = await compute_market_regime_classifier(symbol=target)
-    return {"status": "ok", "symbol": target, **data}
 
 
 @router.get("/volume-spike")
@@ -5335,19 +5322,8 @@ async def holder_distribution_endpoint():
     return JSONResponse(data)
 
 
-@router.get("/cross-chain-bridge-monitor")
-async def cross_chain_bridge_monitor_endpoint():
-    """Cross-chain bridge monitor: flows across ETH/BSC/ARB/OP/BASE, top bridges, anomaly detection."""
-    data = await compute_cross_chain_bridge_monitor()
+@router.get("/options-flow-tracker")
+async def options_flow_tracker_endpoint():
+    """Options flow: large trades >$100k notional (Deribit/Lyra), call/put skew by expiry, unusual flow alerts, strike heatmap."""
+    data = await compute_options_flow_tracker()
     return JSONResponse(data)
-
-
-@router.get("/whale-wallet-tracker")
-async def whale_wallet_tracker_endpoint(
-    symbol: Optional[str] = Query(None),
-):
-    """Whale wallet tracker: top-50 addresses, large moves >$1M, age classification, flow signal."""
-    syms = get_symbols()
-    target = symbol if symbol and symbol in syms else syms[0]
-    data = await compute_whale_wallet_tracker(symbol=target)
-    return JSONResponse({"status": "ok", "symbol": target, **data})

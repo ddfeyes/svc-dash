@@ -8356,297 +8356,311 @@ async def compute_holder_distribution_card() -> dict:
     }
 
 
+# ── Options Flow Tracker ──────────────────────────────────────────────────────
 
-
-# ╔══════════════════════════════════════════════════════════════════════════╗
-# ║  CROSS-CHAIN BRIDGE MONITOR                                             ║
-# ╚══════════════════════════════════════════════════════════════════════════╝
-
-_CB_CHAINS = ["ETH", "BSC", "ARB", "OP", "BASE"]
-
-_CB_CAPACITY = {
-    "ETH":  1_000.0,
-    "BSC":    600.0,
-    "ARB":    500.0,
-    "OP":     300.0,
-    "BASE":   200.0,
-}
-
-
-def _cb_net_flow(inflow: float, outflow: float) -> float:
-    """Net bridge flow for a chain. Positive = net inflow."""
-    return float(inflow - outflow)
-
-
-def _cb_flow_label(net_flow: float) -> str:
-    """Label net flow as inflow / outflow / balanced (+-5 threshold)."""
-    if net_flow > 5.0:
-        return "inflow"
-    if net_flow < -5.0:
-        return "outflow"
-    return "balanced"
-
-
-def _cb_chain_dominance(inflows: dict) -> str:
-    """Return chain name with highest inflow. Returns 'unknown' for empty."""
-    if not inflows:
-        return "unknown"
-    return str(max(inflows, key=lambda c: inflows[c]))
-
-
-def _cb_utilization_rate(current_volume: float, capacity: float) -> float:
-    """Bridge utilization as % of estimated daily capacity. Clamped [0, 100]."""
-    if capacity <= 0.0:
-        return 0.0
-    return float(min(100.0, max(0.0, current_volume / capacity * 100.0)))
-
-
-def _cb_anomaly_flag(current: float, avg_7d: float) -> bool:
-    """True when current inflow is >= 2x the 7-day average."""
-    if avg_7d <= 0.0:
-        return False
-    return bool(current >= 2.0 * avg_7d)
-
-
-def _cb_bridge_rank(volumes: dict, top_n: int = 5) -> list:
-    """Return top-N bridges sorted by volume descending with rank field."""
-    if not volumes:
-        return []
-    sorted_bridges = sorted(volumes.items(), key=lambda x: x[1], reverse=True)[:top_n]
-    return [
-        {"name": name, "volume_24h": vol, "rank": i + 1}
-        for i, (name, vol) in enumerate(sorted_bridges)
-    ]
-
-
-def _cb_volume_zscore(current: float, history: list) -> float:
-    """Standard z-score of current volume vs history. Returns 0.0 for empty/uniform."""
-    import math
-    if len(history) < 2:
-        return 0.0
-    mean = sum(history) / len(history)
-    std = math.sqrt(sum((v - mean) ** 2 for v in history) / len(history))
-    if std == 0.0:
-        return 0.0
-    return float((current - mean) / std)
-
-
-def _cb_congestion_label(avg_wait_seconds: float) -> str:
-    """Classify bridge congestion from average wait time in seconds."""
-    if avg_wait_seconds >= 900:
-        return "severe"
-    if avg_wait_seconds >= 300:
-        return "high"
-    if avg_wait_seconds >= 60:
-        return "moderate"
-    return "low"
-
-
-async def compute_cross_chain_bridge_monitor() -> dict:
-    """
-    Cross-chain bridge monitor: bridge flows across ETH/BSC/ARB/OP/BASE,
-    top-5 bridges by volume, congestion proxy, anomaly detection (>2x 7d avg).
-    """
-    chain_inflow: dict = {
-        "ETH":  450.2,
-        "BSC":  210.5,
-        "ARB":  320.0,
-        "OP":   180.0,
-        "BASE":  95.0,
-    }
-    chain_outflow: dict = {
-        "ETH":  380.1,
-        "BSC":  245.0,
-        "ARB":  290.0,
-        "OP":   175.0,
-        "BASE":  80.0,
-    }
-    bridge_volumes: dict = {
-        "Stargate": 520.0,
-        "Across":   310.0,
-        "Hop":      205.0,
-        "Synapse":  140.0,
-        "CCTP":      80.0,
-    }
-    avg_7d: dict = {
-        "ETH":  210.0,
-        "BSC":  195.0,
-        "ARB":  155.0,
-        "OP":   170.0,
-        "BASE":  88.0,
-    }
-
-    chains: dict = {}
-    anomalies: list = []
-    for chain in _CB_CHAINS:
-        inf = chain_inflow.get(chain, 0.0)
-        out = chain_outflow.get(chain, 0.0)
-        net = _cb_net_flow(inf, out)
-        chains[chain] = {
-            "inflow_24h":  round(inf, 2),
-            "outflow_24h": round(out, 2),
-            "net_flow":    round(net, 2),
-            "flow_label":  _cb_flow_label(net),
-        }
-        if _cb_anomaly_flag(inf, avg_7d.get(chain, 0.0)):
-            ratio = inf / avg_7d[chain] if avg_7d.get(chain, 0.0) > 0 else 0.0
-            anomalies.append({
-                "chain":      chain,
-                "inflow_24h": round(inf, 2),
-                "avg_7d":     round(avg_7d[chain], 2),
-                "ratio":      round(ratio, 2),
-            })
-
-    bridges = _cb_bridge_rank(bridge_volumes)
-    dominant_chain = _cb_chain_dominance(chain_inflow)
-    total_inflow = sum(chain_inflow.values())
-    dom_pct = (
-        round(chain_inflow[dominant_chain] / total_inflow * 100.0, 1)
-        if total_inflow > 0
-        else 0.0
-    )
-
-    utilization = {
-        chain: round(
-            _cb_utilization_rate(chain_inflow.get(chain, 0.0), _CB_CAPACITY.get(chain, 1.0)),
-            1,
-        )
-        for chain in _CB_CHAINS
-    }
-
-    avg_wait_seconds = 180
-    congestion_lbl = _cb_congestion_label(avg_wait_seconds)
-    total_volume = round(sum(bridge_volumes.values()), 2)
-    daily_history = [320.0, 290.0, 410.0, 350.0, 380.0, 310.0, 390.0]
-    zscore = round(_cb_volume_zscore(total_volume, daily_history), 3)
-
-    desc = (
-        f"{dominant_chain} dominant bridge inflow {dom_pct}% "
-        f"\u2014 {bridges[0]['name'] if bridges else 'N/A'} leads volume "
-        f"\u2014 {congestion_lbl} congestion"
-    )
-
-    return {
-        "chains":           chains,
-        "bridges":          bridges,
-        "dominance":        {"chain": dominant_chain, "inflow_pct": dom_pct},
-        "congestion":       {"label": congestion_lbl, "avg_wait_seconds": avg_wait_seconds},
-        "anomalies":        anomalies,
-        "utilization":      utilization,
-        "total_volume_24h": total_volume,
-        "zscore":           float(zscore),
-        "description":      desc,
-    }
-
-
-# ── Whale Wallet Tracker ───────────────────────────────────────────────────────
-
-def _wwt_age_class(wallet_age_days: float) -> str:
-    """Classify wallet by age: whale >2yr, shark 6mo-2yr, fish <6mo."""
-    if wallet_age_days >= 730:
-        return "whale"
-    if wallet_age_days >= 180:
-        return "shark"
-    return "fish"
-
-
-def _wwt_whale_signal(net_flow: float) -> str:
-    """Determine accumulation/distribution signal from net whale flow."""
-    if net_flow > 0:
-        return "accumulating"
-    if net_flow < 0:
-        return "distributing"
+def _oft_skew_label(call_ratio: float) -> str:
+    """Classify call/put skew direction from call ratio (0-1)."""
+    if call_ratio >= 0.60:
+        return "bullish"
+    if call_ratio <= 0.40:
+        return "bearish"
     return "neutral"
 
 
-async def compute_whale_wallet_tracker(symbol: str = None) -> dict:
-    """
-    Whale wallet tracker: top-50 addresses by balance, large moves >$1M in last 24h,
-    wallet age classification (whale/shark/fish), exchange vs cold wallet ratio,
-    and net whale flow signal (accumulating/distributing/neutral).
+def _oft_is_unusual(vol_oi_ratio: float, threshold: float = 0.20) -> bool:
+    """Return True if volume/OI ratio indicates unusual activity."""
+    return vol_oi_ratio > threshold
 
-    Data is seeded-random per symbol for deterministic results.
-    """
-    import random
-    import time
 
-    sym = symbol or "BANANAS31USDT"
+def _oft_strike_bucket(strike: float, atm: float) -> str:
+    """Bucket a strike relative to ATM price."""
+    if atm <= 0:
+        return "ATM"
+    pct = (strike - atm) / atm
+    if pct < -0.10:
+        return "DITM"
+    if pct < -0.03:
+        return "ITM"
+    if pct <= 0.03:
+        return "ATM"
+    if pct <= 0.10:
+        return "OTM"
+    return "DOTM"
 
-    # Seed deterministically from symbol so different symbols give different data
-    seed_val = sum(ord(c) * (i + 1) for i, c in enumerate(sym))
-    rng = random.Random(seed_val)
 
-    now = time.time()
+def _oft_expiry_weight(days_to_expiry: int) -> float:
+    """Gamma-weighted importance: near-term expiries carry higher weight."""
+    import math as _math
+    if days_to_expiry <= 0:
+        return 0.0
+    return round(1.0 / _math.sqrt(max(days_to_expiry, 1)), 4)
 
-    # ── Generate 50 seeded wallet addresses ──────────────────────────────────
-    top_wallets: list = []
-    for i in range(50):
-        wallet_id = f"0x{rng.randint(0x100000000000, 0xffffffffffff):012x}{i:04x}"
-        address = f"0x{rng.getrandbits(160):040x}"
-        # Balance decreases as rank increases
-        balance_usd = round(rng.uniform(500_000, 50_000_000) / (1 + i * 0.18), 2)
-        balance = round(balance_usd / rng.uniform(0.001, 10.0), 4)
-        wallet_age_days = round(rng.uniform(10, 2500), 1)
-        age_class = _wwt_age_class(wallet_age_days)
-        is_exchange = rng.random() < 0.25
 
-        top_wallets.append({
-            "wallet_id":       wallet_id,
-            "address":         address,
-            "balance":         balance,
-            "balance_usd":     balance_usd,
-            "wallet_age_days": wallet_age_days,
-            "age_class":       age_class,
-            "is_exchange":     is_exchange,
-        })
+def _oft_call_put_ratio(call_notional: float, put_notional: float) -> float:
+    """Call / (call + put) ratio, 0.5 when balanced."""
+    total = call_notional + put_notional
+    if total <= 0:
+        return 0.5
+    return round(call_notional / total, 4)
 
-    # Sort descending by balance_usd
-    top_wallets.sort(key=lambda w: w["balance_usd"], reverse=True)
 
-    # ── Large moves >$1M in last 24h ─────────────────────────────────────────
-    n_moves = rng.randint(3, 12)
-    large_moves_24h: list = []
-    for _ in range(n_moves):
-        wid = rng.choice(top_wallets)["wallet_id"]
-        direction = rng.choice(["in", "out"])
-        amount_usd = round(rng.uniform(1_000_000, 25_000_000), 2)
-        ts = round(now - rng.uniform(0, 86400), 3)
-        large_moves_24h.append({
-            "wallet_id":  wid,
-            "direction":  direction,
-            "amount_usd": amount_usd,
-            "ts":         ts,
-        })
+def _oft_iv_skew_label(iv_skew: float) -> str:
+    """Label the 25-delta IV skew (call IV - put IV)."""
+    if iv_skew > 2.0:
+        return "call_premium"
+    if iv_skew < -2.0:
+        return "put_premium"
+    return "flat"
 
-    # ── Age distribution ──────────────────────────────────────────────────────
-    whale_count = sum(1 for w in top_wallets if w["age_class"] == "whale")
-    shark_count = sum(1 for w in top_wallets if w["age_class"] == "shark")
-    fish_count  = sum(1 for w in top_wallets if w["age_class"] == "fish")
-    age_distribution: dict = {
-        "whale": {"count": whale_count, "pct": round(whale_count / 50 * 100, 1)},
-        "shark": {"count": shark_count, "pct": round(shark_count / 50 * 100, 1)},
-        "fish":  {"count": fish_count,  "pct": round(fish_count  / 50 * 100, 1)},
-    }
 
-    # ── Exchange vs cold wallet ratio ─────────────────────────────────────────
-    exchange_count = sum(1 for w in top_wallets if w["is_exchange"])
-    pct_exchange   = round(exchange_count / 50 * 100, 1)
-    pct_cold       = round((50 - exchange_count) / 50 * 100, 1)
+def _oft_flow_severity(notional_usd: float) -> str:
+    """Classify flow severity by notional size."""
+    if notional_usd >= 1_000_000:
+        return "high"
+    if notional_usd >= 300_000:
+        return "medium"
+    return "low"
 
-    # ── Net whale flow 7d: top-10 whales ─────────────────────────────────────
-    top10 = top_wallets[:10]
-    net_whale_flow_7d = round(
-        sum(rng.uniform(-5_000_000, 8_000_000) for _ in top10), 2
+
+def _oft_aggregate_by_strike(trades: list) -> dict:
+    """Aggregate call/put OI and notional by strike."""
+    strikes: dict = {}
+    for t in trades:
+        s = t["strike"]
+        if s not in strikes:
+            strikes[s] = {"call_notional": 0.0, "put_notional": 0.0, "call_oi": 0.0, "put_oi": 0.0}
+        if t["type"] == "call":
+            strikes[s]["call_notional"] += t["notional_usd"]
+            strikes[s]["call_oi"] += t["qty"]
+        else:
+            strikes[s]["put_notional"] += t["notional_usd"]
+            strikes[s]["put_oi"] += t["qty"]
+    return strikes
+
+
+def _oft_net_gamma(call_oi: float, call_delta: float, put_oi: float, put_delta: float) -> float:
+    """Dealer net gamma proxy: call OI * call_delta - put OI * |put_delta|."""
+    return round(call_oi * call_delta - put_oi * abs(put_delta), 2)
+
+
+
+# ── Options Flow Tracker ───────────────────────────────────────────────────────
+
+import random as _random
+
+# Simulated instruments pool
+_OFT_EXPIRIES = ["28MAR26", "25APR26", "27JUN26", "26SEP26", "25DEC26"]
+_OFT_STRIKES_BTC = [60000, 65000, 70000, 75000, 80000, 85000, 90000, 95000, 100000]
+_OFT_EXCHANGES = ["deribit", "lyra"]
+_OFT_SEED = 20260316  # deterministic
+
+
+def _oft_make_instrument(strike: int, expiry: str, opt_type: str) -> str:
+    return f"BTC-{expiry}-{strike}-{opt_type[0].upper()}"
+
+
+def _oft_skew_signal(call_vol: float, put_vol: float) -> str:
+    """Classify call/put skew as bullish/bearish/neutral."""
+    if put_vol == 0:
+        return "bullish"
+    ratio = call_vol / put_vol
+    if ratio > 1.25:
+        return "bullish"
+    if ratio < 0.8:
+        return "bearish"
+    return "neutral"
+
+
+def _oft_skew_ratio(call_vol: float, put_vol: float) -> float:
+    """Call-to-put volume ratio, capped at 10."""
+    if put_vol == 0:
+        return 10.0
+    return round(min(call_vol / put_vol, 10.0), 3)
+
+
+def _oft_unusual_threshold(notional: float, mean_notional: float) -> bool:
+    """True if trade is 3x above mean notional for this expiry."""
+    return notional > mean_notional * 3.0
+
+
+def _oft_net_flow(call_vol: float, put_vol: float) -> float:
+    """Net options flow: positive = net call buying."""
+    return round(call_vol - put_vol, 2)
+
+
+def _oft_dominant_expiry(skew_by_expiry: dict) -> str:
+    """Expiry with highest combined volume."""
+    if not skew_by_expiry:
+        return ""
+    return max(
+        skew_by_expiry,
+        key=lambda e: skew_by_expiry[e]["call_volume_usd"] + skew_by_expiry[e]["put_volume_usd"],
     )
 
-    whale_signal = _wwt_whale_signal(net_whale_flow_7d)
+
+def _oft_skew_percentile(ratio: float) -> float:
+    """Map call/put ratio to 0-100 percentile (simulated)."""
+    # 0.5 ratio → 20th pct, 1.0 → 50th, 2.0 → 80th
+    import math as _math
+    raw = 50.0 + 30.0 * _math.log(max(ratio, 0.01)) / _math.log(4)
+    return round(max(0.0, min(100.0, raw)), 1)
+
+
+def _oft_simulate_large_trades(seed: int = _OFT_SEED) -> list:
+    """Generate deterministic simulated large options trades (>$100k notional)."""
+    rng = _random.Random(seed)
+    now = 1742080000.0  # fixed reference timestamp (2026-03-16)
+    trades = []
+    for i in range(40):
+        expiry = rng.choice(_OFT_EXPIRIES)
+        strike = rng.choice(_OFT_STRIKES_BTC)
+        opt_type = rng.choice(["call", "put"])
+        exchange = rng.choice(_OFT_EXCHANGES)
+        contracts = rng.randint(5, 80)
+        btc_price = rng.uniform(75000, 95000)
+        iv = round(rng.uniform(0.45, 1.20), 4)
+        delta = round(rng.uniform(0.1, 0.9), 3)
+        premium_per = round(rng.uniform(500, 4000), 2)
+        notional_usd = round(contracts * btc_price * 0.001, 2)  # 0.001 BTC per contract
+        # Ensure >$100k
+        if notional_usd < 100_000:
+            notional_usd = round(notional_usd + 100_000, 2)
+        side = rng.choice(["buy", "sell"])
+        ts = now - rng.uniform(0, 3600 * 24)
+        trades.append({
+            "ts": round(ts, 3),
+            "exchange": exchange,
+            "instrument": _oft_make_instrument(strike, expiry, opt_type),
+            "type": opt_type,
+            "strike": strike,
+            "expiry": expiry,
+            "side": side,
+            "contracts": contracts,
+            "btc_price": round(btc_price, 2),
+            "premium_per_contract": premium_per,
+            "notional_usd": notional_usd,
+            "iv": iv,
+            "delta": delta,
+        })
+    # Sort newest first
+    trades.sort(key=lambda t: t["ts"], reverse=True)
+    return trades
+
+
+def _oft_compute_skew_by_expiry(trades: list) -> dict:
+    """Aggregate call/put volume by expiry, compute skew."""
+    agg: dict = {}
+    for t in trades:
+        exp = t["expiry"]
+        if exp not in agg:
+            agg[exp] = {"call_volume_usd": 0.0, "put_volume_usd": 0.0}
+        key = "call_volume_usd" if t["type"] == "call" else "put_volume_usd"
+        agg[exp][key] += t["notional_usd"]
+
+    result = {}
+    for exp, vols in agg.items():
+        cv = round(vols["call_volume_usd"], 2)
+        pv = round(vols["put_volume_usd"], 2)
+        result[exp] = {
+            "call_volume_usd": cv,
+            "put_volume_usd": pv,
+            "skew_ratio": _oft_skew_ratio(cv, pv),
+            "skew_signal": _oft_skew_signal(cv, pv),
+            "net_flow_usd": _oft_net_flow(cv, pv),
+        }
+    return result
+
+
+def _oft_detect_unusual_flow(trades: list) -> list:
+    """Flag trades with notional > 3x mean as unusual flow alerts."""
+    if not trades:
+        return []
+    mean_n = sum(t["notional_usd"] for t in trades) / len(trades)
+    alerts = []
+    for t in trades:
+        if _oft_unusual_threshold(t["notional_usd"], mean_n):
+            severity = "critical" if t["notional_usd"] > mean_n * 6 else "high"
+            alerts.append({
+                "ts": t["ts"],
+                "instrument": t["instrument"],
+                "exchange": t["exchange"],
+                "notional_usd": t["notional_usd"],
+                "side": t["side"],
+                "type": t["type"],
+                "severity": severity,
+                "reason": (
+                    f"Unusual {t['type']} {t['side']}: "
+                    f"${t['notional_usd']:,.0f} notional "
+                    f"({t['notional_usd']/mean_n:.1f}x avg)"
+                ),
+            })
+    alerts.sort(key=lambda a: a["notional_usd"], reverse=True)
+    return alerts
+
+
+def _oft_build_strike_heatmap(trades: list) -> dict:
+    """Aggregate call/put OI-proxy (notional) per strike."""
+    hm: dict = {}
+    for t in trades:
+        k = str(t["strike"])
+        if k not in hm:
+            hm[k] = {"call_notional_usd": 0.0, "put_notional_usd": 0.0, "net_flow_usd": 0.0}
+        if t["type"] == "call":
+            hm[k]["call_notional_usd"] = round(hm[k]["call_notional_usd"] + t["notional_usd"], 2)
+        else:
+            hm[k]["put_notional_usd"] = round(hm[k]["put_notional_usd"] + t["notional_usd"], 2)
+        sign = 1 if t["side"] == "buy" else -1
+        hm[k]["net_flow_usd"] = round(hm[k]["net_flow_usd"] + sign * t["notional_usd"], 2)
+    # Add dominant type per strike
+    for k, v in hm.items():
+        v["dominant"] = "call" if v["call_notional_usd"] >= v["put_notional_usd"] else "put"
+        v["call_notional_usd"] = round(v["call_notional_usd"], 2)
+        v["put_notional_usd"] = round(v["put_notional_usd"], 2)
+    return hm
+
+
+async def compute_options_flow_tracker() -> dict:
+    """
+    Options flow tracker: aggregate large trades (>$100k notional) across
+    Deribit/Lyra, call/put skew by expiry, unusual flow alerts,
+    positioning heat map by strike.
+    Uses simulated data — no real API calls needed.
+    """
+    trades = _oft_simulate_large_trades()
+    skew_by_expiry = _oft_compute_skew_by_expiry(trades)
+    unusual_alerts = _oft_detect_unusual_flow(trades)
+    strike_heatmap = _oft_build_strike_heatmap(trades)
+
+    total_call_vol = sum(v["call_volume_usd"] for v in skew_by_expiry.values())
+    total_put_vol = sum(v["put_volume_usd"] for v in skew_by_expiry.values())
+    overall_ratio = _oft_skew_ratio(total_call_vol, total_put_vol)
+    overall_signal = _oft_skew_signal(total_call_vol, total_put_vol)
+    dominant_exp = _oft_dominant_expiry(skew_by_expiry)
+    skew_pct = _oft_skew_percentile(overall_ratio)
+
+    desc = (
+        f"{overall_signal.capitalize()} options flow: "
+        f"${total_call_vol/1e6:.1f}M calls vs ${total_put_vol/1e6:.1f}M puts "
+        f"(ratio {overall_ratio:.2f}x), {len(unusual_alerts)} unusual alerts, "
+        f"dominant expiry {dominant_exp}"
+    )
 
     return {
-        "top_wallets":       top_wallets,
-        "large_moves_24h":   large_moves_24h,
-        "age_distribution":  age_distribution,
-        "pct_exchange":      pct_exchange,
-        "pct_cold":          pct_cold,
-        "net_whale_flow_7d": net_whale_flow_7d,
-        "whale_signal":      whale_signal,
+        "large_trades": trades[:20],  # top 20 most recent
+        "skew_by_expiry": skew_by_expiry,
+        "unusual_flow_alerts": unusual_alerts[:10],
+        "strike_heatmap": strike_heatmap,
+        "summary": {
+            "total_call_volume_usd": round(total_call_vol, 2),
+            "total_put_volume_usd": round(total_put_vol, 2),
+            "overall_skew_ratio": overall_ratio,
+            "net_flow_direction": overall_signal,
+            "dominant_expiry": dominant_exp,
+            "skew_percentile": skew_pct,
+            "unusual_activity_count": len(unusual_alerts),
+            "total_trades_analyzed": len(trades),
+            "exchanges": list({t["exchange"] for t in trades}),
+        },
+        "description": desc,
     }
+
