@@ -5,56 +5,12 @@
 const API = window.location.protocol + '//' + window.location.host + '/api';
 const WS  = (window.location.protocol === 'https:' ? 'wss://' : 'ws://') + window.location.host;
 
-const REFRESH_MS   = 30000;  // poll interval (30s — sequential loading, avoid socket exhaustion)
+const REFRESH_MS   = 15000;  // poll interval (15s to avoid backend overload)
 const TRADE_MAX    = 100;    // max rows in tape
 
 
 const ALERT_MAX    = 50;     // max rows in alerts feed
 const WHALE_USD    = 10000;  // highlight threshold
-
-// ── WS Stats ──────────────────────────────────────────────────────────────────
-async function renderWsStats() {
-  const data = await apiFetch('/ws-stats');
-  const el = document.getElementById('ws-rate');
-  if (!el) return;
-  if (!data) { el.textContent = '— msg/s'; return; }
-
-  const rate = data.messages_per_sec ?? 0;
-  const conns = data.connections ?? 0;
-
-  let rateText;
-  if (rate >= 1000) rateText = (rate / 1000).toFixed(1) + 'k msg/s';
-  else if (rate > 0) rateText = rate.toFixed(1) + ' msg/s';
-  else rateText = '0 msg/s';
-
-  const col = rate >= 100 ? 'var(--green)' : rate >= 10 ? 'var(--yellow)' : rate > 0 ? 'var(--muted)' : 'var(--muted)';
-  el.textContent = `${conns}cx · ${rateText}`;
-  el.style.color = col;
-  el.title = `WebSocket: ${conns} connection(s) · ${rateText} · uptime ${Math.round(data.uptime_sec || 0)}s · total ${data.total_messages ?? 0} msgs`;
-}
-
-// ── Theme ─────────────────────────────────────────────────────────────────────
-const THEME_KEY = 'theme';
-
-function applyTheme(theme) {
-  document.documentElement.setAttribute('data-theme', theme);
-  const btn = document.getElementById('theme-toggle');
-  if (btn) btn.textContent = theme === 'dark' ? '☀' : '☾';
-}
-
-function toggleTheme() {
-  const current = localStorage.getItem(THEME_KEY) || 'dark';
-  const next = current === 'dark' ? 'light' : 'dark';
-  localStorage.setItem(THEME_KEY, next);
-  applyTheme(next);
-}
-
-function initTheme() {
-  const saved = localStorage.getItem(THEME_KEY) || 'dark';
-  applyTheme(saved);
-  const btn = document.getElementById('theme-toggle');
-  if (btn) btn.addEventListener('click', toggleTheme);
-}
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let activeSymbol = null;
@@ -1443,90 +1399,6 @@ async function renderMarketRegime() {
   `;
 }
 
-// ── Momentum Rank ─────────────────────────────────────────────────────────────
-async function renderMomentumRank() {
-  const data = await apiFetch('/momentum-rank');
-  const el    = document.getElementById('momentum-rank-content');
-  const badge = document.getElementById('momentum-rank-badge');
-  if (!el) return;
-  if (!data) { setErr('momentum-rank-content'); return; }
-
-  const ranked = data.ranked || [];
-  if (ranked.length === 0) {
-    el.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:8px 0">No data</div>';
-    return;
-  }
-
-  // Badge: top symbol + direction
-  const top = ranked[0];
-  if (badge && top) {
-    const dir = top.direction;
-    badge.textContent = top.symbol.replace('USDT', '') + ' #1';
-    badge.className = 'card-badge ' + (dir === 'bull' ? 'badge-green' : dir === 'bear' ? 'badge-red' : 'badge-blue');
-    badge.style.display = 'inline-block';
-  }
-
-  const MEDAL = ['🥇', '🥈', '🥉', ''];
-
-  function fmtPct(v) {
-    if (v == null) return '<span style="color:var(--muted)">—</span>';
-    const sign = v > 0 ? '+' : '';
-    const col  = v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--muted)';
-    return `<span style="color:${col}">${sign}${v.toFixed(2)}%</span>`;
-  }
-
-  function dirIcon(d) {
-    return d === 'bull' ? '▲' : d === 'bear' ? '▼' : '—';
-  }
-  function dirCol(d) {
-    return d === 'bull' ? 'var(--green)' : d === 'bear' ? 'var(--red)' : 'var(--muted)';
-  }
-
-  // Score bar: scale ±3% to full width
-  function scoreBar(score) {
-    const MAX = 3.0;
-    const pct  = Math.min(Math.abs(score) / MAX * 100, 100);
-    const col  = score > 0 ? 'var(--green)' : score < 0 ? 'var(--red)' : 'var(--bg3)';
-    const dir  = score >= 0 ? 'left' : 'right';
-    return `<div style="background:var(--bg3);border-radius:2px;height:6px;width:80px;display:inline-block;vertical-align:middle;overflow:hidden">
-      <div style="background:${col};width:${pct.toFixed(1)}%;height:100%;float:${dir};border-radius:2px;transition:width .3s"></div>
-    </div>`;
-  }
-
-  let html = `
-    <table style="width:100%;border-collapse:collapse">
-      <thead><tr style="color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.05em">
-        <th style="text-align:left;padding:2px 4px 6px 0;font-weight:400">#</th>
-        <th style="text-align:left;padding:2px 4px 6px;font-weight:400">symbol</th>
-        <th style="text-align:center;padding:2px 4px 6px;font-weight:400">dir</th>
-        <th style="text-align:right;padding:2px 4px 6px;font-weight:400">5m</th>
-        <th style="text-align:right;padding:2px 4px 6px;font-weight:400">15m</th>
-        <th style="text-align:right;padding:2px 0 6px 4px;font-weight:400">1h</th>
-      </tr></thead>
-      <tbody>`;
-
-  for (const r of ranked) {
-    const medal  = MEDAL[r.rank - 1] ?? '';
-    const symLbl = r.symbol.replace('USDT', '');
-    html += `<tr style="border-top:1px solid var(--border)">
-      <td style="padding:5px 4px 5px 0;font-size:12px">${medal || r.rank}</td>
-      <td style="padding:5px 4px;font-weight:600;font-size:11px">
-        ${symLbl}
-        <div style="margin-top:2px">${scoreBar(r.score)}</div>
-        <div style="font-size:9px;color:var(--muted);margin-top:1px">score: ${r.score > 0 ? '+' : ''}${r.score.toFixed(3)}</div>
-      </td>
-      <td style="text-align:center;padding:5px 4px;color:${dirCol(r.direction)};font-size:13px;font-weight:700">${dirIcon(r.direction)}</td>
-      <td style="text-align:right;padding:5px 4px;font-size:11px">${fmtPct(r.pct_5m)}</td>
-      <td style="text-align:right;padding:5px 4px;font-size:11px">${fmtPct(r.pct_15m)}</td>
-      <td style="text-align:right;padding:5px 0 5px 4px;font-size:11px">${fmtPct(r.pct_1h)}</td>
-    </tr>`;
-  }
-
-  html += `</tbody></table>
-    <div style="font-size:9px;color:var(--muted);margin-top:6px">score = 0.5×5m + 0.3×15m + 0.2×1h</div>`;
-  el.innerHTML = html;
-}
-
 // ── Render: Momentum ──────────────────────────────────────────────────────────
 async function renderMomentum() {
   const data = await apiFetch('/momentum');
@@ -2653,15 +2525,9 @@ async function renderTopMovers() {
 }
 
 // ── Main Refresh Loop ─────────────────────────────────────────────────────────
-let _refreshRunning = false;
-
 async function refresh() {
   if (!activeSymbol) return;
-  if (_refreshRunning) return;  // prevent concurrent refreshes stacking up
-  _refreshRunning = true;
-
   const safe = fn => fn().catch(e => console.warn('[refresh]', fn.name, e.message));
-  const delay = ms => new Promise(r => setTimeout(r, ms));
 
   try {
     // Batch 1: core price charts
@@ -2737,7 +2603,6 @@ async function init() {
   safeInit(initVolumeProfileChart);
   safeInit(initRegimeTimelineChart);
   safeInit(initAdaptiveVpChart);
-  initTheme();
   connectAlerts();
 
   // After 10s replace any still-Loading cards with Error badge
