@@ -72,8 +72,7 @@ from metrics import (
     compute_layer2_metrics,
     compute_derivatives_heatmap,
     compute_network_health_score,
-    compute_protocol_revenue_card,
-    compute_leverage_ratio_heatmap,
+    compute_nft_market_pulse,
 )
 
 router = APIRouter(prefix="/api")
@@ -5316,10 +5315,10 @@ async def derivatives_heatmap_endpoint(
 ):
     """OI heatmap by strike and expiry with max pain and GEX for BTC/ETH options."""
     data = await compute_derivatives_heatmap(asset=asset)
-@router.get("/staking-yield-tracker")
-async def staking_yield_tracker_endpoint():
-    """Staking yield tracker: APY trends, validator growth, real yield, concentration risk."""
-    data = await compute_staking_yield_tracker()
+@router.get("/nft-market-pulse")
+async def nft_market_pulse_endpoint():
+    """NFT market pulse: floor trends, wash-adjusted volume, blue-chip index, liquidity signals."""
+    data = await compute_nft_market_pulse()
     return JSONResponse(data)
 @router.get("/network-health-score")
 async def network_health_score_endpoint():

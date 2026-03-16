@@ -5670,8 +5670,7 @@ async def compute_miner_reserve() -> dict:
 
 
 # Layer 2 Metrics helpers  (_l2_)
-# =====================================================
-def _l2_tvl_share(chains: dict) -> dict:
+# ==============================================def _l2_tvl_share(chains: dict) -> dict:
     """Return each chain's % share of total TVL. Empty dict if input empty."""
     if not chains:
         return {}
@@ -5757,8 +5756,7 @@ def _l2_tvl_change_pct(current: float, previous: float) -> float:
 
 
 # =====================================================# Gas Fee Predictor helpers  (_gf_)
-# =====================================================
-def _gf_base_fee_trend(fees: list) -> str:
+# ==============================================def _gf_base_fee_trend(fees: list) -> str:
     """
     Linear regression slope over fee history.
     Returns 'rising' / 'falling' / 'stable' (|slope| < 0.5 Gwei/period).
@@ -5945,8 +5943,7 @@ async def compute_token_velocity_nvt() -> dict:
 
 
 # Layer 2 Metrics helpers  (_l2_)
-# =====================================================
-def _l2_tvl_share(chains: dict) -> dict:
+# ==============================================def _l2_tvl_share(chains: dict) -> dict:
     """Return each chain's % share of total TVL. Empty dict if input empty."""
     if not chains:
         return {}
@@ -6027,91 +6024,12 @@ def _l2_rank_chains(chains: dict) -> list:
 def _l2_tvl_change_pct(current: float, previous: float) -> float:
     """Percentage change from previous to current TVL."""
 # ╔══════════════════════════════════════════════════════════════════════════╗
-# ║  PROTOCOL REVENUE CARD                                                  ║
+# =====================================================# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  NFT MARKET PULSE                                                       ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
-def _pr_annualized_revenue(daily_revenue: float) -> float:
-    """Annualize a daily revenue figure (× 365)."""
-    return float(daily_revenue * 365.0)
-
-
-def _pr_pe_ratio(market_cap: float, annualized_revenue: float) -> float:
-    """P/E-style ratio: market cap divided by annualized revenue.
-    Returns 0.0 for zero or negative revenue.
-    """
-    if annualized_revenue <= 0:
-        return 0.0
-    return float(market_cap / annualized_revenue)
-
-
-def _pr_revenue_growth(current: float, previous: float) -> float:
-    """% revenue growth from previous period to current."""
-# ║  LAYER 2 METRICS AGGREGATOR                                             ║
-# ╚══════════════════════════════════════════════════════════════════════════╝
-
-def _l2_tvl_share(chains: dict) -> dict:
-    """Return each chain's % share of total TVL."""
-    if not chains:
-        return {}
-    total = sum(chains.values())
-    if total == 0:
-        return {k: 0.0 for k in chains}
-    return {k: float(v / total * 100) for k, v in chains.items()}
-
-
-def _l2_bridge_flow_direction(flow_usd: float, threshold: float = 1_000_000) -> str:
-    """Classify bridge flow as inflow / outflow / neutral."""
-    if flow_usd > threshold:
-        return "inflow"
-    if flow_usd < -threshold:
-        return "outflow"
-    return "neutral"
-
-
-def _l2_gas_savings_pct(l1_gas_usd: float, l2_gas_usd: float) -> float:
-    """% gas savings vs L1, clamped to [0, 100]."""
-    if l1_gas_usd <= 0:
-        return 0.0
-    raw = (l1_gas_usd - l2_gas_usd) / l1_gas_usd * 100.0
-    return float(max(0.0, min(100.0, raw)))
-
-
-def _l2_momentum_score(
-    tvl_change_24h: float,
-    tvl_change_7d: float,
-    tx_growth: float,
-) -> float:
-    """Composite momentum [0-100]: 30% 24h + 50% 7d + 20% tx growth."""
-    def _clamp(v: float) -> float:
-        return max(-1.0, min(1.0, v))
-
-    n24 = _clamp(tvl_change_24h / 5.0)
-    n7d = _clamp(tvl_change_7d / 15.0)
-    ntx = _clamp(tx_growth / 0.5)
-    composite = 0.30 * n24 + 0.50 * n7d + 0.20 * ntx
-    return float((composite + 1.0) / 2.0 * 100.0)
-
-
-def _l2_growth_label(momentum: float) -> str:
-    """5-level growth label from momentum score."""
-    if momentum >= 70.0:
-        return "strong_growth"
-    if momentum >= 50.0:
-        return "growing"
-    if momentum > 35.0:
-        return "neutral"
-    return "declining"
-
-
-def _l2_rank_chains(chains: dict) -> list:
-    """Sort chains by tvl_usd descending; return list of (name, data) tuples."""
-    if not chains:
-        return []
-    return sorted(chains.items(), key=lambda x: x[1].get("tvl_usd", 0), reverse=True)
-
-
-def _l2_tvl_change_pct(current: float, previous: float) -> float:
-    """% change from previous to current TVL."""
+def _nft_floor_change_pct(current: float, previous: float) -> float:
+    """% change in floor price from previous to current."""
 # ║  MACRO LIQUIDITY INDICATOR                                              ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
@@ -6122,17 +6040,78 @@ def _ml_m2_growth_rate(current: float, previous: float) -> float:
     return float((current - previous) / previous * 100.0)
 
 
-def _sy_risk_label(concentration_score: float) -> str:
-    """Risk label from concentration score: high (>=60), medium (>=30), low."""
-    if concentration_score >= 60.0:
-        return "high"
-    if concentration_score >= 30.0:
-        return "medium"
-    return "low"
+def _nft_wash_adjusted_volume(raw_volume: float, wash_rate: float) -> float:
+    """Remove wash-traded volume; wash_rate clamped to [0, 1]."""
+    rate = max(0.0, min(1.0, wash_rate))
+    return float(raw_volume * (1.0 - rate))
 
 
-def _sy_apy_zscore(current_apy: float, history: list) -> float:
-    """Z-score of current APY vs historical distribution."""
+def _nft_bluechip_index(floor_prices: dict, reference: float = 500.0) -> float:
+    """Composite index [0-100] from sum of floor prices vs reference total."""
+    if not floor_prices:
+        return 0.0
+    total = sum(floor_prices.values())
+    return float(min(100.0, total / reference * 100.0))
+
+
+def _nft_btc_correlation(index_series: list, btc_series: list) -> float:
+    """Pearson correlation between NFT index and BTC price series."""
+    if len(index_series) != len(btc_series) or len(index_series) < 2:
+        return 0.0
+    import math
+    n = len(index_series)
+    mean_i = sum(index_series) / n
+    mean_b = sum(btc_series) / n
+    num = sum((a - mean_i) * (b - mean_b) for a, b in zip(index_series, btc_series))
+    std_i = math.sqrt(sum((a - mean_i) ** 2 for a in index_series))
+    std_b = math.sqrt(sum((b - mean_b) ** 2 for b in btc_series))
+    if std_i == 0 or std_b == 0:
+        return 0.0
+    return float(num / (std_i * std_b))
+
+
+def _nft_listing_sales_ratio(listings: int, sales: int) -> float:
+    """Listings-to-sales ratio; returns 999.0 when sales == 0."""
+    if sales == 0:
+        return 999.0
+    return float(listings / sales)
+
+
+def _nft_liquidity_label(ratio: float) -> str:
+    """Liquidity label from listing/sales ratio."""
+    if ratio < 10.0:
+        return "hot"
+    if ratio < 20.0:
+        return "warm"
+    if ratio < 40.0:
+        return "cool"
+    return "cold"
+
+
+def _nft_trend_direction(prices: list) -> str:
+    """Linear-regression trend of a price series: rising / falling / stable."""
+    if len(prices) < 2:
+        return "stable"
+    import math
+    n = len(prices)
+    xs = list(range(n))
+    mean_x = (n - 1) / 2.0
+    mean_y = sum(prices) / n
+    num = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, prices))
+    den = sum((x - mean_x) ** 2 for x in xs)
+    if den == 0:
+        return "stable"
+    slope = num / den
+    threshold = (max(prices) - min(prices)) * 0.01
+    if slope > threshold:
+        return "rising"
+    if slope < -threshold:
+        return "falling"
+    return "stable"
+
+
+def _nft_volume_zscore(current: float, history: list) -> float:
+    """Z-score of current volume vs history."""
 def _ml_fed_balance_delta(current: float, previous: float) -> float:
     """Absolute change in Fed balance sheet size (positive = expanding)."""
     return float(current - previous)
@@ -6208,6 +6187,7 @@ def _ml_zscore(current: float, history: list) -> float:
         return 0.0
     import math
     mean = sum(history) / len(history)
+    std = math.sqrt(sum((v - mean) ** 2 for v in history) / len(history))
     std  = math.sqrt(sum((v - mean) ** 2 for v in history) / len(history))
     if std == 0:
         return 0.0
@@ -6334,8 +6314,7 @@ async def compute_macro_liquidity_indicator() -> dict:
 
 
 # =====================================================# Validator Activity helpers  (_va_)
-# =====================================================
-def _va_effectiveness_rate(attested: int, total: int) -> float:
+# ==============================================def _va_effectiveness_rate(attested: int, total: int) -> float:
     """Attestation effectiveness: attested / total * 100, clamped [0, 100]."""
     if total <= 0:
         return 0.0
@@ -7281,185 +7260,136 @@ async def compute_layer2_metrics() -> dict:
     }
 
 
-def _pr_momentum_score(
-    d1_growth: float,
-    d7_growth: float,
-    d30_growth: float,
-) -> float:
-    """Composite momentum [0-100]: 40% 1d + 35% 7d + 25% 30d growth signals."""
-    def _clamp(v: float) -> float:
-        return max(-1.0, min(1.0, v))
+async def compute_nft_market_pulse() -> dict:
+    """NFT market pulse: floor trends, wash-adjusted volume, blue-chip index, liquidity."""
+    import httpx, datetime, random, math
 
-    n1  = _clamp(d1_growth  / 20.0)
-    n7  = _clamp(d7_growth  / 30.0)
-    n30 = _clamp(d30_growth / 50.0)
-    composite = 0.40 * n1 + 0.35 * n7 + 0.25 * n30
-    return float((composite + 1.0) / 2.0 * 100.0)
-
-
-def _pr_valuation_signal(pe_ratio: float) -> str:
-    """Valuation signal: undervalued (<10), fair (10–25), overvalued (>25)."""
-    if pe_ratio < 10.0:
-        return "undervalued"
-    if pe_ratio < 25.0:
-        return "fair"
-    return "overvalued"
-
-
-def _pr_divergence(revenue_change_pct: float, price_change_pct: float) -> float:
-    """Revenue-vs-price divergence: positive means revenue outpacing price."""
-    return float(revenue_change_pct - price_change_pct)
-
-
-def _pr_rank_protocols(protocols: dict) -> list:
-    """Sort protocols by daily_revenue_usd descending; return (name, data) tuples."""
-    if not protocols:
-        return []
-    return sorted(
-        protocols.items(),
-        key=lambda x: x[1].get("daily_revenue_usd", 0),
-        reverse=True,
-    )
-
-
-def _pr_growth_label(momentum: float) -> str:
-    """Growth label from momentum score [0-100]."""
-    if momentum >= 65.0:
-        return "accelerating"
-    if momentum >= 50.0:
-        return "growing"
-    if momentum >= 35.0:
-        return "stable"
-    return "declining"
-
-
-async def compute_protocol_revenue_card() -> dict:
-    """Top 10 DeFi protocols by revenue with P/E ratios and growth momentum."""
-    import httpx, datetime, random
-
-    # Baseline data — could be enriched from Token Terminal / DeFi Llama API
-    PROTOCOLS = {
-        "Uniswap":   {"daily": 1_200_000, "mcap": 5_000_000_000, "price": 10.00,
-                      "g7": 5.2,  "g30": 12.1, "p7": 3.1},
-        "MakerDAO":  {"daily":   950_000, "mcap": 2_800_000_000, "price": 3100.0,
-                      "g7": 3.5,  "g30":  8.2, "p7": 1.2},
-        "Aave":      {"daily":   720_000, "mcap": 1_800_000_000, "price":  120.0,
-                      "g7": 9.1,  "g30": 18.4, "p7": 5.0},
-        "Curve":     {"daily":   580_000, "mcap":   600_000_000, "price":   0.38,
-                      "g7": 1.2,  "g30": -2.1, "p7": -3.5},
-        "GMX":       {"daily":   450_000, "mcap":   500_000_000, "price":  25.00,
-                      "g7": -1.5, "g30": -4.2, "p7": -2.0},
-        "Lido":      {"daily":   380_000, "mcap": 2_100_000_000, "price":   2.30,
-                      "g7": 2.1,  "g30":  5.5, "p7": 4.0},
-        "Compound":  {"daily":   290_000, "mcap":   450_000_000, "price":  60.00,
-                      "g7": -3.2, "g30": -8.5, "p7": -5.0},
-        "dYdX":      {"daily":   210_000, "mcap":   320_000_000, "price":   3.20,
-                      "g7": 6.5,  "g30": 14.2, "p7": 7.0},
-        "Convex":    {"daily":   180_000, "mcap":   280_000_000, "price":   0.28,
-                      "g7": -0.8, "g30": -3.5, "p7": -4.0},
-        "Synthetix": {"daily":   140_000, "mcap":   380_000_000, "price":   2.80,
-                      "g7": 1.0,  "g30":  2.5, "p7": 0.5},
+    # Top 5 collections with mock baseline data
+    COLLECTIONS = {
+        "Bored Ape Yacht Club": {
+            "floor": 12.5, "vol": 450.0, "wash": 0.156,
+            "listings": 1200, "sales": 45,
+            "d24": -2.3, "d7": 5.1,
+            "history_floors": [11.8, 12.0, 11.9, 12.1, 12.3, 12.4, 12.5],
+        },
+        "CryptoPunks": {
+            "floor": 42.0, "vol": 1260.0, "wash": 0.167,
+            "listings": 900, "sales": 30,
+            "d24": 0.5, "d7": 2.4,
+            "history_floors": [41.0, 41.2, 41.4, 41.5, 41.7, 41.9, 42.0],
+        },
+        "Azuki": {
+            "floor": 5.8, "vol": 290.0, "wash": 0.155,
+            "listings": 1800, "sales": 32,
+            "d24": -1.7, "d7": -3.2,
+            "history_floors": [6.0, 5.95, 5.9, 5.88, 5.85, 5.82, 5.8],
+        },
+        "Pudgy Penguins": {
+            "floor": 8.3, "vol": 415.0, "wash": 0.157,
+            "listings": 600, "sales": 50,
+            "d24": 3.1, "d7": 7.5,
+            "history_floors": [7.7, 7.8, 7.9, 8.0, 8.1, 8.2, 8.3],
+        },
+        "Doodles": {
+            "floor": 2.1, "vol": 84.0, "wash": 0.167,
+            "listings": 2200, "sales": 22,
+            "d24": -0.9, "d7": -1.4,
+            "history_floors": [2.13, 2.12, 2.11, 2.11, 2.10, 2.10, 2.1],
+        },
     }
 
     today = datetime.date.today()
-    dates_30d = [
-        (today - datetime.timedelta(days=30 - i * 5)).isoformat()
-        for i in range(7)
-    ]
+    dates_7d = [(today - datetime.timedelta(days=6 - i)).isoformat() for i in range(7)]
 
-    protocols_out = {}
-    pe_list = []
-
-    ranked = _pr_rank_protocols({n: {"daily_revenue_usd": d["daily"]} for n, d in PROTOCOLS.items()})
-    rank_map = {name: idx + 1 for idx, (name, _) in enumerate(ranked)}
-
-    for name, d in PROTOCOLS.items():
-        annual  = _pr_annualized_revenue(d["daily"])
-        pe      = _pr_pe_ratio(d["mcap"], annual)
-        vsig    = _pr_valuation_signal(pe)
-        div7    = _pr_divergence(d["g7"], d["p7"])
-        # approximate 1d growth from 7d
-        g1_est  = d["g7"] / 7.0
-        mom     = _pr_momentum_score(g1_est, d["g7"], d["g30"])
-        glabel  = _pr_growth_label(mom)
-
-        pe_list.append(pe)
-        protocols_out[name] = {
-            "daily_revenue_usd":        d["daily"],
-            "weekly_revenue_usd":       round(d["daily"] * 7, 0),
-            "monthly_revenue_usd":      round(d["daily"] * 30, 0),
-            "annualized_revenue_usd":   round(annual, 0),
-            "market_cap_usd":           d["mcap"],
-            "token_price_usd":          d["price"],
-            "pe_ratio":                 round(pe, 2),
-            "valuation_signal":         vsig,
-            "revenue_growth_7d_pct":    d["g7"],
-            "revenue_growth_30d_pct":   d["g30"],
-            "price_change_7d_pct":      d["p7"],
-            "divergence_7d":            round(div7, 2),
-            "momentum_score":           round(mom, 1),
-            "growth_label":             glabel,
-            "rank":                     rank_map[name],
+    collections_out = {}
+    for name, d in COLLECTIONS.items():
+        adj_vol = _nft_wash_adjusted_volume(d["vol"], d["wash"])
+        lsr = _nft_listing_sales_ratio(d["listings"], d["sales"])
+        liq = _nft_liquidity_label(lsr)
+        trend = _nft_trend_direction(d["history_floors"])
+        history_7d = [
+            {"date": dates_7d[i], "floor_eth": round(d["history_floors"][i], 3)}
+            for i in range(7)
+        ]
+        collections_out[name] = {
+            "floor_eth": d["floor"],
+            "floor_change_24h_pct": d["d24"],
+            "floor_change_7d_pct": d["d7"],
+            "volume_24h_eth": d["vol"],
+            "volume_adjusted_eth": round(adj_vol, 2),
+            "wash_rate": d["wash"],
+            "listings": d["listings"],
+            "sales_24h": d["sales"],
+            "listing_sales_ratio": round(lsr, 2),
+            "liquidity": liq,
+            "trend": trend,
+            "history_7d": history_7d,
         }
 
-    # Aggregates
-    total_daily   = sum(d["daily"] for d in PROTOCOLS.values())
-    total_annual  = _pr_annualized_revenue(total_daily)
-    avg_pe        = sum(pe_list) / len(pe_list) if pe_list else 0.0
-    best_pe_proto = min(
-        (n for n in protocols_out if protocols_out[n]["pe_ratio"] > 0),
-        key=lambda n: protocols_out[n]["pe_ratio"],
-    )
-    best_growth   = max(protocols_out, key=lambda n: protocols_out[n]["momentum_score"])
-    top_proto     = ranked[0][0]
+    # Blue-chip index
+    floors = {n: d["floor"] for n, d in COLLECTIONS.items()}
+    idx_value = _nft_bluechip_index(floors)
 
-    # 30-day history (synthetic — scale daily revenue down for prior days)
-    history_30d = []
-    for i, date in enumerate(dates_30d):
-        scale = 0.94 + 0.06 * (i / 6)
-        day_daily  = total_daily * scale * (1 + random.uniform(-0.01, 0.01))
-        day_pe_avg = avg_pe * (1.0 + 0.05 * (1 - scale))
-        history_30d.append({
-            "date": date,
-            "total_daily_revenue_usd": round(day_daily, 0),
-            "avg_pe_ratio": round(day_pe_avg, 2),
+    # BTC correlation (7d synthetic series)
+    btc_7d = [65000 + i * 500 + random.uniform(-200, 200) for i in range(7)]
+    idx_7d_series = [
+        _nft_bluechip_index({n: d["history_floors"][i] for n, d in COLLECTIONS.items()})
+        for i in range(7)
+    ]
+    btc_corr = _nft_btc_correlation(idx_7d_series, btc_7d)
+    idx_prev = _nft_bluechip_index({n: d["history_floors"][0] for n, d in COLLECTIONS.items()})
+    idx_change_24h = _nft_floor_change_pct(idx_value, idx_prev)
+    idx_trend = _nft_trend_direction(idx_7d_series)
+
+    # Market aggregate
+    total_vol = sum(d["vol"] for d in COLLECTIONS.values())
+    total_adj = sum(_nft_wash_adjusted_volume(d["vol"], d["wash"]) for d in COLLECTIONS.values())
+    wash_pct = (total_vol - total_adj) / total_vol * 100 if total_vol else 0.0
+    vol_history = [total_vol * (0.9 + 0.02 * i) for i in range(6)]
+    vol_z = _nft_volume_zscore(total_vol, vol_history)
+    avg_lsr = sum(
+        _nft_listing_sales_ratio(d["listings"], d["sales"]) for d in COLLECTIONS.values()
+    ) / len(COLLECTIONS)
+    mkt_liq = _nft_liquidity_label(avg_lsr)
+
+    # 7-day aggregate history
+    history_7d = []
+    for i in range(7):
+        day_floors = {n: d["history_floors"][i] for n, d in COLLECTIONS.items()}
+        day_idx = _nft_bluechip_index(day_floors)
+        day_vol = sum(d["vol"] * (0.95 + 0.05 * (i / 6)) for d in COLLECTIONS.values())
+        history_7d.append({
+            "date": dates_7d[i],
+            "index_value": round(day_idx, 1),
+            "total_volume_eth": round(day_vol, 1),
         })
 
-    top_by_revenue = [name for name, _ in ranked]
-
-    desc = (
-        f"DeFi revenue: {top_proto} leads "
-        f"${protocols_out[top_proto]['daily_revenue_usd'] / 1e6:.1f}M/day"
-        f" — sector avg P/E {avg_pe:.1f}x"
-    )
+    desc = f"NFT market: blue-chip index {idx_trend} — {mkt_liq} liquidity"
 
     return {
-        "protocols": protocols_out,
-        "aggregate": {
-            "total_daily_revenue_usd":      round(total_daily, 0),
-            "total_weekly_revenue_usd":     round(total_daily * 7, 0),
-            "total_monthly_revenue_usd":    round(total_daily * 30, 0),
-            "total_annualized_revenue_usd": round(total_annual, 0),
-            "avg_pe_ratio":                 round(avg_pe, 2),
-            "best_pe_protocol":             best_pe_proto,
-            "highest_growth_protocol":      best_growth,
-            "top_protocol":                 top_proto,
+        "collections": collections_out,
+        "bluechip_index": {
+            "value": round(idx_value, 1),
+            "change_24h_pct": round(idx_change_24h, 2),
+            "change_7d_pct": round(_nft_floor_change_pct(idx_value, idx_prev), 2),
+            "btc_correlation": round(btc_corr, 3),
+            "trend": idx_trend,
         },
-        "top_by_revenue": top_by_revenue,
-        "history_30d": history_30d,
+        "market": {
+            "total_volume_24h_eth": round(total_vol, 1),
+            "adjusted_volume_24h_eth": round(total_adj, 1),
+            "wash_trade_pct": round(wash_pct, 1),
+            "volume_zscore": round(vol_z, 3),
+            "avg_listing_sales_ratio": round(avg_lsr, 1),
+            "market_liquidity": mkt_liq,
+        },
+        "history_7d": history_7d,
         "description": desc,
     }
 
 
-# ── Network Health Score ───────────────────────────────────────────────────────
-# Composite 0-100 gauge combining four on-chain signals for Bitcoin network
-# health: hash rate trend, mempool congestion, active addresses, fee pressure.
-#
-# Weights: each component = 25%.
-# Labels: 90-100 excellent | 70-89 healthy | 50-69 neutral | 30-49 stressed | 0-29 critical
-#
-# Data: blockchain.info public charts API (free, no API key required).
-
+# BTC Dominance Tracker helpers  (_bd_)
+# =====================================================
 def _bd_dominance_pct(asset_market_cap: float, total_market_cap: float) -> float:
     """Return asset's % share of total market cap, clamped to [0, 100]."""
     if total_market_cap <= 0:
