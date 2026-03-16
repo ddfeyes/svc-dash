@@ -78,6 +78,7 @@ from metrics import (
     compute_cross_correlation_signal,
     compute_funding_term_structure,
     compute_liquidation_heatmap,
+    compute_exchange_flow_divergence,
 )
 
 router = APIRouter(prefix="/api")
@@ -5457,4 +5458,17 @@ async def liquidation_heatmap_matrix_endpoint(
     data = await compute_liquidation_heatmap(
         symbol=symbol, zone_threshold=zone_threshold
     )
+    return JSONResponse(data)
+
+
+@router.get("/exchange-flow-divergence")
+@cache_result(ttl_seconds=30)
+async def exchange_flow_divergence_endpoint():
+    """
+    Exchange Flow Divergence: Binance vs Bybit CVD comparison.
+
+    Returns CVD for each exchange, Pearson correlation, lead-lag detection,
+    and divergence score. Cache TTL: 30s.
+    """
+    data = await compute_exchange_flow_divergence()
     return JSONResponse(data)

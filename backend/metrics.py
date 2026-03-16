@@ -10850,3 +10850,180 @@ async def compute_liquidation_heatmap(
         "window_seconds": window_seconds,
         "zone_threshold": zone_threshold,
     }
+
+
+# ─── Exchange Flow Divergence (Wave 22 Task 5, Issue #109) ────────────────────
+
+def _pearson_correlation(xs: list, ys: list) -> float:
+    """Compute Pearson correlation between two lists. Returns 0.0 on degenerate input."""
+    import math as _math_pc
+    n = min(len(xs), len(ys))
+    if n < 2:
+        return 0.0
+    xs = xs[:n]
+    ys = ys[:n]
+    mean_x = sum(xs) / n
+    mean_y = sum(ys) / n
+    num = sum((xs[i] - mean_x) * (ys[i] - mean_y) for i in range(n))
+    denom_x = _math_pc.sqrt(sum((x - mean_x) ** 2 for x in xs))
+    denom_y = _math_pc.sqrt(sum((y - mean_y) ** 2 for y in ys))
+    if denom_x == 0 or denom_y == 0:
+        return 0.0
+    corr = num / (denom_x * denom_y)
+    # Clamp to [-1, 1] to avoid floating-point overshoot
+    return max(-1.0, min(1.0, corr))
+
+
+def _compute_cvd_from_trades(trades: list) -> float:
+    """Compute Cumulative Volume Delta from a list of trade dicts."""
+    cvd = 0.0
+    for t in trades:
+        if t.get("side") in ("buy", "Buy"):
+            cvd += t["qty"]
+        elif t.get("side") in ("sell", "Sell"):
+            cvd -= t["qty"]
+    return round(cvd, 6)
+
+
+def _compute_cvd_series(trades: list, bucket_seconds: int = 60) -> list:
+    """
+    Build a bucketed CVD series for lead-lag analysis.
+
+    Returns list of cumulative-CVD values per time bucket.
+    """
+    if not trades:
+        return []
+    min_ts = min(t["ts"] for t in trades)
+    max_ts = max(t["ts"] for t in trades)
+    if max_ts <= min_ts:
+        return [_compute_cvd_from_trades(trades)]
+    n_buckets = max(1, int((max_ts - min_ts) / bucket_seconds) + 1)
+    buckets = [0.0] * n_buckets
+    for t in trades:
+        idx = min(int((t["ts"] - min_ts) / bucket_seconds), n_buckets - 1)
+        delta = t["qty"] if t.get("side") in ("buy", "Buy") else -t["qty"]
+        buckets[idx] += delta
+    # Cumulate
+    cumulative = []
+    running = 0.0
+    for b in buckets:
+        running += b
+        cumulative.append(round(running, 6))
+    return cumulative
+
+
+def _lead_lag_cross_correlation(series_a: list, series_b: list, max_lag: int = 5) -> tuple:
+    """
+    Compute cross-correlation at lags -max_lag..+max_lag.
+
+    Returns (best_lag_index, best_corr) where best_lag_index is the number
+    of buckets that series_a leads series_b (positive → A leads).
+    """
+    if not series_a or not series_b:
+        return 0, 0.0
+    best_lag = 0
+    best_corr = _pearson_correlation(series_a, series_b)
+    for lag in range(-max_lag, max_lag + 1):
+        if lag == 0:
+            continue
+        if lag > 0:
+            # series_a leads by `lag` buckets
+            a_shifted = series_a[lag:]
+            b_shifted = series_b[:len(series_a) - lag]
+        else:
+            # series_b leads (negative lag)
+            a_shifted = series_a[:len(series_a) + lag]
+            b_shifted = series_b[-lag:]
+        if len(a_shifted) < 2 or len(b_shifted) < 2:
+            continue
+        corr = _pearson_correlation(a_shifted, b_shifted)
+        if abs(corr) > abs(best_corr):
+            best_corr = corr
+            best_lag = lag
+    return best_lag, best_corr
+
+
+async def compute_exchange_flow_divergence(
+    window_seconds: int = 3600,
+    bucket_seconds: int = 60,
+    _binance_trades: list = None,
+    _bybit_trades: list = None,
+) -> dict:
+    """
+    Compute Binance vs Bybit CVD divergence.
+
+    Compares cumulative volume delta across both exchanges:
+    - CVD per exchange (final value over the window)
+    - Pearson correlation of the bucketed CVD series
+    - Lead-lag cross-correlation at ±5 buckets to detect which exchange leads
+    - Divergence score (distance from perfect correlation)
+
+    Returns:
+        {binance_cvd, bybit_cvd, correlation, leader, divergence_score, timestamp_lag}
+    """
+    import math as _math
+
+    # ── Use injected trades (testing) or generate deterministic mock data ──
+    if _binance_trades is None and _bybit_trades is None:
+        rng = _random.Random(20260316_109)  # seed with issue number
+        now = time.time()
+        n_trades = 120  # ~2 trades/min over 1h
+
+        binance_trades = []
+        bybit_trades = []
+
+        # Generate Binance trades: slight buy-heavy trend
+        cvd_drift = 0.0
+        for i in range(n_trades):
+            ts = now - window_seconds + i * (window_seconds / n_trades)
+            qty = rng.uniform(0.1, 5.0)
+            # Binance: 55% buy bias
+            side = "buy" if rng.random() < 0.55 else "sell"
+            binance_trades.append({"ts": ts, "side": side, "qty": qty, "price": 50000.0})
+
+        # Generate Bybit trades: lagged version of Binance (10 buckets behind)
+        for i in range(n_trades):
+            ts = now - window_seconds + i * (window_seconds / n_trades)
+            qty = rng.uniform(0.1, 5.0)
+            # Bybit: 52% buy bias, slightly different
+            side = "buy" if rng.random() < 0.52 else "sell"
+            bybit_trades.append({"ts": ts, "side": side, "qty": qty, "price": 50000.0})
+    else:
+        binance_trades = _binance_trades or []
+        bybit_trades = _bybit_trades or []
+
+    # ── Compute final CVD values ──
+    binance_cvd = _compute_cvd_from_trades(binance_trades)
+    bybit_cvd = _compute_cvd_from_trades(bybit_trades)
+
+    # ── Build bucketed CVD series for correlation/lead-lag ──
+    b_series = _compute_cvd_series(binance_trades, bucket_seconds=bucket_seconds)
+    bb_series = _compute_cvd_series(bybit_trades, bucket_seconds=bucket_seconds)
+
+    # ── Pearson correlation of series ──
+    correlation = _pearson_correlation(b_series, bb_series)
+
+    # ── Lead-lag cross-correlation (max ±5 buckets) ──
+    max_lag_buckets = 5
+    best_lag, _ = _lead_lag_cross_correlation(b_series, bb_series, max_lag=max_lag_buckets)
+    timestamp_lag = best_lag * bucket_seconds  # convert buckets → seconds
+
+    # ── Determine leader ──
+    if best_lag > 0:
+        leader = "binance"   # Binance leads (its series, shifted forward, correlates better)
+    elif best_lag < 0:
+        leader = "bybit"     # Bybit leads
+    else:
+        leader = None
+
+    # ── Divergence score: distance from perfect positive correlation ──
+    divergence_score = round(max(0.0, 1.0 - correlation), 6)
+
+    return {
+        "binance_cvd": binance_cvd,
+        "bybit_cvd": bybit_cvd,
+        "correlation": round(correlation, 6),
+        "leader": leader,
+        "divergence_score": divergence_score,
+        "timestamp_lag": timestamp_lag,
+    }
