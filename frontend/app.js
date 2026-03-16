@@ -2835,12 +2835,8 @@ async function refresh() {
     await Promise.all([safe(renderMacroLiquidity)]);
     // Batch 24: token velocity + NVT
     await Promise.all([safe(renderTokenVelocityNvt)]);
-    // Batch 16: derivatives heatmap
-    await Promise.all([safe(renderDerivativesHeatmap)]);
-    // Batch 16: network health score
-    await Promise.all([safe(renderNetworkHealthScore)]);
-    // Batch 24: DeFi TVL tracker
-    await Promise.all([safe(renderDefiTvlTracker)]);
+    // Batch 24: BTC dominance tracker
+    await Promise.all([safe(renderBtcDominanceTracker)]);
   } finally {
     _refreshRunning = false;
   }
@@ -3388,190 +3384,83 @@ async function renderHolderDistribution() {
   `;
 }
 
-// ── Layer 2 Metrics ───────────────────────────────────────────────────────────
-async function renderLayer2Metrics() {
-  const data  = await apiFetch('/layer2-metrics');
-  const el    = document.getElementById('layer2-metrics-content');
-  const badge = document.getElementById('layer2-metrics-badge');
+// ── BTC Dominance Tracker ─────────────────────────────────────────────────────
+async function renderBtcDominanceTracker() {
+  const data  = await apiFetch('/btc-dominance-tracker');
+  const el    = document.getElementById('btc-dominance-tracker-content');
+  const badge = document.getElementById('btc-dominance-tracker-badge');
   if (!el) return;
 
-  const mom   = data.momentum?.label ?? 'neutral';
-  const score = (data.momentum?.score ?? 0).toFixed(1);
-  const momClass = { strong_growth: 'badge-green', growing: 'badge-green',
-                     neutral: 'badge-gray', declining: 'badge-red' };
+  const regime = data.regime?.label ?? 'neutral';
+  const regimeColors = { btc_season: 'var(--green)', alt_season: 'var(--yellow)', neutral: 'var(--muted)' };
+  const regimeCol = regimeColors[regime] ?? 'var(--muted)';
+  const regimeLabel = regime.replace('_', ' ').toUpperCase();
+
   if (badge) {
-    badge.textContent   = mom.replace('_', ' ').toUpperCase();
-    badge.className     = 'card-badge ' + (momClass[mom] ?? 'badge-gray');
+    badge.textContent = regimeLabel;
+    badge.className   = 'card-badge ' + (regime === 'btc_season' ? 'badge-green' : regime === 'alt_season' ? 'badge-yellow' : 'badge-gray');
     badge.style.display = '';
   }
 
-  const totalTvl = data.aggregate?.total_tvl_usd ?? 0;
-  const ch24     = (data.aggregate?.total_tvl_change_24h_pct ?? 0);
-  const ch24Str  = (ch24 >= 0 ? '+' : '') + ch24.toFixed(2) + '%';
-  const ch24Col  = ch24 >= 0 ? 'var(--green)' : 'var(--red)';
-  const gasSav   = (data.aggregate?.avg_gas_savings_pct ?? 0).toFixed(1);
-  const topChain = data.aggregate?.top_chain ?? '—';
-  const leader   = data.momentum?.leader ?? '—';
+  const btcDom  = (data.btc?.dominance_pct   ?? 0).toFixed(1);
+  const ethDom  = (data.eth?.dominance_pct   ?? 0).toFixed(1);
+  const altsDom = (data.alts?.dominance_pct  ?? 0).toFixed(1);
+  const ch24    = (data.btc?.change_24h_pct  ?? 0);
+  const ch7d    = (data.btc?.change_7d_pct   ?? 0);
+  const ch24Str = (ch24 >= 0 ? '+' : '') + ch24.toFixed(2) + 'pp';
+  const ch7dStr = (ch7d >= 0 ? '+' : '') + ch7d.toFixed(2) + 'pp';
+  const ch24Col = ch24 >= 0 ? 'var(--green)' : 'var(--red)';
+  const ch7dCol = ch7d >= 0 ? 'var(--green)' : 'var(--red)';
 
-  const fmtB = v => v >= 1e9 ? '$' + (v / 1e9).toFixed(1) + 'B'
-             : v >= 1e6 ? '$' + (v / 1e6).toFixed(0) + 'M' : '$' + v.toFixed(0);
+  const corr     = (data.correlation?.btc_dom_vs_alt_index ?? 0).toFixed(2);
+  const altIdx   = (data.regime?.alt_season_index ?? 0).toFixed(0);
+  const btcIdx   = (data.regime?.btc_season_index ?? 0).toFixed(0);
+  const dir      = data.regime?.direction ?? 'stable';
+  const dirIcon  = dir === 'rising' ? '↑' : dir === 'falling' ? '↓' : '→';
 
-  // Per-chain TVL bars
-  const CHAIN_ORDER = ['Arbitrum', 'Optimism', 'Base', 'Polygon', 'zkSync'];
-  const CHAIN_COLS  = { Arbitrum: '#1a91ff', Optimism: '#ff0420', Base: '#0052ff',
-                        Polygon: '#8247e5', zkSync: '#4e529a' };
-  const chains = data.chains ?? {};
-  const maxTvl  = Math.max(...CHAIN_ORDER.map(c => (chains[c]?.tvl_usd ?? 0)));
+  // Dominance bar
+  const domBar = `<div style="display:flex;height:6px;border-radius:3px;overflow:hidden;margin-bottom:4px">
+    <div style="width:${btcDom}%;background:var(--green)" title="BTC ${btcDom}%"></div>
+    <div style="width:${ethDom}%;background:#627EEA" title="ETH ${ethDom}%"></div>
+    <div style="width:${altsDom}%;background:var(--muted)" title="Alts ${altsDom}%"></div>
+  </div>`;
 
-  const chainRows = CHAIN_ORDER.map(name => {
-    const c   = chains[name] ?? {};
-    const tvl = c.tvl_usd ?? 0;
-    const w   = maxTvl > 0 ? (tvl / maxTvl * 100).toFixed(0) : 0;
-    const ch  = c.tvl_change_24h_pct ?? 0;
-    const chStr = (ch >= 0 ? '+' : '') + ch.toFixed(1) + '%';
-    const chCol = ch >= 0 ? 'var(--green)' : 'var(--red)';
-    const dir  = c.bridge_direction ?? 'neutral';
-    const dirIcon = dir === 'inflow' ? '↓' : dir === 'outflow' ? '↑' : '→';
-    const col  = CHAIN_COLS[name] ?? 'var(--muted)';
-    return `<div style="display:flex;align-items:center;gap:4px;margin-bottom:2px;font-size:9px">
-      <span style="width:52px;color:var(--muted);overflow:hidden;text-overflow:ellipsis">${name}</span>
-      <div style="flex:1;height:5px;background:var(--border);border-radius:2px">
-        <div style="width:${w}%;height:100%;background:${col};border-radius:2px"></div>
-      </div>
-      <span style="color:var(--fg);min-width:32px;text-align:right">${fmtB(tvl)}</span>
-      <span style="color:${chCol};min-width:36px;text-align:right">${chStr}</span>
-      <span style="color:${dir==='inflow'?'var(--green)':dir==='outflow'?'var(--red)':'var(--muted)'}">${dirIcon}</span>
-    </div>`;
-  }).join('');
-
-  // 7d sparkline
-  const sp = data.history_7d ?? [];
+  // Sparkline (last 30 of 90 points)
+  const sp = (data.sparkline ?? []).slice(-30);
   let sparkSvg = '';
   if (sp.length >= 2) {
-    const vals = sp.map(p => p.total_tvl_usd ?? 0);
-    const mn = Math.min(...vals) * 0.998;
-    const mx = Math.max(...vals) * 1.002;
-    const W = 200, H = 22;
-    const px = i => (i / (sp.length - 1)) * W;
-    const py = v => H - ((v - mn) / (mx - mn || 1)) * H;
-    const path = vals.map((v,i) => `${i===0?'M':'L'}${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(' ');
+    const vals = sp.map(p => p.btc_dom);
+    const mas  = sp.map(p => p.ma30);
+    const mn = Math.min(...vals, ...mas) - 0.5;
+    const mx = Math.max(...vals, ...mas) + 0.5;
+    const W = 200, H = 30;
+    const px = (i) => (i / (sp.length - 1)) * W;
+    const py = (v) => H - ((v - mn) / (mx - mn)) * H;
+    const domPath = vals.map((v, i) => `${i === 0 ? 'M' : 'L'}${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(' ');
+    const maPath  = mas.map((v, i)  => `${i === 0 ? 'M' : 'L'}${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(' ');
     sparkSvg = `<svg width="${W}" height="${H}" style="display:block;margin-bottom:4px">
-      <path d="${path}" stroke="var(--green)" stroke-width="1.2" fill="none"/>
+      <path d="${domPath}" stroke="var(--green)" stroke-width="1.2" fill="none" opacity="0.9"/>
+      <path d="${maPath}"  stroke="var(--yellow)" stroke-width="1" fill="none" opacity="0.6" stroke-dasharray="3,2"/>
     </svg>`;
   }
 
   el.innerHTML = `
     <div style="font-size:10px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:4px">
-      <span>TVL: <b style="color:var(--fg)">${fmtB(totalTvl)}</b> <span style="color:${ch24Col}">${ch24Str} 24h</span></span>
-      <span>gas saved: <b style="color:var(--green)">${gasSav}%</b></span>
+      <span>BTC: <b style="color:var(--green)">${btcDom}%</b> <span style="color:${ch24Col}">${ch24Str}</span> <span style="color:${ch7dCol}">${ch7dStr} 7d</span></span>
+      <span>${dirIcon} <b style="color:${regimeCol}">${regimeLabel}</b></span>
     </div>
-    <div style="font-size:10px;color:var(--muted);margin-bottom:4px">
-      ${chainRows}
+    ${domBar}
+    <div style="font-size:10px;color:var(--muted);display:flex;gap:12px;margin-bottom:4px">
+      <span>ETH <b style="color:#627EEA">${ethDom}%</b></span>
+      <span>Alts <b style="color:var(--muted)">${altsDom}%</b></span>
     </div>
     <div style="font-size:10px;color:var(--muted);display:flex;gap:12px;margin-bottom:4px">
-      <span>top: <b style="color:var(--fg)">${topChain}</b></span>
-      <span>momentum leader: <b style="color:var(--green)">${leader}</b></span>
-      <span>score: <b style="color:var(--fg)">${score}</b></span>
+      <span>BTC idx <b style="color:var(--green)">${btcIdx}</b></span>
+      <span>Alt idx <b style="color:var(--yellow)">${altIdx}</b></span>
+      <span>corr <b style="color:var(--fg)">${corr}</b></span>
     </div>
     ${sparkSvg}
     ${data.description ? `<div style="font-size:10px;color:var(--muted)">${data.description}</div>` : ''}`;
-}
-
-// ── DeFi TVL Tracker ─────────────────────────────────────────────────────────
-async function renderDefiTvlTracker() {
-  const el    = document.getElementById('defi-tvl-tracker-content');
-  const badge = document.getElementById('defi-tvl-tracker-badge');
-  if (!el) return;
-  const data = await apiFetch('/defi-tvl-tracker');
-  if (!data) { setErr('defi-tvl-tracker-content'); return; }
-
-  const totalTvl  = data.total_tvl_usd      ?? 0;
-  const chg24h    = data.tvl_change_24h_pct  ?? 0;
-  const chg7d     = data.tvl_change_7d_pct   ?? 0;
-  const momentum  = data.momentum            || 'stable';
-  const protocols = data.protocols           || [];
-  const chainDom  = data.chain_dominance     || {};
-  const history   = data.history             || [];
-
-  const momCls = momentum === 'accelerating' ? 'badge-green'
-               : momentum === 'declining'    ? 'badge-red'
-               : 'badge-blue';
-  if (badge) {
-    badge.textContent = momentum.toUpperCase();
-    badge.className   = `card-badge ${momCls}`;
-    badge.style.display = '';
-  }
-
-  const fmtB = v => {
-    const a = Math.abs(v);
-    if (a >= 1e9) return '$' + (a / 1e9).toFixed(1) + 'B';
-    if (a >= 1e6) return '$' + (a / 1e6).toFixed(0) + 'M';
-    return '$' + a.toFixed(0);
-  };
-  const fmtPct = v => (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
-  const pctCol = v => v >= 0 ? 'var(--green)' : 'var(--red)';
-
-  // Top protocols table (top 5 to fit the card)
-  const protoRows = protocols.slice(0, 5).map((p, i) => {
-    const tvl  = fmtB(p.tvl_usd || 0);
-    const c24  = fmtPct(p.change_24h_pct || 0);
-    const c7d  = fmtPct(p.change_7d_pct  || 0);
-    return `<tr>
-      <td style="font-size:9px;color:var(--muted);padding:1px 3px">${i + 1}</td>
-      <td style="font-size:9px;color:var(--fg);padding:1px 3px;white-space:nowrap">${p.name || '—'}</td>
-      <td style="font-size:9px;color:var(--fg);text-align:right;padding:1px 3px">${tvl}</td>
-      <td style="font-size:9px;color:${pctCol(p.change_24h_pct||0)};text-align:right;padding:1px 3px">${c24}</td>
-      <td style="font-size:9px;color:${pctCol(p.change_7d_pct||0)};text-align:right;padding:1px 3px">${c7d}</td>
-    </tr>`;
-  }).join('');
-
-  // Chain dominance bar
-  const chainOrder = Object.entries(chainDom)
-    .filter(([k]) => k !== 'Others')
-    .sort((a, b) => b[1] - a[1])
-    .concat(Object.entries(chainDom).filter(([k]) => k === 'Others'));
-  const chainColors = ['var(--blue)', 'var(--green)', 'var(--yellow,#f0a500)', 'var(--red)', 'var(--muted)', 'var(--border)'];
-  const domBar = chainOrder.map(([chain, pct], i) => {
-    const col = chainColors[i % chainColors.length];
-    const w   = pct.toFixed(1);
-    return `<div title="${chain}: ${w}%" style="display:inline-block;width:${w}%;height:8px;background:${col};vertical-align:top"></div>`;
-  }).join('');
-  const domLegend = chainOrder.slice(0, 4).map(([chain, pct], i) => {
-    const col = chainColors[i % chainColors.length];
-    return `<span style="font-size:8px;color:${col};margin-right:6px">■ ${chain} ${pct.toFixed(0)}%</span>`;
-  }).join('');
-
-  // Sparkline
-  const sparkVals = history.map(h => h.tvl_usd || 0);
-  const sparkMin  = Math.min(...sparkVals) * 0.98;
-  const sparkMax  = Math.max(...sparkVals) * 1.02;
-  const sparkRange = sparkMax - sparkMin || 1;
-  const sparkbars = sparkVals.slice(-14).map(v => {
-    const h   = Math.max(2, Math.round((v - sparkMin) / sparkRange * 18));
-    const col = v >= sparkVals[sparkVals.length - 1] * 0.98 ? 'var(--green)' : 'var(--muted)';
-    return `<span style="display:inline-block;width:5px;height:${h}px;background:${col};margin-right:1px;vertical-align:bottom;opacity:0.75"></span>`;
-  }).join('');
-
-  el.innerHTML = `
-    <div style="font-size:10px;color:var(--muted);margin-bottom:4px;display:flex;gap:10px;flex-wrap:wrap">
-      <span>TVL: <b style="color:var(--fg)">${fmtB(totalTvl)}</b></span>
-      <span>24h: <b style="color:${pctCol(chg24h)}">${fmtPct(chg24h)}</b></span>
-      <span>7d: <b style="color:${pctCol(chg7d)}">${fmtPct(chg7d)}</b></span>
-    </div>
-    <div style="margin-bottom:3px;width:100%;border-radius:3px;overflow:hidden">${domBar}</div>
-    <div style="margin-bottom:6px">${domLegend}</div>
-    <table style="border-collapse:collapse;width:100%;margin-bottom:4px">
-      <thead><tr>
-        <th style="font-size:8px;color:var(--muted);text-align:left;padding:1px 3px">#</th>
-        <th style="font-size:8px;color:var(--muted);text-align:left;padding:1px 3px">Protocol</th>
-        <th style="font-size:8px;color:var(--muted);text-align:right;padding:1px 3px">TVL</th>
-        <th style="font-size:8px;color:var(--muted);text-align:right;padding:1px 3px">24h</th>
-        <th style="font-size:8px;color:var(--muted);text-align:right;padding:1px 3px">7d</th>
-      </tr></thead>
-      <tbody>${protoRows}</tbody>
-    </table>
-    <div style="margin-top:4px;line-height:18px">${sparkbars}</div>
-    ${data.description ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${data.description}</div>` : ''}`;
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────

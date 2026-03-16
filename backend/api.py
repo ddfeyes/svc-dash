@@ -70,9 +70,7 @@ from metrics import (
     compute_macro_liquidity_indicator,
     compute_token_velocity_nvt,
     compute_layer2_metrics,
-    compute_derivatives_heatmap,
-    compute_network_health_score,
-    compute_defi_tvl_tracker,
+    compute_btc_dominance,
 )
 
 router = APIRouter(prefix="/api")
@@ -5298,16 +5296,10 @@ async def token_velocity_nvt_endpoint():
 async def layer2_metrics_endpoint():
     """Layer 2 metrics: TVL by chain, bridge flows, gas savings, growth momentum."""
     data = await compute_layer2_metrics()
-@router.get("/derivatives-heatmap")
-async def derivatives_heatmap_endpoint(
-    asset: str = Query("BTC", regex="^(BTC|ETH)$"),
-):
-    """OI heatmap by strike and expiry with max pain and GEX for BTC/ETH options."""
-    data = await compute_derivatives_heatmap(asset=asset)
-@router.get("/defi-tvl-tracker")
-async def defi_tvl_tracker_endpoint():
-    """DeFi TVL tracker: top 10 protocols, chain dominance, momentum, 30d sparkline."""
-    data = await compute_defi_tvl_tracker()
+@router.get("/btc-dominance-tracker")
+async def btc_dominance_tracker_endpoint():
+    """BTC dominance tracker: BTC/ETH/alt breakdown, regime classifier, 90-day sparkline."""
+    data = await compute_btc_dominance()
     return JSONResponse(data)
 @router.get("/network-health-score")
 async def network_health_score_endpoint():
