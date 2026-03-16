@@ -3016,9 +3016,8 @@ async function init() {
   safeInit(initFundingChart);
   safeInit(initSpreadChart);
   safeInit(initAggressorChart);
-  safeInit(initVolumeProfileChart);
-  safeInit(initRegimeTimelineChart);
-  safeInit(initAdaptiveVpChart);
+  // initVolumeProfileChart, initRegimeTimelineChart, initAdaptiveVpChart
+  // are Chart.js instances created inline in their render functions
   connectAlerts();
 
   // After 10s replace any still-Loading cards with Error badge
