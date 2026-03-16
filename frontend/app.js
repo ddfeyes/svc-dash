@@ -3067,4 +3067,7 @@ async function init() {
   });
 })();
 
+// ── Bootstrap on Load ──────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', init);
+
 
