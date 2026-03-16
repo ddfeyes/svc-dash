@@ -198,11 +198,25 @@ async def smart_money_patterns(symbol: str = None):
     return await detect_smart_money_patterns(symbol=symbol)
 
 
+@app.get("/api/realized-vol-surface")
+async def realized_vol_surface():
+    """Compute realized volatility surface: 8 symbols × 4 time windows."""
+    from metrics import compute_realized_vol_surface
+    return await compute_realized_vol_surface()
+
+
 
 @app.get("/api/cross-market-correlation")
 async def cross_market_correlation():
     from metrics import compute_cross_market_correlation
     return await compute_cross_market_correlation()
+
+
+@app.get("/api/realized-vol-surface")
+async def realized_vol_surface():
+    """2D realized volatility surface: 8 symbols × 4 time windows."""
+    from metrics import compute_realized_vol_surface
+    return await compute_realized_vol_surface()
 
 if __name__ == "__main__":
     import uvicorn

@@ -2490,8 +2490,8 @@ async function refresh() {
       safe(renderPriceVelocity),
     ]);
 
-    // Batch 14.5: smart money patterns
-    await Promise.all([safe(renderSmartMoneyPatterns)]);
+    // Batch 14.5: smart money patterns + realized vol surface
+    await Promise.all([safe(renderSmartMoneyPatterns), safe(renderRealizedVolSurface)]);
 
     await delay(200);
     // Batch 15: cross-asset correlation
@@ -3453,6 +3453,94 @@ async function renderCrossCorrelationSignal() {
     console.error('Error rendering cross-correlation signal:', err);
     document.getElementById('cross-correlation-signal-content').innerHTML = 
       '<div style="color:var(--error);">Error loading signal</div>';
+  }
+}
+
+
+async function renderRealizedVolSurface() {
+  try {
+    const data = await apiFetch('/realized-vol-surface');
+    if (!data) {
+      document.getElementById('realized-vol-surface-content').innerHTML = 'No data';
+      return;
+    }
+
+    const vm = data.vol_matrix || {};
+    const mvbw = data.mean_vol_by_window || {};
+    const outliers = data.outlier_cells || [];
+    const SYMBOLS = ["BTC", "ETH", "BNB", "SOL", "ADA", "XRP", "DOGE", "AVAX"];
+    const WINDOWS = ["1h", "4h", "24h", "7d"];
+
+    // Find max vol for color scaling
+    let maxVol = 0;
+    for (const sym of SYMBOLS) {
+      for (const w of WINDOWS) {
+        const v = (vm[sym] || {})[w] || 0;
+        if (v > maxVol) maxVol = v;
+      }
+    }
+    if (maxVol === 0) maxVol = 1;
+
+    function volColor(v) {
+      const ratio = Math.min(v / maxVol, 1);
+      if (ratio < 0.33) return `rgba(74, 158, 255, ${0.3 + ratio * 0.5})`;  // blue (low)
+      if (ratio < 0.66) return `rgba(243, 156, 18, ${0.4 + ratio * 0.4})`;  // yellow (mid)
+      return `rgba(231, 76, 60, ${0.4 + ratio * 0.6})`;  // red (high)
+    }
+
+    // Build heatmap table
+    let tableHtml = '<table style="width:100%;border-collapse:collapse;font-size:10px;margin-bottom:8px;">';
+    tableHtml += '<tr><th style="color:#888;text-align:left;padding:2px 4px;">SYM</th>';
+    for (const w of WINDOWS) {
+      tableHtml += `<th style="color:#888;text-align:center;padding:2px 4px;">${w}</th>`;
+    }
+    tableHtml += '</tr>';
+
+    for (const sym of SYMBOLS) {
+      tableHtml += `<tr><td style="color:#ccc;padding:2px 4px;font-weight:bold;">${sym}</td>`;
+      for (const w of WINDOWS) {
+        const v = (vm[sym] || {})[w] || 0;
+        const pct = (v * 100).toFixed(0);
+        const bg = volColor(v);
+        tableHtml += `<td style="text-align:center;padding:2px 4px;background:${bg};border-radius:3px;">${pct}%</td>`;
+      }
+      tableHtml += '</tr>';
+    }
+
+    // Mean row
+    tableHtml += '<tr><td style="color:#888;padding:2px 4px;font-style:italic;">avg</td>';
+    for (const w of WINDOWS) {
+      const m = mvbw[w] || 0;
+      tableHtml += `<td style="text-align:center;padding:2px 4px;color:#888;">${(m * 100).toFixed(0)}%</td>`;
+    }
+    tableHtml += '</tr></table>';
+
+    // Outlier badges
+    let outlierHtml = '';
+    if (outliers.length > 0) {
+      outlierHtml = '<div style="font-size:10px;color:#888;margin-bottom:4px;">Outliers (>2σ):</div>';
+      outlierHtml += outliers.slice(0, 5).map(cell => {
+        const z = cell.z_score ? cell.z_score.toFixed(1) : '?';
+        const pct = ((cell.vol || 0) * 100).toFixed(0);
+        return `<span style="display:inline-block;margin:2px;padding:2px 6px;background:rgba(231,76,60,0.3);border-radius:3px;color:#e74c3c;font-size:9px;">${cell.symbol}/${cell.window} ${pct}% z=${z}</span>`;
+      }).join('');
+    } else {
+      outlierHtml = '<div style="font-size:10px;color:#888;">No outliers detected</div>';
+    }
+
+    document.getElementById('realized-vol-surface-content').innerHTML = tableHtml + outlierHtml;
+
+    const badge = document.getElementById('realized-vol-surface-badge');
+    if (badge) {
+      const avgVol = mvbw['24h'] || 0;
+      badge.textContent = (avgVol * 100).toFixed(0) + '% 24h';
+      badge.style.background = avgVol > 0.5 ? '#c0392b' : avgVol > 0.2 ? '#d68910' : '#2980b9';
+      badge.style.color = '#fff';
+      badge.style.display = 'inline-block';
+    }
+  } catch (err) {
+    console.error('Error rendering realized vol surface:', err);
+    document.getElementById('realized-vol-surface-content').innerHTML = 'Error';
   }
 }
 
