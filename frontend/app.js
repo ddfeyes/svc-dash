@@ -23383,9 +23383,70 @@ async function refresh() {
     await Promise.all([safe(renderMomentumDivergence)]);
     // Batch 15: spread analysis
     await Promise.all([safe(renderMarketMicrostructure)]);
+    // Batch 16: options skew
+    await Promise.all([safe(renderOptionsSkew)]);
   } finally {
     _refreshRunning = false;
   }
+}
+
+// ── Options Skew ─────────────────────────────────────────────────────────────
+async function renderOptionsSkew() {
+  const sym   = encodeURIComponent(activeSymbol);
+  const el    = document.getElementById('options-skew-content');
+  const badge = document.getElementById('options-skew-badge');
+  if (!el) return;
+  const data = await apiFetch(`/options-skew?symbol=${sym}`);
+  if (!data) { setErr('options-skew-content'); return; }
+
+  const dir     = data.skew_direction || 'neutral';
+  const rr_pct  = data.rr_percentile  ?? 50;
+  const fly_pct = data.fly_percentile ?? 50;
+  const slope   = data.term_slope     || 'flat';
+  const windows = data.windows        || [];
+  const rr_map  = data.rr_25d         || {};
+  const fly_map = data.fly_25d        || {};
+  const iv_map  = data.atm_iv         || {};
+
+  const dirCls   = dir === 'put_heavy' ? 'badge-red' : dir === 'call_heavy' ? 'badge-green' : 'badge-blue';
+  const dirLabel = dir === 'put_heavy' ? 'PUT HEAVY' : dir === 'call_heavy' ? 'CALL HEAVY' : 'NEUTRAL';
+  if (badge) {
+    badge.textContent = dirLabel;
+    badge.className = `card-badge ${dirCls}`;
+    badge.style.display = '';
+  }
+
+  const fmtRR  = v => v == null ? '—' : (v >= 0 ? '+' : '') + (v * 100).toFixed(3) + '%';
+  const fmtIV  = v => v == null ? '—' : (v * 100).toFixed(2) + '%';
+  const rrCol  = v => v == null ? 'var(--muted)' : v > 0.0005 ? 'var(--green)' : v < -0.0005 ? 'var(--red)' : 'var(--muted)';
+  const slopeCol = slope === 'normal' ? 'var(--green)' : slope === 'inverted' ? 'var(--red)' : 'var(--muted)';
+
+  const termRows = windows.map(w => {
+    const rr = rr_map[w], fly = fly_map[w], iv = iv_map[w];
+    return `<tr>
+      <td style="font-size:9px;color:var(--muted);padding-right:8px">${w}</td>
+      <td style="font-size:10px;color:${rrCol(rr)};font-weight:600;text-align:right;padding-right:6px">${fmtRR(rr)}</td>
+      <td style="font-size:10px;color:var(--blue);text-align:right;padding-right:6px">${fmtRR(fly)}</td>
+      <td style="font-size:10px;color:var(--muted);text-align:right">${fmtIV(iv)}</td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="font-size:10px;color:var(--muted);margin-bottom:4px;display:flex;gap:10px">
+      <span>RR pct: <b style="color:var(--fg)">${rr_pct.toFixed(1)}%</b></span>
+      <span>Fly pct: <b style="color:var(--fg)">${fly_pct.toFixed(1)}%</b></span>
+      <span>slope: <b style="color:${slopeCol}">${slope}</b></span>
+    </div>
+    <table style="border-collapse:collapse;width:100%">
+      <thead><tr>
+        <th style="font-size:9px;color:var(--muted);text-align:left">win</th>
+        <th style="font-size:9px;color:var(--muted);text-align:right;padding-right:6px">RR</th>
+        <th style="font-size:9px;color:var(--muted);text-align:right;padding-right:6px">Fly</th>
+        <th style="font-size:9px;color:var(--muted);text-align:right">ATM IV</th>
+      </tr></thead>
+      <tbody>${termRows}</tbody>
+    </table>
+    ${data.description ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${data.description}</div>` : ''}`;
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
@@ -23449,4 +23510,8 @@ async function init() {
 })();
 
 document.addEventListener('DOMContentLoaded', init);
+}
+}
+}
+}
 
