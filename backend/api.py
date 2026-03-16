@@ -72,6 +72,7 @@ from metrics import (
     compute_layer2_metrics,
     compute_nft_market_pulse,
     compute_cross_chain_arb_monitor,
+    compute_order_flow_toxicity,
 )
 
 router = APIRouter(prefix="/api")
@@ -5330,4 +5331,11 @@ async def cross_chain_arb_endpoint():
     """Cross-chain arbitrage monitor: BTC/ETH/USDC price spread across ETH/BSC/ARB/OP/BASE.
     Returns fee-adjusted profit signal, best bridge route, and arb frequency heatmap."""
     data = await compute_cross_chain_arb_monitor()
+    return JSONResponse(data)
+
+
+@router.get("/order-flow-toxicity")
+async def order_flow_toxicity_endpoint():
+    """Order Flow Toxicity (VPIN): volume-synchronized probability of informed trading."""
+    data = await compute_order_flow_toxicity()
     return JSONResponse(data)

@@ -2514,6 +2514,15 @@ async function refresh() {
         // Batch 25: holder distribution card
         // Batch 26: cross-chain arb monitor
     await Promise.all([safe(refreshCrossChainArb)]);
+    // Batch 27: volatility regime detector
+    await Promise.all([safe(refreshVolatilityRegimeDetector)]);
+    // Batch 28: smart money index
+    await Promise.all([safe(renderSmartMoneyIndex)]);
+    await delay(200);
+    // Batch 29: order flow toxicity (VPIN)
+    await Promise.all([safe(renderOrderFlowToxicity)]);
+    // Batch 30: liquidation cascade detector
+    await Promise.all([safe(renderLiqCascadeDetector)]);
   } finally {
     _refreshRunning = false;
   }
@@ -3321,6 +3330,287 @@ async function refreshOptionsFlowTracker() {
       '<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">DOM</th>' +
     '</tr></thead><tbody>' + (hmRows || '<tr><td colspan="5" style="font-size:9px;color:var(--muted)">No data</td></tr>') + '</tbody></table>' +
     '<div style="font-size:9px;color:var(--muted);margin-top:4px">' + (data.description || '') + '</div>';
+}
+
+
+// ── Volatility Regime Detector ────────────────────────────────────────────────
+async function refreshVolatilityRegimeDetector() {
+  const el    = document.getElementById('vol-regime-content');
+  const badge = document.getElementById('vol-regime-badge');
+  if (!el) return;
+
+  const data = await apiFetch('/volatility-regime-detector');
+  if (!data) { setErr('vol-regime-content'); return; }
+
+  const regime    = (data.regime || 'unknown').toLowerCase();
+  const badgeMap  = { low: 'badge-green', medium: 'badge-yellow', high: 'badge-orange', extreme: 'badge-red' };
+  const colorMap  = { low: 'var(--green)', medium: '#f0c040', high: '#ff8c00', extreme: 'var(--red)' };
+  const badgeCls  = badgeMap[regime] || 'badge-blue';
+  const regimeCol = colorMap[regime] || 'var(--text)';
+
+  if (badge) {
+    badge.textContent = regime.toUpperCase();
+    badge.className = 'card-badge ' + badgeCls;
+    badge.style.display = 'inline-block';
+  }
+
+  const fmt1  = v => (v == null ? '—' : v.toFixed(1) + '%');
+  const fmt2  = v => (v == null ? '—' : v.toFixed(2));
+  const fmt0  = v => (v == null ? '—' : v.toFixed(0));
+  const fmtP  = v => (v == null ? '—' : (v * 100).toFixed(1) + '%');
+
+  const tp    = data.transition_probability || {};
+  const tpOrder = ['low', 'medium', 'high', 'extreme'];
+  const tpCols  = { low: 'var(--green)', medium: '#f0c040', high: '#ff8c00', extreme: 'var(--red)' };
+
+  const tpBars = tpOrder.map(k => {
+    const pct = tp[k] != null ? (tp[k] * 100).toFixed(1) : '0.0';
+    const col  = tpCols[k] || 'var(--muted)';
+    return '<div style="margin-bottom:3px">' +
+      '<div style="display:flex;justify-content:space-between;margin-bottom:1px">' +
+        '<span style="font-size:9px;color:var(--muted)">' + k.toUpperCase() + '</span>' +
+        '<span style="font-size:9px;color:' + col + '">' + pct + '%</span>' +
+      '</div>' +
+      '<div style="background:var(--border);border-radius:2px;height:4px;overflow:hidden">' +
+        '<div style="background:' + col + ';height:100%;width:' + pct + '%;border-radius:2px"></div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+
+  const conf = data.regime_confidence != null ? (data.regime_confidence * 100).toFixed(0) : '—';
+
+  el.innerHTML =
+    '<div style="display:flex;gap:12px;margin-bottom:8px;flex-wrap:wrap">' +
+      '<div>' +
+        '<div style="font-size:8px;color:var(--muted);margin-bottom:2px">REGIME</div>' +
+        '<div style="font-size:18px;font-weight:700;color:' + regimeCol + '">' + regime.toUpperCase() + '</div>' +
+        '<div style="font-size:9px;color:var(--muted)">Confidence: ' + conf + '%</div>' +
+      '</div>' +
+      '<div>' +
+        '<div style="font-size:8px;color:var(--muted);margin-bottom:2px">REALIZED VOL 30D</div>' +
+        '<div style="font-size:15px;font-weight:600;color:var(--text)">' + fmt1(data.realized_vol_30d) + '</div>' +
+      '</div>' +
+      '<div>' +
+        '<div style="font-size:8px;color:var(--muted);margin-bottom:2px">IMPLIED VOL</div>' +
+        '<div style="font-size:15px;font-weight:600;color:var(--text)">' + fmt1(data.implied_vol) + '</div>' +
+      '</div>' +
+      '<div>' +
+        '<div style="font-size:8px;color:var(--muted);margin-bottom:2px">VOL-OF-VOL</div>' +
+        '<div style="font-size:15px;font-weight:600;color:var(--text)">' + fmt2(data.vol_of_vol) + '</div>' +
+      '</div>' +
+      '<div>' +
+        '<div style="font-size:8px;color:var(--muted);margin-bottom:2px">DURATION</div>' +
+        '<div style="font-size:15px;font-weight:600;color:var(--text)">' + fmt0(data.regime_duration_days) + ' days</div>' +
+      '</div>' +
+    '</div>' +
+    '<div style="font-size:9px;color:var(--muted);font-weight:600;margin-bottom:4px">TRANSITION PROBABILITIES</div>' +
+    tpBars;
+}
+
+
+
+// ── Smart Money Index ──────────────────────────────────────────────────────────
+async function renderSmartMoneyIndex() {
+  const el    = document.getElementById('smi-content');
+  const badge = document.getElementById('smi-badge');
+  if (!el) return;
+  const data = await apiFetch('/smart-money-index');
+  if (!data) { setErr('smi-content'); return; }
+
+  const score  = data.smi_score ?? 0;
+  const signal = data.signal || 'neutral';
+  const inst   = data.institutional_flow ?? 0;
+  const retail = data.retail_flow ?? 0;
+  const div_   = data.divergence ?? 0;
+  const comp   = data.components || {};
+
+  // Badge
+  const sigCls = signal === 'accumulation' ? 'badge-green'
+               : signal === 'distribution' ? 'badge-red'
+               : 'badge-blue';
+  if (badge) {
+    badge.textContent = signal.toUpperCase();
+    badge.className = 'card-badge ' + sigCls;
+    badge.style.display = '';
+  }
+
+  // Gauge bar: score in [-1, 1] → 0..100%
+  const pct = ((score + 1) / 2 * 100).toFixed(1);
+  const gaugeCol = score > 0.2 ? 'var(--green)' : score < -0.2 ? 'var(--red)' : 'var(--muted)';
+
+  const fmtFlow = v => (v >= 0 ? '+' : '') + (v / 1e3).toFixed(1) + 'B';
+
+  el.innerHTML =
+    '<div style="margin-bottom:6px">' +
+      '<div style="display:flex;justify-content:space-between;margin-bottom:2px">' +
+        '<span style="font-size:9px;color:var(--muted)">SMI SCORE</span>' +
+        '<span style="font-size:13px;font-weight:700;color:' + gaugeCol + '">' + (score > 0 ? '+' : '') + score.toFixed(4) + '</span>' +
+      '</div>' +
+      '<div style="height:6px;background:var(--bg2);border-radius:3px;overflow:hidden">' +
+        '<div style="width:' + pct + '%;height:100%;background:' + gaugeCol + ';border-radius:3px;transition:width 0.4s"></div>' +
+      '</div>' +
+      '<div style="display:flex;justify-content:space-between;font-size:8px;color:var(--muted);margin-top:1px">' +
+        '<span>-1 Distribution</span><span>Neutral</span><span>Accumulation +1</span>' +
+      '</div>' +
+    '</div>' +
+    '<div style="display:flex;gap:10px;margin-bottom:6px;flex-wrap:wrap">' +
+      '<div><div style="font-size:9px;color:var(--muted)">INST FLOW</div>' +
+        '<div style="font-size:12px;font-weight:700;color:' + (inst >= 0 ? 'var(--green)' : 'var(--red)') + '">' + fmtFlow(inst) + '</div></div>' +
+      '<div><div style="font-size:9px;color:var(--muted)">RETAIL FLOW</div>' +
+        '<div style="font-size:12px;font-weight:700;color:' + (retail >= 0 ? 'var(--green)' : 'var(--red)') + '">' + fmtFlow(retail) + '</div></div>' +
+      '<div><div style="font-size:9px;color:var(--muted)">DIVERGENCE</div>' +
+        '<div style="font-size:12px;font-weight:700;color:' + (div_ >= 0 ? 'var(--green)' : 'var(--red)') + '">' + fmtFlow(div_) + '</div></div>' +
+    '</div>' +
+    '<div style="font-size:9px;color:var(--muted);font-weight:600;margin-bottom:3px">COMPONENTS</div>' +
+    '<table style="width:100%;border-collapse:collapse"><tbody>' +
+      '<tr><td style="font-size:9px;color:var(--muted)">Block Ratio</td>' +
+        '<td style="font-size:9px;text-align:right;color:var(--text)">' + ((comp.block_ratio || 0) * 100).toFixed(1) + '%</td></tr>' +
+      '<tr><td style="font-size:9px;color:var(--muted)">OI Skew</td>' +
+        '<td style="font-size:9px;text-align:right;color:' + ((comp.oi_skew || 0) >= 0 ? 'var(--green)' : 'var(--red)') + '">' + (comp.oi_skew >= 0 ? '+' : '') + (comp.oi_skew || 0).toFixed(4) + '</td></tr>' +
+      '<tr><td style="font-size:9px;color:var(--muted)">Futures Basis</td>' +
+        '<td style="font-size:9px;text-align:right;color:' + ((comp.futures_basis || 0) >= 0 ? 'var(--green)' : 'var(--red)') + '">' + (comp.futures_basis >= 0 ? '+' : '') + (comp.futures_basis || 0).toFixed(2) + '%</td></tr>' +
+      '<tr><td style="font-size:9px;color:var(--muted)">Whale Accum</td>' +
+        '<td style="font-size:9px;text-align:right;color:' + ((comp.whale_accumulation || 0) >= 0 ? 'var(--green)' : 'var(--red)') + '">' + (comp.whale_accumulation >= 0 ? '+' : '') + ((comp.whale_accumulation || 0) / 1e3).toFixed(1) + 'k BTC</td></tr>' +
+    '</tbody></table>';
+}
+
+// ── Order Flow Toxicity (VPIN) ────────────────────────────────────────────────
+async function renderOrderFlowToxicity() {
+  const el = document.getElementById('order-flow-toxicity-content');
+  const badge = document.getElementById('order-flow-toxicity-badge');
+  if (!el) return;
+  const data = await fetchJSON('/api/order-flow-toxicity');
+  if (!data) { el.innerHTML = '<span class="card-badge badge-red">Error</span>'; return; }
+
+  const vpin = data.vpin_score != null ? (data.vpin_score * 100).toFixed(1) : '—';
+  const toxicity = data.toxicity_level || '—';
+  const badgeColor = {low: 'badge-green', medium: 'badge-yellow', high: 'badge-orange', extreme: 'badge-red'}[toxicity] || 'badge-blue';
+  const signal = data.informed_trading_signal || '—';
+  const buyPct = data.buy_volume_frac != null ? (data.buy_volume_frac * 100).toFixed(1) : '—';
+  const sellPct = data.sell_volume_frac != null ? (data.sell_volume_frac * 100).toFixed(1) : '—';
+  const vpinNum = data.vpin_score != null ? data.vpin_score : 0;
+  const gaugeWidth = Math.round(vpinNum * 100);
+
+  if (badge) {
+    badge.textContent = toxicity.toUpperCase();
+    badge.className = 'card-badge ' + badgeColor;
+    badge.style.display = 'inline-block';
+  }
+
+  // Rolling VPIN sparkline (50 values → mini bar chart)
+  const rolling = data.rolling_vpin_50 || [];
+  const sparkBars = rolling.map(v => {
+    const h = Math.round(v * 40);
+    const color = v >= 0.75 ? '#ef4444' : v >= 0.50 ? '#f97316' : v >= 0.25 ? '#eab308' : '#22c55e';
+    return `<span style="display:inline-block;width:3px;height:${h}px;background:${color};margin-right:1px;vertical-align:bottom;border-radius:1px"></span>`;
+  }).join('');
+
+  el.innerHTML =
+    '<div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">' +
+      '<div style="flex:1">' +
+        '<div style="font-size:9px;color:var(--muted);font-weight:600;margin-bottom:2px">VPIN SCORE</div>' +
+        '<div style="font-size:22px;font-weight:700;line-height:1">' + vpin + '<span style="font-size:11px;color:var(--muted)">%</span></div>' +
+        '<div style="font-size:9px;color:var(--muted);margin-top:2px">Signal: ' + signal.replace(/_/g, ' ') + '</div>' +
+      '</div>' +
+      '<div style="flex:1">' +
+        '<div style="font-size:9px;color:var(--muted);font-weight:600;margin-bottom:4px">TOXICITY GAUGE</div>' +
+        '<div style="background:var(--card-bg,#1e2130);border-radius:4px;height:8px;overflow:hidden">' +
+          '<div style="height:100%;width:' + gaugeWidth + '%;background:' +
+            (vpinNum >= 0.75 ? '#ef4444' : vpinNum >= 0.50 ? '#f97316' : vpinNum >= 0.25 ? '#eab308' : '#22c55e') +
+          ';border-radius:4px;transition:width 0.4s"></div>' +
+        '</div>' +
+        '<div style="display:flex;justify-content:space-between;font-size:8px;color:var(--muted);margin-top:2px"><span>0</span><span>Low</span><span>Med</span><span>High</span><span>100</span></div>' +
+      '</div>' +
+    '</div>' +
+    '<div style="font-size:9px;color:var(--muted);font-weight:600;margin-bottom:3px">BUY vs SELL VOLUME</div>' +
+    '<div style="display:flex;height:10px;border-radius:4px;overflow:hidden;margin-bottom:6px">' +
+      '<div style="width:' + buyPct + '%;background:#22c55e" title="Buy ' + buyPct + '%"></div>' +
+      '<div style="width:' + sellPct + '%;background:#ef4444" title="Sell ' + sellPct + '%"></div>' +
+    '</div>' +
+    '<div style="display:flex;justify-content:space-between;font-size:9px;margin-bottom:8px">' +
+      '<span style="color:#22c55e">▲ Buy ' + buyPct + '%</span>' +
+      '<span style="color:#ef4444">▼ Sell ' + sellPct + '%</span>' +
+    '</div>' +
+    '<div style="font-size:9px;color:var(--muted);font-weight:600;margin-bottom:3px">ROLLING VPIN (50 buckets)</div>' +
+    '<div style="display:flex;align-items:flex-end;height:42px;padding:2px 0">' + sparkBars + '</div>';
+}
+
+
+// ── Liquidation Cascade Detector ─────────────────────────────────────────────
+async function renderLiqCascadeDetector() {
+  const el    = document.getElementById('liq-cascade-detector-content');
+  const badge = document.getElementById('liq-cascade-detector-badge');
+  if (!el) return;
+  const data = await apiFetch('/liquidation-cascade-detector');
+  if (!data) { setErr('liq-cascade-detector-content'); return; }
+
+  const prob = (data.cascade_probability ?? 0);
+  const probPct = Math.round(prob * 100);
+  const regime = (data.regime || 'calm').toLowerCase();
+  const regimeColors = { calm: '#22c55e', building: '#f59e0b', cascade: '#ef4444', peak: '#dc2626' };
+  const regimeColor = regimeColors[regime] || '#888';
+
+  if (badge) {
+    badge.style.display = 'inline-block';
+    badge.textContent = regime.toUpperCase();
+    badge.style.background = regimeColor;
+    badge.style.color = '#fff';
+    badge.style.padding = '1px 6px';
+    badge.style.borderRadius = '4px';
+    badge.style.fontSize = '9px';
+    badge.style.fontWeight = '600';
+  }
+
+  const totalLiq = data.total_liquidated_usd ?? 0;
+  const liqVel = data.liq_velocity ?? 0;
+  const timeMin = data.time_to_cascade_minutes ?? 0;
+  const exchanges = (data.exchanges || []).join(', ');
+  const supportLevels = (data.support_levels || []).slice(0, 6);
+  const chain = (data.cascade_chain || []).slice(0, 5);
+
+  const supportRows = supportLevels.map(lvl =>
+    `<span style="display:inline-block;margin:1px 3px;font-size:9px;color:var(--muted)">$${lvl.toLocaleString()}</span>`
+  ).join('');
+
+  const chainRows = chain.map(e =>
+    `<tr>
+      <td style="padding:1px 3px;font-size:9px">${e.asset}</td>
+      <td style="padding:1px 3px;font-size:9px;text-align:right">$${(e.amount/1e6).toFixed(1)}M</td>
+      <td style="padding:1px 3px;font-size:9px;text-align:right;color:var(--muted)">t+${e.time}m</td>
+    </tr>`
+  ).join('');
+
+  el.innerHTML =
+    `<div style="margin-bottom:6px">` +
+      `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">` +
+        `<span style="font-size:9px;color:var(--muted);font-weight:600">CASCADE PROBABILITY</span>` +
+        `<span style="font-size:11px;font-weight:700;color:${regimeColor}">${probPct}%</span>` +
+      `</div>` +
+      `<div style="background:var(--border);border-radius:3px;height:8px;overflow:hidden">` +
+        `<div id="cascade-probability-bar" style="height:100%;width:${probPct}%;background:${regimeColor};transition:width 0.5s;border-radius:3px"></div>` +
+      `</div>` +
+    `</div>` +
+    `<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:6px">` +
+      `<div><span style="font-size:8px;color:var(--muted)">TIME TO CASCADE</span><br><span style="font-size:10px;font-weight:600">${timeMin.toFixed(1)} min</span></div>` +
+      `<div><span style="font-size:8px;color:var(--muted)">LIQ VELOCITY</span><br><span style="font-size:10px;font-weight:600">$${(liqVel/1e6).toFixed(1)}M/min</span></div>` +
+      `<div><span style="font-size:8px;color:var(--muted)">TOTAL LIQUIDATED</span><br><span style="font-size:10px;font-weight:600">$${(totalLiq/1e9).toFixed(2)}B</span></div>` +
+      `<div><span style="font-size:8px;color:var(--muted)">EXCHANGES</span><br><span style="font-size:9px">${exchanges}</span></div>` +
+    `</div>` +
+    `<div style="margin-bottom:6px">` +
+      `<div style="font-size:9px;color:var(--muted);font-weight:600;margin-bottom:2px">SUPPORT LEVELS</div>` +
+      `<div style="line-height:1.6">${supportRows || '<span style="font-size:9px;color:var(--muted)">–</span>'}</div>` +
+    `</div>` +
+    `<div>` +
+      `<div style="font-size:9px;color:var(--muted);font-weight:600;margin-bottom:2px">CASCADE CHAIN (TOP 5)</div>` +
+      `<table style="width:100%;border-collapse:collapse">` +
+        `<thead><tr>` +
+          `<th style="font-size:8px;color:var(--muted);text-align:left;font-weight:500">ASSET</th>` +
+          `<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">AMOUNT</th>` +
+          `<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">TIME</th>` +
+        `</tr></thead>` +
+        `<tbody>${chainRows || '<tr><td colspan="3" style="font-size:9px;color:var(--muted)">No data</td></tr>'}</tbody>` +
+      `</table>` +
+    `</div>`;
 }
 
 

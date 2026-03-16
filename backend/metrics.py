@@ -9327,3 +9327,246 @@ def _oft_build_strike_heatmap(trades: list) -> dict:
         v["call_notional_usd"] = round(v["call_notional_usd"], 2)
         v["put_notional_usd"] = round(v["put_notional_usd"], 2)
     return hm
+
+async def compute_volatility_regime_detector() -> Dict:
+    """Classify market volatility regime into low/medium/high/extreme.
+
+    Uses a deterministic random seed (20260318) for reproducible output.
+    Thresholds: low <15%, medium 15-30%, high 30-60%, extreme >60% (annualised %).
+    """
+    import datetime as _dt
+
+    rng = _random.Random(20260318)
+
+    # Simulate 30-day realised vol (annualised %)
+    realized_vol_30d: float = round(rng.uniform(8.0, 85.0), 4)
+
+    # Implied vol is typically close to realised with a premium/discount
+    iv_premium: float = rng.uniform(-5.0, 15.0)
+    implied_vol: float = round(max(1.0, realized_vol_30d + iv_premium), 4)
+
+    # Vol-of-vol: ratio / scatter of vol over vol
+    vol_of_vol: float = round(rng.uniform(0.05, 2.5), 4)
+
+    # Regime classification
+    if realized_vol_30d < 15.0:
+        regime = "low"
+    elif realized_vol_30d < 30.0:
+        regime = "medium"
+    elif realized_vol_30d < 60.0:
+        regime = "high"
+    else:
+        regime = "extreme"
+
+    # Confidence — higher when vol is firmly inside a band (not near a boundary)
+    boundaries = [0.0, 15.0, 30.0, 60.0, 120.0]
+    idx = {"low": 0, "medium": 1, "high": 2, "extreme": 3}[regime]
+    lo, hi = boundaries[idx], boundaries[idx + 1]
+    band_width = hi - lo
+    distance_to_edge = min(realized_vol_30d - lo, hi - realized_vol_30d)
+    raw_confidence = distance_to_edge / (band_width / 2.0) if band_width > 0 else 1.0
+    regime_confidence: float = round(min(1.0, max(0.0, raw_confidence)), 6)
+
+    # Duration: how long have we been in this regime?
+    regime_duration_days: int = rng.randint(3, 180)
+
+    # Transition probabilities (must sum to 1.0)
+    raw_tp = {
+        "low": rng.random(),
+        "medium": rng.random(),
+        "high": rng.random(),
+        "extreme": rng.random(),
+    }
+    tp_total = sum(raw_tp.values())
+    transition_probability: Dict = {
+        k: round(v / tp_total, 8) for k, v in raw_tp.items()
+    }
+    # Fix rounding so sum is exactly 1.0
+    keys = list(transition_probability.keys())
+    current_sum = sum(transition_probability.values())
+    transition_probability[keys[-1]] = round(
+        transition_probability[keys[-1]] + (1.0 - current_sum), 8
+    )
+
+    timestamp: str = _dt.datetime.utcnow().isoformat() + "Z"
+
+    return {
+        "regime": regime,
+        "realized_vol_30d": realized_vol_30d,
+        "implied_vol": implied_vol,
+        "vol_of_vol": vol_of_vol,
+        "regime_confidence": regime_confidence,
+        "regime_duration_days": regime_duration_days,
+        "transition_probability": transition_probability,
+        "timestamp": timestamp,
+    }
+
+
+# ── Smart Money Index ─────────────────────────────────────────────────────────
+
+def _smi_compute_components(rng) -> dict:
+    """Compute sub-components of the Smart Money Index using a seeded RNG."""
+    block_ratio = round(rng.uniform(0.05, 0.60), 4)
+    oi_skew = round(rng.uniform(-0.8, 0.8), 4)
+    futures_basis = round(rng.uniform(-2.0, 12.0), 4)
+    whale_accumulation = round(rng.uniform(-5000.0, 8000.0), 2)
+    return {
+        "block_ratio": block_ratio,
+        "oi_skew": oi_skew,
+        "futures_basis": futures_basis,
+        "whale_accumulation": whale_accumulation,
+    }
+
+
+def _smi_compute_flows(rng) -> tuple:
+    """Return (institutional_flow, retail_flow) in millions USD."""
+    institutional_flow = round(rng.uniform(-500.0, 900.0), 2)
+    retail_flow = round(rng.uniform(-400.0, 700.0), 2)
+    return institutional_flow, retail_flow
+
+
+def _smi_score_from_components(components: dict, inst: float, retail: float) -> float:
+    """Combine components into a normalised SMI score in [-1, 1]."""
+    block_score = (components["block_ratio"] - 0.325) / 0.275
+    oi_score = components["oi_skew"]
+    basis_norm = (components["futures_basis"] - 5.0) / 7.0
+    whale_norm = components["whale_accumulation"] / 8000.0
+    raw = 0.30 * block_score + 0.30 * oi_score + 0.20 * basis_norm + 0.20 * whale_norm
+    flow_div = (inst - retail) / 1400.0
+    combined = 0.7 * raw + 0.3 * flow_div
+    return round(max(-1.0, min(1.0, combined)), 6)
+
+
+def _smi_signal(score: float) -> str:
+    """Map SMI score to a qualitative signal."""
+    if score > 0.2:
+        return "accumulation"
+    if score < -0.2:
+        return "distribution"
+    return "neutral"
+
+
+async def compute_smart_money_index() -> dict:
+    """
+    Smart Money Index: measures divergence between institutional and retail order flow.
+
+    Returns a dict with:
+      smi_score          -- float in [-1, 1]; positive = institutional buying
+      institutional_flow -- net institutional flow in millions USD (24h rolling)
+      retail_flow        -- net retail flow in millions USD (24h rolling)
+      divergence         -- institutional_flow - retail_flow
+      signal             -- "accumulation" | "distribution" | "neutral"
+      components         -- {block_ratio, oi_skew, futures_basis, whale_accumulation}
+      timestamp          -- ISO 8601 UTC string
+
+    Uses random.seed(20260317) for deterministic simulated data.
+    """
+    import random
+    from datetime import datetime, timezone
+
+    rng = random.Random(20260317)
+
+    components = _smi_compute_components(rng)
+    institutional_flow, retail_flow = _smi_compute_flows(rng)
+    divergence = round(institutional_flow - retail_flow, 2)
+    smi_score = _smi_score_from_components(components, institutional_flow, retail_flow)
+    signal = _smi_signal(smi_score)
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    return {
+        "smi_score": smi_score,
+        "institutional_flow": institutional_flow,
+        "retail_flow": retail_flow,
+        "divergence": divergence,
+        "signal": signal,
+        "components": components,
+        "timestamp": timestamp,
+    }
+
+
+async def compute_order_flow_toxicity() -> Dict:
+    """
+    VPIN: Volume-Synchronized Probability of Informed Trading.
+
+    Partitions volume into equal-sized buckets and estimates the fraction of
+    informed trading using buy/sell volume imbalance per bucket.
+
+    VPIN = (1/n) * sum(|V_buy_i - V_sell_i|) / V_bucket
+    """
+    import random
+    from datetime import datetime, timezone
+
+    rng = random.Random(20260320)
+
+    N_BUCKETS = 50
+    BUCKET_VOLUME = 1000.0
+
+    volume_buckets: List[Dict] = []
+    total_buy_vol = 0.0
+    total_sell_vol = 0.0
+
+    for i in range(N_BUCKETS):
+        buy_frac = rng.gauss(0.52, 0.12)
+        buy_frac = max(0.05, min(0.95, buy_frac))
+        sell_frac = 1.0 - buy_frac
+
+        buy_vol = round(BUCKET_VOLUME * buy_frac, 4)
+        sell_vol = round(BUCKET_VOLUME * sell_frac, 4)
+        imbalance = round(abs(buy_vol - sell_vol) / BUCKET_VOLUME, 6)
+
+        total_buy_vol += buy_vol
+        total_sell_vol += sell_vol
+
+        volume_buckets.append({
+            "bucket_id": i,
+            "buy_vol": buy_vol,
+            "sell_vol": sell_vol,
+            "imbalance": imbalance,
+        })
+
+    vpin_score = round(
+        sum(b["imbalance"] for b in volume_buckets) / N_BUCKETS,
+        6,
+    )
+
+    window = 10
+    rolling_vpin_50: List[float] = []
+    for i in range(N_BUCKETS):
+        start = max(0, i - window + 1)
+        window_buckets = volume_buckets[start: i + 1]
+        wvpin = round(
+            sum(b["imbalance"] for b in window_buckets) / len(window_buckets),
+            6,
+        )
+        rolling_vpin_50.append(wvpin)
+
+    total_vol = total_buy_vol + total_sell_vol
+    buy_volume_frac = round(total_buy_vol / total_vol, 6)
+    sell_volume_frac = round(total_sell_vol / total_vol, 6)
+
+    if vpin_score < 0.25:
+        toxicity_level = "low"
+    elif vpin_score < 0.50:
+        toxicity_level = "medium"
+    elif vpin_score < 0.75:
+        toxicity_level = "high"
+    else:
+        toxicity_level = "extreme"
+
+    if vpin_score >= 0.50:
+        informed_trading_signal = "high_toxicity"
+    elif vpin_score <= 0.20:
+        informed_trading_signal = "low_toxicity"
+    else:
+        informed_trading_signal = "neutral"
+
+    return {
+        "vpin_score": vpin_score,
+        "buy_volume_frac": buy_volume_frac,
+        "sell_volume_frac": sell_volume_frac,
+        "toxicity_level": toxicity_level,
+        "volume_buckets": volume_buckets,
+        "informed_trading_signal": informed_trading_signal,
+        "rolling_vpin_50": rolling_vpin_50,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
