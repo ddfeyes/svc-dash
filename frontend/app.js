@@ -2835,8 +2835,12 @@ async function refresh() {
     await Promise.all([safe(renderMacroLiquidity)]);
     // Batch 24: token velocity + NVT
     await Promise.all([safe(renderTokenVelocityNvt)]);
-    // Batch 24: validator activity (Ethereum beacon chain)
-    await Promise.all([safe(renderValidatorActivity)]);
+    // Batch 16: derivatives heatmap
+    await Promise.all([safe(renderDerivativesHeatmap)]);
+    // Batch 16: network health score
+    await Promise.all([safe(renderNetworkHealthScore)]);
+    // Batch 24: staking yield tracker (global, multi-chain)
+    await Promise.all([safe(renderStakingYieldTracker)]);
   } finally {
     _refreshRunning = false;
   }
@@ -3454,6 +3458,79 @@ async function renderValidatorActivity() {
     </div>
     ${sparkSvg}
     ${data.description ? `<div style="font-size:10px;color:var(--muted)">${data.description}</div>` : ''}`;
+}
+
+// ── Staking Yield Tracker ─────────────────────────────────────────────────
+async function renderStakingYieldTracker() {
+  const data  = await apiFetch('/staking-yield-tracker');
+  const el    = document.getElementById('staking-yield-content');
+  const badge = document.getElementById('staking-yield-badge');
+  if (!data || !el) return;
+
+  const agg     = data.aggregate ?? {};
+  const best    = agg.best_yield_protocol ?? '—';
+  const avgApy  = agg.avg_apy ?? 0;
+  const avgReal = agg.avg_real_yield ?? 0;
+  const realCol = avgReal >= 2 ? 'var(--green)' : avgReal > 0 ? '#f59e0b' : 'var(--red)';
+
+  if (badge) {
+    badge.textContent = best;
+    badge.style.display = 'inline-block';
+    badge.style.color = 'var(--green)';
+  }
+
+  const fmtPct = v => (v ?? 0).toFixed(2) + '%';
+
+  const protos = data.protocols ?? {};
+  const rows = Object.entries(protos).map(([sym, p]) => {
+    const rlCol   = p.yield_label === 'attractive' ? 'var(--green)'
+      : p.yield_label === 'neutral' ? '#f59e0b' : 'var(--red)';
+    const riskCol = p.risk_label === 'low' ? 'var(--green)'
+      : p.risk_label === 'medium' ? '#f59e0b' : 'var(--red)';
+    return `<tr>
+      <td style="color:var(--text);font-size:9px;font-weight:600">${sym}</td>
+      <td style="text-align:right;font-size:9px">${fmtPct(p.apy)}</td>
+      <td style="text-align:right;font-size:9px;color:${rlCol}">${fmtPct(p.real_yield)}</td>
+      <td style="text-align:right;font-size:9px">${(p.stake_ratio ?? 0).toFixed(1)}%</td>
+      <td style="text-align:right;font-size:9px;color:${riskCol}">${(p.risk_label ?? '').toUpperCase()}</td>
+    </tr>`;
+  }).join('');
+
+  const tvs = agg.total_value_staked_usd ?? 0;
+  const tvsStr = tvs >= 1e9 ? '$' + (tvs/1e9).toFixed(1) + 'B'
+    : tvs >= 1e6 ? '$' + (tvs/1e6).toFixed(0) + 'M' : '$' + tvs.toFixed(0);
+
+  el.innerHTML = `
+    <div style="display:flex;gap:12px;margin-bottom:6px">
+      <div>
+        <div style="font-size:9px;color:var(--muted)">AVG APY</div>
+        <div style="font-size:16px;font-weight:700">${fmtPct(avgApy)}</div>
+      </div>
+      <div>
+        <div style="font-size:9px;color:var(--muted)">AVG REAL</div>
+        <div style="font-size:13px;font-weight:600;color:${realCol}">${fmtPct(avgReal)}</div>
+      </div>
+      <div>
+        <div style="font-size:9px;color:var(--muted)">BEST</div>
+        <div style="font-size:13px;font-weight:600;color:var(--green)">${best}</div>
+      </div>
+      <div>
+        <div style="font-size:9px;color:var(--muted)">TVS</div>
+        <div style="font-size:11px;color:var(--muted)">${tvsStr}</div>
+      </div>
+    </div>
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr>
+        <th style="font-size:8px;color:var(--muted);text-align:left;font-weight:500">PROTO</th>
+        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">APY</th>
+        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">REAL</th>
+        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">STAKED%</th>
+        <th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">RISK</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div style="font-size:9px;color:var(--muted);margin-top:4px">${data.description ?? ''}</div>
+  `;
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────

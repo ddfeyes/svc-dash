@@ -70,7 +70,9 @@ from metrics import (
     compute_macro_liquidity_indicator,
     compute_token_velocity_nvt,
     compute_layer2_metrics,
-    compute_validator_activity,
+    compute_derivatives_heatmap,
+    compute_network_health_score,
+    compute_staking_yield_tracker,
 )
 
 router = APIRouter(prefix="/api")
@@ -5296,10 +5298,16 @@ async def token_velocity_nvt_endpoint():
 async def layer2_metrics_endpoint():
     """Layer 2 metrics: TVL by chain, bridge flows, gas savings, growth momentum."""
     data = await compute_layer2_metrics()
-@router.get("/validator-activity")
-async def validator_activity_endpoint():
-    """Ethereum validator activity: attestation effectiveness, queue, slashing, APY."""
-    data = await compute_validator_activity()
+@router.get("/derivatives-heatmap")
+async def derivatives_heatmap_endpoint(
+    asset: str = Query("BTC", regex="^(BTC|ETH)$"),
+):
+    """OI heatmap by strike and expiry with max pain and GEX for BTC/ETH options."""
+    data = await compute_derivatives_heatmap(asset=asset)
+@router.get("/staking-yield-tracker")
+async def staking_yield_tracker_endpoint():
+    """Staking yield tracker: APY trends, validator growth, real yield, concentration risk."""
+    data = await compute_staking_yield_tracker()
     return JSONResponse(data)
 @router.get("/network-health-score")
 async def network_health_score_endpoint():

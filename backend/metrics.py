@@ -6031,8 +6031,75 @@ def _l2_rank_chains(chains: dict) -> list:
 def _l2_tvl_change_pct(current: float, previous: float) -> float:
     """Percentage change from previous to current TVL."""
 # ╔══════════════════════════════════════════════════════════════════════════╗
-=======
 # =====================================================# ╔══════════════════════════════════════════════════════════════════════════╗
+=======
+# ║  STAKING YIELD TRACKER                                                  ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+
+def _sy_real_yield(apy: float, inflation_rate: float) -> float:
+    """Nominal APY minus protocol inflation rate."""
+    return float(apy - inflation_rate)
+
+
+def _sy_stake_ratio(staked_supply: float, total_supply: float) -> float:
+    """% of total supply currently staked, clamped to [0, 100]."""
+    if total_supply == 0:
+        return 0.0
+    return float(min(100.0, max(0.0, staked_supply / total_supply * 100.0)))
+
+
+def _sy_concentration_risk(validators: list) -> float:
+    """Normalised HHI-based stake concentration risk [0-100].
+
+    0 = perfectly equal, 100 = single validator monopoly.
+    """
+    if not validators:
+        return 0.0
+    n = len(validators)
+    if n == 1:
+        return 100.0
+    total = sum(validators)
+    if total == 0:
+        return 0.0
+    shares = [v / total for v in validators]
+    hhi = sum(s * s for s in shares)
+    # Normalise: 0 (equal) → 1 (monopoly)
+    norm = (hhi - 1.0 / n) / (1.0 - 1.0 / n)
+    return float(min(100.0, max(0.0, norm * 100.0)))
+
+
+def _sy_apy_trend(apy_history: list) -> str:
+    """Linear-regression slope classifier: rising / falling / stable."""
+    if len(apy_history) < 2:
+        return "stable"
+    n = len(apy_history)
+    xs = list(range(n))
+    mean_x = (n - 1) / 2.0
+    mean_y = sum(apy_history) / n
+    num = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, apy_history))
+    den = sum((x - mean_x) ** 2 for x in xs)
+    if den == 0:
+        return "stable"
+    slope = num / den
+    threshold = (max(apy_history) - min(apy_history)) * 0.01
+    if slope > threshold:
+        return "rising"
+    if slope < -threshold:
+        return "falling"
+    return "stable"
+
+
+def _sy_yield_label(real_yield: float) -> str:
+    """Classify real yield: attractive (>=2%), neutral (>0%), negative (<=0%)."""
+    if real_yield >= 2.0:
+        return "attractive"
+    if real_yield > 0.0:
+        return "neutral"
+    return "negative"
+
+
+def _sy_validator_growth(current: float, previous: float) -> float:
+    """% growth in validator count from previous to current period."""
 # ║  MACRO LIQUIDITY INDICATOR                                              ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
@@ -6043,6 +6110,17 @@ def _ml_m2_growth_rate(current: float, previous: float) -> float:
     return float((current - previous) / previous * 100.0)
 
 
+def _sy_risk_label(concentration_score: float) -> str:
+    """Risk label from concentration score: high (>=60), medium (>=30), low."""
+    if concentration_score >= 60.0:
+        return "high"
+    if concentration_score >= 30.0:
+        return "medium"
+    return "low"
+
+
+def _sy_apy_zscore(current_apy: float, history: list) -> float:
+    """Z-score of current APY vs historical distribution."""
 def _ml_fed_balance_delta(current: float, previous: float) -> float:
     """Absolute change in Fed balance sheet size (positive = expanding)."""
     return float(current - previous)
@@ -7530,6 +7608,149 @@ async def compute_leverage_ratio_heatmap() -> dict:
             "max_risk_asset":        max_risk,
             "deleverage_risk_count": deleverage_count,
             "sector_risk_score":     round(sector_rs, 1),
+        },
+        "history_30d": history_30d,
+        "description": desc,
+    }
+
+
+    std = math.sqrt(sum((v - mean) ** 2 for v in history) / len(history))
+    if std == 0:
+        return 0.0
+    return float((current_apy - mean) / std)
+
+
+async def compute_staking_yield_tracker() -> dict:
+    """Staking yield: APY trends, validator growth, real yield, concentration risk."""
+    import httpx, datetime, random, math
+
+    # Baseline protocol data (mock; could be enriched from staking-rewards API)
+    PROTOCOLS = {
+        "ETH": {
+            "apy": 3.85, "inflation": 0.6,
+            "staked": 32_000_000, "supply": 120_000_000,
+            "validators": 980_000, "prev_validators": 959_800,
+            # validator stake distribution: 32 ETH each → near-equal → low HHI
+            "concentration": 42.0,
+            "apy_history": [3.95, 3.92, 3.90, 3.88, 3.87, 3.86, 3.85],
+            "tvs_usd": 3.85 / 100 * 32_000_000 * 3500,  # rough
+        },
+        "SOL": {
+            "apy": 7.20, "inflation": 5.0,
+            "staked": 390_000_000, "supply": 600_000_000,
+            "validators": 1_700, "prev_validators": 1_680,
+            "concentration": 68.0,
+            "apy_history": [6.90, 6.95, 7.00, 7.05, 7.10, 7.15, 7.20],
+            "tvs_usd": 7.2 / 100 * 390_000_000 * 200,
+        },
+        "ADA": {
+            "apy": 3.30, "inflation": 0.0,
+            "staked": 23_000_000_000, "supply": 37_000_000_000,
+            "validators": 3_200, "prev_validators": 3_184,
+            "concentration": 22.0,
+            "apy_history": [3.35, 3.34, 3.33, 3.32, 3.31, 3.30, 3.30],
+            "tvs_usd": 3.3 / 100 * 23_000_000_000 * 0.45,
+        },
+        "DOT": {
+            "apy": 12.0, "inflation": 8.0,
+            "staked": 750_000_000, "supply": 1_450_000_000,
+            "validators": 297, "prev_validators": 297,
+            "concentration": 55.0,
+            "apy_history": [13.0, 12.8, 12.6, 12.4, 12.2, 12.1, 12.0],
+            "tvs_usd": 12.0 / 100 * 750_000_000 * 8.0,
+        },
+        "AVAX": {
+            "apy": 8.50, "inflation": 3.5,
+            "staked": 440_000_000, "supply": 760_000_000,
+            "validators": 1_400, "prev_validators": 1_375,
+            "concentration": 35.0,
+            "apy_history": [8.30, 8.32, 8.35, 8.38, 8.42, 8.46, 8.50],
+            "tvs_usd": 8.5 / 100 * 440_000_000 * 38.0,
+        },
+    }
+
+    today = datetime.date.today()
+    # 30-day history dates (7 sample points)
+    dates_30d = [
+        (today - datetime.timedelta(days=30 - i * 5)).isoformat()
+        for i in range(7)
+    ]
+
+    protocols_out = {}
+    for name, d in PROTOCOLS.items():
+        real_yld = _sy_real_yield(d["apy"], d["inflation"])
+        y_label  = _sy_yield_label(real_yld)
+        s_ratio  = _sy_stake_ratio(d["staked"], d["supply"])
+        vg       = _sy_validator_growth(d["validators"], d["prev_validators"])
+        cr       = d["concentration"]
+        r_label  = _sy_risk_label(cr)
+        trend    = _sy_apy_trend(d["apy_history"])
+        apy_change = _sy_real_yield(d["apy_history"][-1], d["apy_history"][0])
+
+        history_30d = [
+            {
+                "date": dates_30d[i],
+                "apy": round(d["apy_history"][i], 3),
+                "real_yield": round(_sy_real_yield(d["apy_history"][i], d["inflation"]), 3),
+            }
+            for i in range(len(d["apy_history"]))
+        ]
+
+        protocols_out[name] = {
+            "apy": d["apy"],
+            "apy_change_30d": round(apy_change, 3),
+            "inflation_rate": d["inflation"],
+            "real_yield": round(real_yld, 3),
+            "yield_label": y_label,
+            "stake_ratio": round(s_ratio, 1),
+            "validators": d["validators"],
+            "validator_growth_30d_pct": round(vg, 2),
+            "concentration_risk": cr,
+            "risk_label": r_label,
+            "history_30d": history_30d,
+        }
+
+    # Aggregate
+    avg_apy = sum(d["apy"] for d in PROTOCOLS.values()) / len(PROTOCOLS)
+    real_yields = {n: _sy_real_yield(d["apy"], d["inflation"]) for n, d in PROTOCOLS.items()}
+    avg_real = sum(real_yields.values()) / len(real_yields)
+    best_yield = max(real_yields, key=real_yields.get)
+    concentration_scores = {n: d["concentration"] for n, d in PROTOCOLS.items()}
+    lowest_risk = min(concentration_scores, key=concentration_scores.get)
+    total_tvs = sum(d["tvs_usd"] for d in PROTOCOLS.values())
+
+    # 30-day aggregate history
+    history_30d = [
+        {
+            "date": dates_30d[i],
+            "avg_apy": round(
+                sum(d["apy_history"][i] for d in PROTOCOLS.values()) / len(PROTOCOLS), 3
+            ),
+            "avg_real_yield": round(
+                sum(
+                    _sy_real_yield(d["apy_history"][i], d["inflation"])
+                    for d in PROTOCOLS.values()
+                ) / len(PROTOCOLS), 3
+            ),
+        }
+        for i in range(7)
+    ]
+
+    best_real = real_yields[best_yield]
+    eth_stake = protocols_out["ETH"]["stake_ratio"]
+    desc = (
+        f"Staking yields: {best_yield} leads at {best_real:.1f}% real yield"
+        f" — ETH stake ratio {eth_stake:.1f}%"
+    )
+
+    return {
+        "protocols": protocols_out,
+        "aggregate": {
+            "avg_apy": round(avg_apy, 2),
+            "avg_real_yield": round(avg_real, 2),
+            "best_yield_protocol": best_yield,
+            "lowest_risk_protocol": lowest_risk,
+            "total_value_staked_usd": round(total_tvs, 0),
         },
         "history_30d": history_30d,
         "description": desc,
