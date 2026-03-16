@@ -191,6 +191,13 @@ async def health():
     return {"status": "ok", "symbols": get_symbols()}
 
 
+@app.get("/api/smart-money-patterns")
+async def smart_money_patterns(symbol: str = None):
+    """Detect smart money behavior patterns (accumulation, distribution, absorption)."""
+    from metrics import detect_smart_money_patterns
+    return await detect_smart_money_patterns(symbol=symbol)
+
+
 
 @app.get("/api/cross-market-correlation")
 async def cross_market_correlation():

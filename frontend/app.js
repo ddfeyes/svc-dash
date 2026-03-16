@@ -2490,6 +2490,9 @@ async function refresh() {
       safe(renderPriceVelocity),
     ]);
 
+    // Batch 14.5: smart money patterns
+    await Promise.all([safe(renderSmartMoneyPatterns)]);
+
     await delay(200);
     // Batch 15: cross-asset correlation
     await Promise.all([safe(renderCrossAssetCorr)]);
@@ -3450,6 +3453,85 @@ async function renderCrossCorrelationSignal() {
     console.error('Error rendering cross-correlation signal:', err);
     document.getElementById('cross-correlation-signal-content').innerHTML = 
       '<div style="color:var(--error);">Error loading signal</div>';
+  }
+}
+
+
+async function renderSmartMoneyPatterns() {
+  try {
+    const data = await apiFetch('/smart-money-patterns');
+    if (!data) {
+      document.getElementById('smart-money-patterns-content').innerHTML = 'No data';
+      return;
+    }
+
+    const patternType = (data.pattern_type || 'neutral').toUpperCase();
+    const confidence = parseFloat(data.confidence) || 0;
+    const delta1h = parseFloat(data.smart_delta_1h) || 0;
+    const delta4h = parseFloat(data.smart_delta_4h) || 0;
+    const delta24h = parseFloat(data.smart_delta_24h) || 0;
+    const absorbRatio = parseFloat(data.absorption_ratio) || 0;
+
+    // Color by pattern
+    let patternColor = '#888';
+    let patternBg = '#555';
+    if (patternType === 'ACCUMULATION') {
+      patternColor = '#2ecc71';
+      patternBg = '#27ae60';
+    } else if (patternType === 'DISTRIBUTION') {
+      patternColor = '#e74c3c';
+      patternBg = '#c0392b';
+    } else if (patternType === 'ABSORPTION') {
+      patternColor = '#f39c12';
+      patternBg = '#d68910';
+    }
+
+    const html = `
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px;">
+        <div style="text-align:center;">
+          <div style="font-size:18px; font-weight:bold; color:${patternColor};">${patternType}</div>
+          <div style="font-size:10px; color:#888;">Pattern</div>
+        </div>
+        <div style="text-align:center;">
+          <div style="font-size:18px; font-weight:bold; color:#4a9eff;">${(confidence * 100).toFixed(0)}%</div>
+          <div style="font-size:10px; color:#888;">Confidence</div>
+        </div>
+      </div>
+      <div style="margin-bottom:8px; font-size:11px;">
+        <div style="display:flex; justify-content:space-between;">
+          <span>1h Delta:</span>
+          <span style="color:${delta1h > 0 ? '#2ecc71' : '#e74c3c'};">${fmt(delta1h, 2)}</span>
+        </div>
+        <div style="display:flex; justify-content:space-between;">
+          <span>4h Delta:</span>
+          <span style="color:${delta4h > 0 ? '#2ecc71' : '#e74c3c'};">${fmt(delta4h, 2)}</span>
+        </div>
+        <div style="display:flex; justify-content:space-between;">
+          <span>24h Delta:</span>
+          <span style="color:${delta24h > 0 ? '#2ecc71' : '#e74c3c'};">${fmt(delta24h, 2)}</span>
+        </div>
+        <div style="display:flex; justify-content:space-between;">
+          <span>Absorption Ratio:</span>
+          <span style="color:#4a9eff;">${(absorbRatio * 100).toFixed(0)}%</span>
+        </div>
+      </div>
+    `;
+
+    document.getElementById('smart-money-patterns-content').innerHTML = html;
+
+    const badge = document.getElementById('smart-money-patterns-badge');
+    if (badge) {
+      badge.textContent = patternType;
+      badge.style.background = patternBg;
+      badge.style.color = '#fff';
+      badge.style.fontSize = '10px';
+      badge.style.padding = '2px 6px';
+      badge.style.display = 'inline-block';
+      badge.style.borderRadius = '3px';
+    }
+  } catch (err) {
+    console.error('Error rendering smart money patterns:', err);
+    document.getElementById('smart-money-patterns-content').innerHTML = 'Error';
   }
 }
 

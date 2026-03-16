@@ -10107,3 +10107,112 @@ async def compute_funding_term_structure(symbol: str = None) -> Dict:
         "symbol": symbol,
         "timestamp": now,
     }
+
+
+async def detect_smart_money_patterns(symbol: str = None) -> Dict:
+    """Detect smart money behavior patterns: accumulation, distribution, absorption.
+    
+    Smart money threshold: trades >= $50k notional value.
+    Returns: pattern_type, confidence, smart_delta_1h/4h/24h, absorption_ratio.
+    """
+    now = time.time()
+    trades_24h = await get_trades_for_cvd(now - 86400, symbol=symbol)
+    
+    if not trades_24h:
+        return {
+            "pattern_type": "neutral",
+            "confidence": 0.0,
+            "smart_delta_1h": 0.0,
+            "smart_delta_4h": 0.0,
+            "smart_delta_24h": 0.0,
+            "absorption_ratio": 0.0,
+            "timestamp": now,
+        }
+    
+    # Classify trades by size: smart (>=$50k notional) vs retail
+    SMART_THRESHOLD = 50000  # $50k notional
+    smart_trades = []
+    retail_trades = []
+    
+    for t in trades_24h:
+        notional = t["qty"] * t["price"]
+        if notional >= SMART_THRESHOLD:
+            smart_trades.append(t)
+        else:
+            retail_trades.append(t)
+    
+    # Compute smart money delta over windows
+    def compute_delta(trades, window_seconds):
+        since = now - window_seconds
+        window_trades = [t for t in trades if t["ts"] >= since]
+        if not window_trades:
+            return 0.0
+        
+        delta = 0.0
+        for t in window_trades:
+            if t["side"] in ("buy", "Buy"):
+                delta += t["qty"]
+            else:
+                delta -= t["qty"]
+        return delta
+    
+    delta_1h = compute_delta(smart_trades, 3600)
+    delta_4h = compute_delta(smart_trades, 14400)
+    delta_24h = compute_delta(smart_trades, 86400)
+    
+    # Pattern detection
+    total_smart_buy = sum(t["qty"] for t in smart_trades if t["side"] in ("buy", "Buy"))
+    total_smart_sell = sum(t["qty"] for t in smart_trades if t["side"] in ("sell", "Sell"))
+    total_retail_buy = sum(t["qty"] for t in retail_trades if t["side"] in ("buy", "Buy"))
+    total_retail_sell = sum(t["qty"] for t in retail_trades if t["side"] in ("sell", "Sell"))
+    
+    # Calculate notional values for absorption check
+    total_retail_sell_notional = sum(t["price"] * t["qty"] for t in retail_trades if t["side"] in ("sell", "Sell"))
+    
+    # Default to neutral
+    pattern_type = "neutral"
+    confidence = 0.0
+    absorption_ratio = 0.0
+    
+    total_smart = total_smart_buy + total_smart_sell
+    
+    # Calculate absorption ratio early (qty ratio, not notional)
+    if total_retail_sell > 0 and total_smart_buy > 0:
+        absorption_ratio = min(1.0, total_smart_buy / total_retail_sell)
+    
+    # First check: require minimum activity (smart trades or retail resistance)
+    min_volume = 1000  # At least 1k qty of smart trading
+    if total_smart < min_volume and total_retail_sell_notional < 50000:
+        confidence = 0.0
+        pattern_type = "neutral"
+    else:
+        buy_ratio = total_smart_buy / total_smart if total_smart > 0 else 0.5
+        sell_ratio = total_smart_sell / total_smart if total_smart > 0 else 0.5
+        
+        # Check absorption first (smart money resisting retail dump)
+        # Absorption: strong retail selling ($50k+) + smart buying response
+        if total_retail_sell_notional > 50000 and total_smart_buy > 0 and absorption_ratio > 0.2:
+            pattern_type = "absorption"
+            confidence = min(1.0, absorption_ratio)
+        # Accumulation: smart buying dominates (>65%)
+        elif buy_ratio > 0.65:
+            pattern_type = "accumulation"
+            confidence = min(1.0, (buy_ratio - 0.5) * 2)
+        # Distribution: smart selling dominates (>65%)
+        elif sell_ratio > 0.65:
+            pattern_type = "distribution"
+            confidence = min(1.0, (sell_ratio - 0.5) * 2)
+        else:
+            # Mixed but no clear pattern
+            pattern_type = "neutral"
+            confidence = 0.2
+    
+    return {
+        "pattern_type": pattern_type,
+        "confidence": round(max(0.0, min(1.0, confidence)), 4),
+        "smart_delta_1h": round(delta_1h, 2),
+        "smart_delta_4h": round(delta_4h, 2),
+        "smart_delta_24h": round(delta_24h, 2),
+        "absorption_ratio": round(max(0.0, min(1.0, absorption_ratio)), 4),
+        "timestamp": now,
+    }
