@@ -23385,8 +23385,8 @@ async function refresh() {
     await Promise.all([safe(renderMarketMicrostructure)]);
     // Batch 16: options skew
     await Promise.all([safe(renderOptionsSkew)]);
-    // Batch 17: exchange netflow
-    await Promise.all([safe(renderExchangeNetflow)]);
+    // Batch 17: stablecoin flow (no symbol — global signal)
+    await Promise.all([safe(renderStablecoinFlow)]);
   } finally {
     _refreshRunning = false;
   }
@@ -23451,77 +23451,85 @@ async function renderOptionsSkew() {
     ${data.description ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${data.description}</div>` : ''}`;
 }
 
-// ── Exchange Net Flow ─────────────────────────────────────────────────────────
-async function renderExchangeNetflow() {
-  const el    = document.getElementById('exchange-netflow-content');
-  const badge = document.getElementById('exchange-netflow-badge');
-  if (!el) return;
-  const data = await apiFetch('/exchange-netflow');
-  if (!data) { setErr('exchange-netflow-content'); return; }
+// ── Stablecoin Flow ───────────────────────────────────────────────────────────
+async function renderStablecoinFlow() {
+  const data  = await apiFetch('/stablecoin-flow');
+  const el    = document.getElementById('stablecoin-flow-content');
+  const badge = document.getElementById('stablecoin-flow-badge');
+  if (!data || !el) return;
 
-  const agg     = data.aggregate    || {};
-  const exs     = data.exchanges    || {};
-  const history = data.history      || [];
-  const signal  = agg.signal        || 'neutral';
-  const trend   = agg.trend         || 'stable';
-  const strength = agg.strength     ?? 0;
-  const zscore  = agg.zscore        ?? 0;
-  const nf24h   = agg.net_flow_24h  ?? 0;
-  const nf7d    = agg.net_flow_7d   ?? 0;
+  const agg    = data.aggregate || {};
+  const signal = agg.flow_signal ?? 'neutral';
+  const dir    = agg.flow_direction ?? 'neutral';
 
-  const sigCls   = signal === 'accumulation' ? 'badge-green' : signal === 'distribution' ? 'badge-red' : 'badge-blue';
-  const sigLabel = signal.toUpperCase();
+  const sigCol = signal === 'bullish' ? 'var(--green)'
+    : signal === 'bearish' ? 'var(--red)' : 'var(--muted)';
+
   if (badge) {
-    badge.textContent = sigLabel;
-    badge.className   = `card-badge ${sigCls}`;
-    badge.style.display = '';
+    badge.textContent = signal.toUpperCase();
+    badge.style.display = 'inline-block';
+    badge.style.color = sigCol;
   }
 
-  const trendCol = trend === 'increasing' ? 'var(--green)' : trend === 'decreasing' ? 'var(--red)' : 'var(--muted)';
-  const fmtFlow  = v => {
-    const abs = Math.abs(v);
+  if (!data.stablecoins || Object.keys(data.stablecoins).length === 0) {
+    el.innerHTML = `<div style="color:var(--muted);font-size:11px;padding:4px 0">No stablecoin data</div>`;
+    return;
+  }
+
+  const fmtUsd = v => {
+    const av = Math.abs(v);
     const sign = v >= 0 ? '+' : '-';
-    if (abs >= 1e6) return sign + (abs / 1e6).toFixed(1) + 'M';
-    if (abs >= 1e3) return sign + (abs / 1e3).toFixed(1) + 'k';
-    return sign + abs.toFixed(0);
+    if (av >= 1e9) return sign + '$' + (av / 1e9).toFixed(2) + 'B';
+    if (av >= 1e6) return sign + '$' + (av / 1e6).toFixed(0) + 'M';
+    return sign + '$' + av.toFixed(0);
   };
 
-  const exRows = Object.entries(exs)
-    .sort((a, b) => b[1].net_flow - a[1].net_flow)
-    .map(([name, ex]) => {
-      const dir    = ex.direction || 'neutral';
-      const col    = dir === 'inflow' ? 'var(--green)' : dir === 'outflow' ? 'var(--red)' : 'var(--muted)';
-      const netStr = fmtFlow(ex.net_flow || 0);
-      return `<tr>
-        <td style="font-size:9px;color:var(--muted);padding-right:8px">${name}</td>
-        <td style="font-size:10px;color:${col};font-weight:600;text-align:right;padding-right:6px">${netStr}</td>
-        <td style="font-size:9px;color:${col};text-align:right">${dir}</td>
-      </tr>`;
-    }).join('');
-
-  const sparkbars = history.slice(-14).map(h => {
-    const col = (h.net_flow || 0) >= 0 ? 'var(--green)' : 'var(--red)';
-    return `<span style="display:inline-block;width:5px;height:10px;background:${col};margin-right:1px;opacity:0.7"></span>`;
+  // Per-coin rows
+  const coinRows = Object.entries(data.stablecoins).map(([sym, d]) => {
+    const col24 = d.inflow_24h > 0 ? 'var(--green)' : d.inflow_24h < 0 ? 'var(--red)' : 'var(--muted)';
+    const col7d  = d.inflow_7d  > 0 ? 'var(--green)' : d.inflow_7d  < 0 ? 'var(--red)' : 'var(--muted)';
+    return `<tr>
+      <td style="font-size:9px;color:var(--muted);padding-right:6px;font-weight:600">${sym}</td>
+      <td style="font-size:9px;color:${col24};text-align:right;padding-right:4px">${fmtUsd(d.inflow_24h || 0)}</td>
+      <td style="font-size:9px;color:${col7d};text-align:right">${fmtUsd(d.inflow_7d || 0)}</td>
+    </tr>`;
   }).join('');
 
+  // 7-day history bar chart
+  const hist = data.history || [];
+  const histMax = Math.max(...hist.map(h => Math.abs(h.net_flow)), 1);
+  const histBars = hist.map(h => {
+    const pct = Math.min(Math.abs(h.net_flow) / histMax * 100, 100).toFixed(0);
+    const col = h.net_flow > 0 ? 'var(--green)' : h.net_flow < 0 ? 'var(--red)' : 'var(--muted)';
+    const day = h.date ? h.date.slice(5) : '';
+    return `<div style="display:flex;flex-direction:column;align-items:center;flex:1;gap:2px">
+      <div style="width:100%;height:${pct}%;background:${col};border-radius:2px 2px 0 0;min-height:2px"></div>
+      <span style="font-size:8px;color:var(--muted)">${day}</span>
+    </div>`;
+  }).join('');
+
+  const zscore = agg.flow_zscore ?? 0;
+  const mom    = agg.flow_momentum ?? 0;
+
   el.innerHTML = `
-    <div style="font-size:10px;color:var(--muted);margin-bottom:4px;display:flex;gap:10px;flex-wrap:wrap">
-      <span>24h: <b style="color:${nf24h>=0?'var(--green)':'var(--red)'}">${fmtFlow(nf24h)}</b></span>
-      <span>7d: <b style="color:${nf7d>=0?'var(--green)':'var(--red)'}">${fmtFlow(nf7d)}</b></span>
-      <span>strength: <b style="color:var(--fg)">${strength.toFixed(1)}%</b></span>
-      <span>z: <b style="color:${zscore>1?'var(--green)':zscore<-1?'var(--red)':'var(--muted)'}">${zscore.toFixed(2)}</b></span>
-      <span>trend: <b style="color:${trendCol}">${trend}</b></span>
+    <div style="font-size:10px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:4px">
+      <span>24h: <b style="color:${sigCol}">${fmtUsd(agg.net_flow_24h || 0)}</b></span>
+      <span>7d: <b style="color:${sigCol}">${fmtUsd(agg.net_flow_7d || 0)}</b></span>
+      <span>mom: <b style="color:${mom >= 0 ? 'var(--green)' : 'var(--red)'}">${fmtUsd(mom)}</b></span>
+      <span>z: <b style="color:var(--fg)">${zscore.toFixed(2)}</b></span>
     </div>
-    <table style="border-collapse:collapse;width:100%;margin-bottom:4px">
+    <table style="border-collapse:collapse;width:100%;margin-bottom:6px">
       <thead><tr>
-        <th style="font-size:9px;color:var(--muted);text-align:left">exchange</th>
-        <th style="font-size:9px;color:var(--muted);text-align:right;padding-right:6px">net flow</th>
-        <th style="font-size:9px;color:var(--muted);text-align:right">direction</th>
+        <th style="font-size:9px;color:var(--muted);text-align:left">coin</th>
+        <th style="font-size:9px;color:var(--muted);text-align:right;padding-right:4px">24h</th>
+        <th style="font-size:9px;color:var(--muted);text-align:right">7d</th>
       </tr></thead>
-      <tbody>${exRows}</tbody>
+      <tbody>${coinRows}</tbody>
     </table>
-    <div style="margin-top:4px">${sparkbars}</div>
-    ${data.description ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${data.description}</div>` : ''}`;
+    ${hist.length > 0 ? `
+    <div style="font-size:9px;color:var(--muted);margin-bottom:2px">7-day flow</div>
+    <div style="display:flex;align-items:flex-end;height:30px;gap:2px;margin-bottom:2px">${histBars}</div>` : ''}
+    ${data.description ? `<div style="font-size:10px;color:var(--muted);margin-top:2px">${data.description}</div>` : ''}`;
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────

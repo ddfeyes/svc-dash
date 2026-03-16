@@ -5727,33 +5727,24 @@ async def compute_options_skew(
     }
 
 
-# ── Exchange Net Flow Dashboard ───────────────────────────────────────────────
+# ── On-chain Stablecoin Flow Tracker ─────────────────────────────────────────
 
-_ENF_EXCHANGES: list = ["Binance", "Coinbase", "OKX", "Bybit", "Kraken"]
-_ENF_FLOW_THRESHOLD: float = 1_000.0        # min net flow (BTC×USD) for directional signal
-_ENF_SIGNAL_THRESHOLD: float = 50_000.0     # 7d net flow magnitude for acc/dist signal
-_ENF_TREND_THRESHOLD_PCT: float = 5.0       # % difference to call increasing/decreasing
-_ENF_HISTORY_DAYS: int = 30
-_ENF_CC_BASE: str = "https://min-api.cryptocompare.com/data/v2/histoday"
-
-
-def _enf_net_flow_proxy(
-    volume_btc: float, open_price: float, close_price: float
-) -> float:
-    """Net flow proxy = volume × (close − open).
-
-    Up candle  → positive (buying pressure / inflow).
-    Down candle → negative (selling pressure / outflow).
-    """
-    if open_price <= 0 or volume_btc < 0:
-        return 0.0
-    return round(float(volume_btc) * (close_price - open_price), 2)
+# DeFi Llama stablecoin IDs
+_SC_IDS: dict = {"USDT": 1, "USDC": 2, "DAI": 5}
+_SC_FLOW_NEUTRAL_THRESHOLD: float = 100_000_000.0   # $100M
+_SC_HISTORY_DAYS: int = 7
+_SC_LLAMA_BASE: str = "https://stablecoins.llama.fi"
 
 
-def _enf_flow_direction(
-    net_flow: float, threshold: float = _ENF_FLOW_THRESHOLD
+def _sf_net_flow(current: float, previous: float) -> float:
+    """Return net supply change: current − previous."""
+    return round(float(current) - float(previous), 2)
+
+
+def _sf_flow_direction(
+    net_flow: float, threshold: float = 1_000_000.0
 ) -> str:
-    """Classify net flow into inflow / outflow / neutral."""
+    """Classify net flow as inflow / outflow / neutral relative to threshold."""
     if net_flow > threshold:
         return "inflow"
     if net_flow < -threshold:
@@ -5761,53 +5752,40 @@ def _enf_flow_direction(
     return "neutral"
 
 
-def _enf_accumulation_signal(net_flow_7d: float, trend: str) -> str:
-    """Generate accumulation / distribution / neutral from 7d net flow + trend."""
-    if net_flow_7d > _ENF_SIGNAL_THRESHOLD and trend == "increasing":
-        return "accumulation"
-    if net_flow_7d < -_ENF_SIGNAL_THRESHOLD and trend == "decreasing":
-        return "distribution"
+def _sf_flow_signal(
+    net_flow_7d: float, threshold: float = _SC_FLOW_NEUTRAL_THRESHOLD
+) -> str:
+    """Generate bullish / bearish / neutral from 7-day net flow."""
+    if net_flow_7d > threshold:
+        return "bullish"
+    if net_flow_7d < -threshold:
+        return "bearish"
     return "neutral"
 
 
-def _enf_flow_strength(net_flow: float, max_flow: float) -> float:
-    """Return 0-100 strength score as |net_flow| / max_flow × 100, clamped."""
-    if max_flow <= 0:
+def _sf_momentum(flows: list) -> float:
+    """Flow momentum = acceleration = (avg of second half) − (avg of first half).
+
+    Requires at least 3 data points; returns 0.0 for shorter lists.
+    """
+    if len(flows) < 3:
         return 0.0
-    return round(min(100.0, abs(net_flow) / max_flow * 100.0), 2)
+    mid = len(flows) // 2
+    early_avg = sum(flows[:mid]) / mid
+    late_avg = sum(flows[mid:]) / (len(flows) - mid)
+    return round(late_avg - early_avg, 2)
 
 
-def _enf_exchange_rank(exchanges: dict) -> list:
-    """Return list of (name, data) tuples sorted by net_flow descending."""
-    if not exchanges:
-        return []
-    return sorted(
-        [(name, data) for name, data in exchanges.items()],
-        key=lambda x: x[1].get("net_flow", 0.0),
-        reverse=True,
-    )
+def _sf_rolling_average(values: list, n: int) -> float:
+    """Compute the rolling average of the last n values."""
+    if not values:
+        return 0.0
+    tail = values[-n:] if len(values) >= n else values
+    return round(sum(tail) / len(tail), 2)
 
 
-def _enf_trend(flow_history: list) -> str:
-    """Classify flow trend: compare first-half avg vs second-half avg."""
-    n = len(flow_history)
-    if n < 3:
-        return "stable"
-    mid = n // 2
-    early = sum(flow_history[:mid]) / mid
-    late  = sum(flow_history[mid:]) / (n - mid)
-    if early == 0:
-        return "stable"
-    pct = (late - early) / abs(early) * 100.0
-    if pct > _ENF_TREND_THRESHOLD_PCT:
-        return "increasing"
-    if pct < -_ENF_TREND_THRESHOLD_PCT:
-        return "decreasing"
-    return "stable"
-
-
-def _enf_zscore(current: float, history: list) -> float:
-    """Z-score of current value vs history list."""
+def _sf_flow_zscore(current_flow: float, history: list) -> float:
+    """Z-score of current_flow relative to a list of historical flow values."""
     if len(history) < 2:
         return 0.0
     n = len(history)
@@ -5815,146 +5793,177 @@ def _enf_zscore(current: float, history: list) -> float:
     variance = sum((v - mean) ** 2 for v in history) / n
     std = variance ** 0.5
     if std < 1.0:
-        diff = current - mean
-        return (3.0 if diff > 0 else -3.0) if abs(diff) >= 1.0 else 0.0
-    return round((current - mean) / std, 4)
+        return 0.0
+    return round((current_flow - mean) / std, 4)
 
 
-async def compute_exchange_netflow() -> dict:
-    """Fetch 30-day per-exchange BTC OHLCV from CryptoCompare and compute
-    net flow proxies, accumulation/distribution signal, trend, and z-score.
+def _sf_combine_stables(flows_by_coin: dict) -> dict:
+    """Aggregate per-coin flows into a single composite summary."""
+    net_24h = sum(v.get("inflow_24h", 0.0) for v in flows_by_coin.values())
+    net_7d = sum(v.get("inflow_7d", 0.0) for v in flows_by_coin.values())
+    return {
+        "net_flow_24h": round(net_24h, 2),
+        "net_flow_7d": round(net_7d, 2),
+        "flow_direction": _sf_flow_direction(net_24h),
+        "flow_signal": _sf_flow_signal(net_7d),
+    }
 
-    Net flow proxy: volume_btc × (close − open) per candle.
-    Positive = buying pressure (inflows); negative = selling pressure (outflows).
+
+async def compute_stablecoin_flow() -> dict:
+    """Fetch USDT / USDC / DAI supply history from DeFi Llama and compute
+    exchange buying-power signals.
+
+    Returns per-coin breakdown, 7-day aggregate, rolling history,
+    flow momentum, z-score, and bullish / bearish signal.
     """
     import aiohttp
     import datetime
 
-    async def _fetch_exchange(
-        session: "aiohttp.ClientSession", exchange: str
-    ) -> list:
-        url = (
-            f"{_ENF_CC_BASE}?fsym=BTC&tsym=USD"
-            f"&limit={_ENF_HISTORY_DAYS}&e={exchange}&aggregate=1"
-        )
+    async def _fetch_coin(session: "aiohttp.ClientSession", symbol: str, coin_id: int) -> dict:
+        url = f"{_SC_LLAMA_BASE}/stablecoincharts/all?stablecoin={coin_id}"
         try:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=6)) as r:
-                if r.status != 200:
-                    return []
-                j = await r.json(content_type=None)
-                return j.get("Data", {}).get("Data", [])
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                if resp.status != 200:
+                    return {}
+                rows = await resp.json(content_type=None)
         except Exception:
-            return []
+            return {}
+
+        # rows: [{"date": int, "totalCirculatingUSD": {"peggedUSD": float}}, ...]
+        parsed: list = []
+        for row in rows:
+            try:
+                ts = int(row["date"])
+                supply = float(
+                    row.get("totalCirculatingUSD", {}).get("peggedUSD", 0) or 0
+                )
+                parsed.append({"ts": ts, "supply": supply})
+            except (KeyError, TypeError, ValueError):
+                continue
+
+        parsed.sort(key=lambda x: x["ts"])
+        if not parsed:
+            return {}
+
+        current_supply = parsed[-1]["supply"]
+
+        # 24h flow
+        cutoff_24h = parsed[-1]["ts"] - 86400
+        prev_24h = next(
+            (p["supply"] for p in reversed(parsed) if p["ts"] <= cutoff_24h),
+            current_supply,
+        )
+        inflow_24h = _sf_net_flow(current_supply, prev_24h)
+
+        # 7-day flow
+        cutoff_7d = parsed[-1]["ts"] - 7 * 86400
+        prev_7d = next(
+            (p["supply"] for p in reversed(parsed) if p["ts"] <= cutoff_7d),
+            current_supply,
+        )
+        inflow_7d = _sf_net_flow(current_supply, prev_7d)
+
+        return {
+            "symbol": symbol,
+            "current_supply": round(current_supply, 2),
+            "inflow_24h": inflow_24h,
+            "inflow_7d": inflow_7d,
+            "flow_direction_24h": _sf_flow_direction(inflow_24h),
+            "_daily": parsed,
+        }
 
     async with aiohttp.ClientSession() as session:
         results = await asyncio.gather(
-            *[_fetch_exchange(session, ex) for ex in _ENF_EXCHANGES]
+            *[_fetch_coin(session, sym, cid) for sym, cid in _SC_IDS.items()]
         )
 
-    # ── Per-exchange net flow ─────────────────────────────────────────────────
-    exchanges_data: dict = {}
-    daily_agg: dict = {}   # {date_str: float}
+    coins_data: dict = {}
+    for sym, res in zip(_SC_IDS.keys(), results):
+        if res:
+            coins_data[sym] = res
 
-    for exchange, candles in zip(_ENF_EXCHANGES, results):
-        if not candles:
-            # Fallback: zero data
-            exchanges_data[exchange] = {
-                "inflow_proxy": 0.0, "outflow_proxy": 0.0,
-                "net_flow": 0.0, "direction": "neutral", "volume_btc": 0.0,
+    # Fallback: if all fetches failed, return empty structure
+    if not coins_data:
+        empty_agg = {
+            "net_flow_24h": 0.0, "net_flow_7d": 0.0,
+            "flow_direction": "neutral", "flow_signal": "neutral",
+            "flow_momentum": 0.0, "flow_zscore": 0.0,
+        }
+        return {
+            "stablecoins": {},
+            "aggregate": empty_agg,
+            "history": [],
+            "description": "No stablecoin data available",
+        }
+
+    # ── Aggregate ────────────────────────────────────────────────────────────
+    flows_for_combine = {
+        sym: {"inflow_24h": d["inflow_24h"], "inflow_7d": d["inflow_7d"]}
+        for sym, d in coins_data.items()
+    }
+    agg = _sf_combine_stables(flows_for_combine)
+
+    # ── 7-day history (daily net-flow across all coins) ──────────────────────
+    history: list = []
+    today_ts = int(time.time())
+    for day_offset in range(_SC_HISTORY_DAYS - 1, -1, -1):
+        day_ts = today_ts - day_offset * 86400
+        day_label = datetime.datetime.utcfromtimestamp(day_ts).strftime("%Y-%m-%d")
+        daily_net = 0.0
+        for sym, d in coins_data.items():
+            daily = d.get("_daily", [])
+            # supply at end of day
+            sup_end = next(
+                (p["supply"] for p in reversed(daily) if p["ts"] <= day_ts),
+                None,
+            )
+            sup_prev = next(
+                (p["supply"] for p in reversed(daily) if p["ts"] <= day_ts - 86400),
+                None,
+            )
+            if sup_end is not None and sup_prev is not None:
+                daily_net += _sf_net_flow(sup_end, sup_prev)
+        history.append(
+            {
+                "date": day_label,
+                "net_flow": round(daily_net, 2),
+                "flow_direction": _sf_flow_direction(daily_net),
             }
-            continue
-
-        inflow_total = 0.0
-        outflow_total = 0.0
-        vol_total = 0.0
-        for candle in candles:
-            try:
-                vol   = float(candle.get("volumefrom", 0) or 0)
-                o     = float(candle.get("open", 0) or 0)
-                c     = float(candle.get("close", 0) or 0)
-                ts    = int(candle.get("time", 0))
-                proxy = _enf_net_flow_proxy(vol, o, c)
-                if proxy > 0:
-                    inflow_total  += proxy
-                else:
-                    outflow_total += abs(proxy)
-                vol_total += vol
-                # Aggregate by date
-                date_key = datetime.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
-                daily_agg[date_key] = daily_agg.get(date_key, 0.0) + proxy
-            except (TypeError, ValueError):
-                continue
-
-        # Most recent candle net
-        last = candles[-1] if candles else {}
-        last_proxy = _enf_net_flow_proxy(
-            float(last.get("volumefrom", 0) or 0),
-            float(last.get("open", 0) or 0),
-            float(last.get("close", 0) or 0),
         )
 
-        exchanges_data[exchange] = {
-            "inflow_proxy":  round(inflow_total, 2),
-            "outflow_proxy": round(outflow_total, 2),
-            "net_flow":      round(inflow_total - outflow_total, 2),
-            "direction":     _enf_flow_direction(last_proxy),
-            "volume_btc":    round(vol_total, 4),
-        }
-
-    # ── Aggregate ─────────────────────────────────────────────────────────────
-    net_24h = sum(d["net_flow"] for d in exchanges_data.values()) / max(len(exchanges_data), 1)
-    net_7d  = net_24h * 7  # approximation across exchanges
-
-    sorted_dates = sorted(daily_agg.keys())
-    history = [
-        {
-            "date": d,
-            "net_flow": round(daily_agg[d], 2),
-            "direction": _enf_flow_direction(daily_agg[d]),
-        }
-        for d in sorted_dates[-_ENF_HISTORY_DAYS:]
-    ]
-
+    # ── Momentum & z-score ────────────────────────────────────────────────────
     flow_values = [h["net_flow"] for h in history]
-    trend  = _enf_trend(flow_values)
-    signal = _enf_accumulation_signal(net_7d, trend)
+    momentum = _sf_momentum(flow_values)
+    zscore = _sf_flow_zscore(flow_values[-1] if flow_values else 0.0, flow_values[:-1])
 
-    all_net = [abs(d["net_flow"]) for d in exchanges_data.values()]
-    max_abs = max(all_net, default=1.0)
-    strength = _enf_flow_strength(net_24h, max_abs)
+    agg["flow_momentum"] = momentum
+    agg["flow_zscore"] = zscore
 
-    zscore = _enf_zscore(
-        flow_values[-1] if flow_values else 0.0,
-        flow_values[:-1] if len(flow_values) > 1 else [],
-    )
-
-    # ── Description ───────────────────────────────────────────────────────────
-    def _fmt(v: float) -> str:
+    # ── Description ──────────────────────────────────────────────────────────
+    def _fmt_usd(v: float) -> str:
         av = abs(v)
-        return (
-            f"${av / 1e6:.1f}M" if av >= 1e6
-            else f"${av / 1e3:.0f}k" if av >= 1e3
-            else f"${av:.0f}"
-        )
+        if av >= 1e9:
+            return f"${av / 1e9:.1f}B"
+        if av >= 1e6:
+            return f"${av / 1e6:.0f}M"
+        return f"${av:.0f}"
 
-    top_ex = _enf_exchange_rank(exchanges_data)
-    top_name = top_ex[0][0] if top_ex else "exchanges"
+    signal = agg["flow_signal"]
+    dir_label = agg["flow_direction"]
     desc = (
-        f"{signal.capitalize()}: {_fmt(net_24h)} net BTC "
-        f"{'inflow' if net_24h > 0 else 'outflow'} across 5 exchanges "
-        f"— {top_name} leading"
+        f"{signal.capitalize()}: {_fmt_usd(agg['net_flow_24h'])} stablecoin "
+        f"{dir_label} in 24h — buying power {'increasing' if dir_label == 'inflow' else 'decreasing' if dir_label == 'outflow' else 'stable'}"
     )
+
+    # Strip internal _daily key before returning
+    stablecoins_out = {
+        sym: {k: v for k, v in d.items() if k != "_daily"}
+        for sym, d in coins_data.items()
+    }
 
     return {
-        "exchanges": exchanges_data,
-        "aggregate": {
-            "net_flow_24h": round(net_24h, 2),
-            "net_flow_7d":  round(net_7d, 2),
-            "signal":       signal,
-            "strength":     strength,
-            "trend":        trend,
-            "zscore":       zscore,
-        },
-        "history":     history,
+        "stablecoins": stablecoins_out,
+        "aggregate": agg,
+        "history": history,
         "description": desc,
     }
