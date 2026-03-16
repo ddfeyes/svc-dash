@@ -82,7 +82,7 @@ from metrics import (
     compute_momentum_divergence,
     compute_spread_analysis,
     compute_options_skew,
-    compute_stablecoin_flow,
+    compute_perpetual_basis,
 )
 
 router = APIRouter(prefix="/api")
@@ -5444,8 +5444,12 @@ async def options_skew_endpoint(
     return JSONResponse(data)
 
 
-@router.get("/stablecoin-flow")
-async def stablecoin_flow_endpoint():
-    """On-chain stablecoin flow: USDT/USDC/DAI net exchange inflows as buying-power signal."""
-    data = await compute_stablecoin_flow()
+@router.get("/perpetual-basis")
+async def perpetual_basis_endpoint(
+    symbol: Optional[str] = Query(None),
+    window: int = Query(3600, ge=300, le=86400),
+):
+    """Perpetual futures basis: spot vs perp spread, annualized carry rate, trade signal."""
+    target = symbol or get_symbols()[0]
+    data = await compute_perpetual_basis(symbol=target, window_seconds=window)
     return JSONResponse(data)

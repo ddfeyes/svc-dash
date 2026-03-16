@@ -5727,243 +5727,212 @@ async def compute_options_skew(
     }
 
 
-# ── On-chain Stablecoin Flow Tracker ─────────────────────────────────────────
+# ── Perpetual Basis Tracker ───────────────────────────────────────────────────
 
-# DeFi Llama stablecoin IDs
-_SC_IDS: dict = {"USDT": 1, "USDC": 2, "DAI": 5}
-_SC_FLOW_NEUTRAL_THRESHOLD: float = 100_000_000.0   # $100M
-_SC_HISTORY_DAYS: int = 7
-_SC_LLAMA_BASE: str = "https://stablecoins.llama.fi"
-
-
-def _sf_net_flow(current: float, previous: float) -> float:
-    """Return net supply change: current − previous."""
-    return round(float(current) - float(previous), 2)
+_PB_CARRY_THRESHOLD: float = 0.1   # % basis below which signal is neutral
+_PB_CARRY_SCALE: float = 2.0       # % basis at which strength saturates (~71% at 5%)
+_PB_FUNDING_INTERVAL_HOURS: float = 8.0  # standard perp funding interval
+_PB_HISTORY_LIMIT: int = 48        # max history points to return
 
 
-def _sf_flow_direction(
-    net_flow: float, threshold: float = 1_000_000.0
-) -> str:
-    """Classify net flow as inflow / outflow / neutral relative to threshold."""
-    if net_flow > threshold:
-        return "inflow"
-    if net_flow < -threshold:
-        return "outflow"
-    return "neutral"
-
-
-def _sf_flow_signal(
-    net_flow_7d: float, threshold: float = _SC_FLOW_NEUTRAL_THRESHOLD
-) -> str:
-    """Generate bullish / bearish / neutral from 7-day net flow."""
-    if net_flow_7d > threshold:
-        return "bullish"
-    if net_flow_7d < -threshold:
-        return "bearish"
-    return "neutral"
-
-
-def _sf_momentum(flows: list) -> float:
-    """Flow momentum = acceleration = (avg of second half) − (avg of first half).
-
-    Requires at least 3 data points; returns 0.0 for shorter lists.
+def _pb_basis_pct(perp_price: float, spot_price: float) -> float:
+    """Return basis as % of spot: (perp - spot) / spot * 100.
+    Returns 0.0 if spot_price is zero or None.
     """
-    if len(flows) < 3:
+    if not spot_price:
         return 0.0
-    mid = len(flows) // 2
-    early_avg = sum(flows[:mid]) / mid
-    late_avg = sum(flows[mid:]) / (len(flows) - mid)
-    return round(late_avg - early_avg, 2)
+    return round((perp_price - spot_price) / spot_price * 100.0, 6)
 
 
-def _sf_rolling_average(values: list, n: int) -> float:
-    """Compute the rolling average of the last n values."""
-    if not values:
+def _pb_annualized_from_price(
+    basis_pct: float, funding_interval_hours: float = _PB_FUNDING_INTERVAL_HOURS
+) -> float:
+    """Annualise a per-interval basis % to an annual rate.
+
+    annualized = basis_pct × (365 × 24 / funding_interval_hours)
+    """
+    if funding_interval_hours <= 0:
         return 0.0
-    tail = values[-n:] if len(values) >= n else values
-    return round(sum(tail) / len(tail), 2)
+    return round(basis_pct * 365.0 * 24.0 / funding_interval_hours, 4)
 
 
-def _sf_flow_zscore(current_flow: float, history: list) -> float:
-    """Z-score of current_flow relative to a list of historical flow values."""
+def _pb_funding_annualized(avg_rate_8h: float) -> float:
+    """Convert an 8-hour funding rate to annualized % return.
+
+    annualized_pct = rate × 3 payments/day × 365 days × 100
+    """
+    return round(avg_rate_8h * 3.0 * 365.0 * 100.0, 6)
+
+
+def _pb_carry_signal(
+    basis_pct: float, threshold: float = _PB_CARRY_THRESHOLD
+) -> str:
+    """Classify basis into carry signal.
+
+    basis > +threshold  → positive_carry  (perp > spot: short perp / long spot)
+    basis < -threshold  → negative_carry  (perp < spot: long perp / short spot)
+    |basis| <= threshold → neutral
+    """
+    if basis_pct >= threshold:
+        return "positive_carry"
+    if basis_pct <= -threshold:
+        return "negative_carry"
+    return "neutral"
+
+
+def _pb_carry_strength(basis_pct: float) -> float:
+    """Return 0-100 carry strength score based on basis magnitude.
+
+    Uses a logistic-style scaling: strength = 100 × |basis| / (|basis| + scale)
+    """
+    import math
+    abs_basis = abs(basis_pct)
+    # Hyperbolic scaling: saturates at 100 as basis → ∞
+    score = 100.0 * abs_basis / (abs_basis + _PB_CARRY_SCALE)
+    return round(max(0.0, min(100.0, score)), 2)
+
+
+def _pb_carry_action(carry_signal: str) -> str:
+    """Return trade-action recommendation for a carry signal."""
+    return {
+        "positive_carry": "short_perp_long_spot",
+        "negative_carry": "long_perp_short_spot",
+        "neutral":        "no_trade",
+    }.get(carry_signal, "no_trade")
+
+
+def _pb_basis_zscore(current_basis: float, history: list) -> float:
+    """Compute z-score of current basis vs historical basis_pct values.
+
+    Returns 0.0 for empty / single-point history or zero standard deviation.
+    """
     if len(history) < 2:
         return 0.0
-    n = len(history)
-    mean = sum(history) / n
-    variance = sum((v - mean) ** 2 for v in history) / n
-    std = variance ** 0.5
-    if std < 1.0:
+    values = [h["basis_pct"] for h in history if "basis_pct" in h]
+    if len(values) < 2:
         return 0.0
-    return round((current_flow - mean) / std, 4)
+    mean = sum(values) / len(values)
+    variance = sum((v - mean) ** 2 for v in values) / len(values)
+    std = variance ** 0.5
+    if std < 1e-10:
+        return 0.0
+    return round((current_basis - mean) / std, 4)
 
 
-def _sf_combine_stables(flows_by_coin: dict) -> dict:
-    """Aggregate per-coin flows into a single composite summary."""
-    net_24h = sum(v.get("inflow_24h", 0.0) for v in flows_by_coin.values())
-    net_7d = sum(v.get("inflow_7d", 0.0) for v in flows_by_coin.values())
-    return {
-        "net_flow_24h": round(net_24h, 2),
-        "net_flow_7d": round(net_7d, 2),
-        "flow_direction": _sf_flow_direction(net_24h),
-        "flow_signal": _sf_flow_signal(net_7d),
-    }
+async def compute_perpetual_basis(
+    symbol: str,
+    window_seconds: int = 3600,
+) -> dict:
+    """Perpetual futures basis tracker: spot vs perp spread, annualized carry, signal.
 
+    Spot price is fetched from Binance REST API when available; falls back to
+    funding-rate-adjusted perp price estimate if the token has no Binance spot market.
 
-async def compute_stablecoin_flow() -> dict:
-    """Fetch USDT / USDC / DAI supply history from DeFi Llama and compute
-    exchange buying-power signals.
-
-    Returns per-coin breakdown, 7-day aggregate, rolling history,
-    flow momentum, z-score, and bullish / bearish signal.
+    Returns:
+      perp_price, spot_price, basis_pct, annualized_basis_pct,
+      carry_signal, carry_strength, carry_action, basis_zscore,
+      funding_rate, funding_annualized_pct, history[], description
     """
     import aiohttp
-    import datetime
+    from storage import get_recent_trades, get_funding_history
 
-    async def _fetch_coin(session: "aiohttp.ClientSession", symbol: str, coin_id: int) -> dict:
-        url = f"{_SC_LLAMA_BASE}/stablecoincharts/all?stablecoin={coin_id}"
-        try:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                if resp.status != 200:
-                    return {}
-                rows = await resp.json(content_type=None)
-        except Exception:
-            return {}
+    now = time.time()
+    since = now - window_seconds
 
-        # rows: [{"date": int, "totalCirculatingUSD": {"peggedUSD": float}}, ...]
-        parsed: list = []
-        for row in rows:
-            try:
-                ts = int(row["date"])
-                supply = float(
-                    row.get("totalCirculatingUSD", {}).get("peggedUSD", 0) or 0
-                )
-                parsed.append({"ts": ts, "supply": supply})
-            except (KeyError, TypeError, ValueError):
-                continue
+    trades_task    = get_recent_trades(symbol=symbol, since=since, limit=50_000)
+    funding_task   = get_funding_history(limit=_PB_HISTORY_LIMIT, symbol=symbol, since=since - 86400)
 
-        parsed.sort(key=lambda x: x["ts"])
-        if not parsed:
-            return {}
+    trades, funding_rows = await asyncio.gather(trades_task, funding_task)
 
-        current_supply = parsed[-1]["supply"]
+    # ── Perp price from latest trade ─────────────────────────────────────────
+    perp_price: float = 0.0
+    if trades:
+        perp_price = float(trades[0]["price"])
 
-        # 24h flow
-        cutoff_24h = parsed[-1]["ts"] - 86400
-        prev_24h = next(
-            (p["supply"] for p in reversed(parsed) if p["ts"] <= cutoff_24h),
-            current_supply,
-        )
-        inflow_24h = _sf_net_flow(current_supply, prev_24h)
+    # ── Spot price from Binance REST ─────────────────────────────────────────
+    spot_price: float | None = None
+    binance_sym = symbol.upper()
+    try:
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=3)
+        ) as session:
+            url = f"https://api.binance.com/api/v3/ticker/price?symbol={binance_sym}"
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    j = await resp.json()
+                    spot_price = float(j.get("price", 0) or 0) or None
+    except Exception:
+        spot_price = None
 
-        # 7-day flow
-        cutoff_7d = parsed[-1]["ts"] - 7 * 86400
-        prev_7d = next(
-            (p["supply"] for p in reversed(parsed) if p["ts"] <= cutoff_7d),
-            current_supply,
-        )
-        inflow_7d = _sf_net_flow(current_supply, prev_7d)
-
-        return {
-            "symbol": symbol,
-            "current_supply": round(current_supply, 2),
-            "inflow_24h": inflow_24h,
-            "inflow_7d": inflow_7d,
-            "flow_direction_24h": _sf_flow_direction(inflow_24h),
-            "_daily": parsed,
-        }
-
-    async with aiohttp.ClientSession() as session:
-        results = await asyncio.gather(
-            *[_fetch_coin(session, sym, cid) for sym, cid in _SC_IDS.items()]
-        )
-
-    coins_data: dict = {}
-    for sym, res in zip(_SC_IDS.keys(), results):
-        if res:
-            coins_data[sym] = res
-
-    # Fallback: if all fetches failed, return empty structure
-    if not coins_data:
-        empty_agg = {
-            "net_flow_24h": 0.0, "net_flow_7d": 0.0,
-            "flow_direction": "neutral", "flow_signal": "neutral",
-            "flow_momentum": 0.0, "flow_zscore": 0.0,
-        }
-        return {
-            "stablecoins": {},
-            "aggregate": empty_agg,
-            "history": [],
-            "description": "No stablecoin data available",
-        }
-
-    # ── Aggregate ────────────────────────────────────────────────────────────
-    flows_for_combine = {
-        sym: {"inflow_24h": d["inflow_24h"], "inflow_7d": d["inflow_7d"]}
-        for sym, d in coins_data.items()
-    }
-    agg = _sf_combine_stables(flows_for_combine)
-
-    # ── 7-day history (daily net-flow across all coins) ──────────────────────
-    history: list = []
-    today_ts = int(time.time())
-    for day_offset in range(_SC_HISTORY_DAYS - 1, -1, -1):
-        day_ts = today_ts - day_offset * 86400
-        day_label = datetime.datetime.utcfromtimestamp(day_ts).strftime("%Y-%m-%d")
-        daily_net = 0.0
-        for sym, d in coins_data.items():
-            daily = d.get("_daily", [])
-            # supply at end of day
-            sup_end = next(
-                (p["supply"] for p in reversed(daily) if p["ts"] <= day_ts),
-                None,
-            )
-            sup_prev = next(
-                (p["supply"] for p in reversed(daily) if p["ts"] <= day_ts - 86400),
-                None,
-            )
-            if sup_end is not None and sup_prev is not None:
-                daily_net += _sf_net_flow(sup_end, sup_prev)
-        history.append(
-            {
-                "date": day_label,
-                "net_flow": round(daily_net, 2),
-                "flow_direction": _sf_flow_direction(daily_net),
-            }
-        )
-
-    # ── Momentum & z-score ────────────────────────────────────────────────────
-    flow_values = [h["net_flow"] for h in history]
-    momentum = _sf_momentum(flow_values)
-    zscore = _sf_flow_zscore(flow_values[-1] if flow_values else 0.0, flow_values[:-1])
-
-    agg["flow_momentum"] = momentum
-    agg["flow_zscore"] = zscore
-
-    # ── Description ──────────────────────────────────────────────────────────
-    def _fmt_usd(v: float) -> str:
-        av = abs(v)
-        if av >= 1e9:
-            return f"${av / 1e9:.1f}B"
-        if av >= 1e6:
-            return f"${av / 1e6:.0f}M"
-        return f"${av:.0f}"
-
-    signal = agg["flow_signal"]
-    dir_label = agg["flow_direction"]
-    desc = (
-        f"{signal.capitalize()}: {_fmt_usd(agg['net_flow_24h'])} stablecoin "
-        f"{dir_label} in 24h — buying power {'increasing' if dir_label == 'inflow' else 'decreasing' if dir_label == 'outflow' else 'stable'}"
+    # ── Funding rate ─────────────────────────────────────────────────────────
+    # Average the most recent rates across exchanges
+    recent_funding: dict = {}
+    for row in reversed(funding_rows or []):
+        ex = row.get("exchange", "")
+        if ex and ex not in recent_funding:
+            recent_funding[ex] = row.get("rate", 0.0)
+    avg_funding = (
+        sum(recent_funding.values()) / len(recent_funding) if recent_funding else 0.0
     )
 
-    # Strip internal _daily key before returning
-    stablecoins_out = {
-        sym: {k: v for k, v in d.items() if k != "_daily"}
-        for sym, d in coins_data.items()
-    }
+    # ── Basis ────────────────────────────────────────────────────────────────
+    # If no spot price, estimate from perp price adjusted by funding premium
+    effective_spot = spot_price
+    if effective_spot is None and perp_price > 0:
+        # spot ≈ perp / (1 + avg_funding)
+        effective_spot = perp_price / (1.0 + avg_funding) if (1.0 + avg_funding) != 0 else perp_price
+
+    basis_pct = _pb_basis_pct(perp_price, effective_spot or 0.0)
+    annualized = _pb_annualized_from_price(basis_pct)
+    funding_ann = _pb_funding_annualized(avg_funding)
+
+    # ── History from funding rows ─────────────────────────────────────────────
+    # Build history: each funding row gives a (ts, funding_rate) data point.
+    # Basis proxy = funding premium accumulated; use funding rate * scaling.
+    history_map: dict = {}
+    for row in (funding_rows or []):
+        ts_bucket = round(row["ts"] / 3600) * 3600  # 1h buckets
+        if ts_bucket not in history_map:
+            history_map[ts_bucket] = {"rates": [], "ts": ts_bucket}
+        history_map[ts_bucket]["rates"].append(row.get("rate", 0.0))
+
+    history: list = []
+    for ts_b, v in sorted(history_map.items()):
+        avg_r = sum(v["rates"]) / len(v["rates"]) if v["rates"] else 0.0
+        # basis proxy: annualised funding as instantaneous basis signal
+        h_basis = round(avg_r * 100.0, 6)
+        history.append({"ts": float(ts_b), "basis_pct": h_basis, "funding_rate": round(avg_r, 8)})
+
+    # Add current point
+    history.append({"ts": round(now, 3), "basis_pct": basis_pct, "funding_rate": round(avg_funding, 8)})
+    history = sorted(history, key=lambda x: x["ts"])[-_PB_HISTORY_LIMIT:]
+
+    # ── Signals ───────────────────────────────────────────────────────────────
+    carry_signal   = _pb_carry_signal(basis_pct)
+    carry_strength = _pb_carry_strength(basis_pct)
+    carry_action   = _pb_carry_action(carry_signal)
+    basis_zscore   = _pb_basis_zscore(basis_pct, history[:-1])  # exclude current point
+
+    # ── Description ──────────────────────────────────────────────────────────
+    if carry_signal == "positive_carry":
+        desc = f"Positive carry: perp trades above spot — {carry_action.replace('_', ' ')}"
+    elif carry_signal == "negative_carry":
+        desc = f"Negative carry: perp trades below spot — {carry_action.replace('_', ' ')}"
+    else:
+        desc = "Neutral basis: no significant spot/perp divergence"
 
     return {
-        "stablecoins": stablecoins_out,
-        "aggregate": agg,
+        "symbol": symbol,
+        "perp_price": round(perp_price, 8),
+        "spot_price": round(spot_price, 8) if spot_price is not None else None,
+        "basis_pct": basis_pct,
+        "annualized_basis_pct": annualized,
+        "carry_signal": carry_signal,
+        "carry_strength": carry_strength,
+        "carry_action": carry_action,
+        "basis_zscore": basis_zscore,
+        "funding_rate": round(avg_funding, 8),
+        "funding_annualized_pct": funding_ann,
         "history": history,
         "description": desc,
     }
