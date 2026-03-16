@@ -5,7 +5,7 @@ import tempfile
 import time
 import pytest
 
-os.environ["DB_PATH"] = os.path.join(tempfile.mkdtemp(), "test_regime_classifier.db")
+os.environ.setdefault("DB_PATH", os.path.join(tempfile.mkdtemp(), "test_regime_classifier.db"))
 os.environ["SYMBOL_BINANCE"] = "BANANAS31USDT"
 os.environ["SYMBOL_BYBIT"] = "BANANAS31USDT"
 
