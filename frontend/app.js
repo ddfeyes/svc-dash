@@ -12,6 +12,29 @@ const TRADE_MAX    = 100;    // max rows in tape
 const ALERT_MAX    = 50;     // max rows in alerts feed
 const WHALE_USD    = 10000;  // highlight threshold
 
+// ── Theme ─────────────────────────────────────────────────────────────────────
+const THEME_KEY = 'theme';
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  const btn = document.getElementById('theme-toggle');
+  if (btn) btn.textContent = theme === 'dark' ? '☀' : '☾';
+}
+
+function toggleTheme() {
+  const current = localStorage.getItem(THEME_KEY) || 'dark';
+  const next = current === 'dark' ? 'light' : 'dark';
+  localStorage.setItem(THEME_KEY, next);
+  applyTheme(next);
+}
+
+function initTheme() {
+  const saved = localStorage.getItem(THEME_KEY) || 'dark';
+  applyTheme(saved);
+  const btn = document.getElementById('theme-toggle');
+  if (btn) btn.addEventListener('click', toggleTheme);
+}
+
 // ── State ─────────────────────────────────────────────────────────────────────
 let activeSymbol = null;
 let allSymbols   = [];
@@ -1989,6 +2012,7 @@ async function init() {
   safeInit(initVolumeProfileChart);
   safeInit(initRegimeTimelineChart);
   safeInit(initAdaptiveVpChart);
+  initTheme();
   connectAlerts();
 
   // After 10s replace any still-Loading cards with Error badge

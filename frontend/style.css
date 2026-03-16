@@ -622,3 +622,60 @@ html, body {
   margin-bottom: 6px;
   font-size: 10px;
 }
+
+/* ── Light Theme ──────────────────────────────────────────────────────────── */
+[data-theme="light"] {
+  --bg:     #f0f2f5;
+  --bg2:    #ffffff;
+  --bg3:    #e4e7ec;
+  --border: rgba(0,0,0,0.10);
+  --fg:     #1a202c;
+  --muted:  #718096;
+  --green:  #0a7c47;
+  --red:    #c53030;
+  --yellow: #b7791f;
+  --blue:   #2b6cb0;
+  --purple: #6b46c1;
+  --accent: #2b6cb0;
+}
+
+[data-theme="light"] html,
+[data-theme="light"] body,
+html[data-theme="light"],
+body[data-theme="light"] {
+  background: var(--bg);
+  color: var(--fg);
+}
+
+[data-theme="light"] .trade-row {
+  border-bottom-color: rgba(0,0,0,0.05);
+}
+
+[data-theme="light"] .trade-row:hover {
+  background: rgba(0,0,0,0.03);
+}
+
+[data-theme="light"] .alert-row {
+  border-bottom-color: rgba(0,0,0,0.05);
+}
+
+/* ── Theme Toggle Button ──────────────────────────────────────────────────── */
+#theme-toggle {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1;
+  padding: 4px 8px;
+  transition: border-color 0.15s, color 0.15s;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+#theme-toggle:hover {
+  border-color: var(--accent);
+  color: var(--fg);
+}
