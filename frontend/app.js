@@ -2502,6 +2502,8 @@ async function refresh() {
     // Batch 16: derivatives heatmap
         // Batch 25: holder distribution card
         // Batch 26: cross-chain bridge monitor
+    // Batch 27: whale wallet tracker
+    await Promise.all([safe(renderWhaleWalletTracker)]);
   } finally {
     _refreshRunning = false;
   }
@@ -2747,6 +2749,99 @@ async function renderTokenVelocityNvt() {
 
 // ── Derivatives Heatmap ───────────────────────────────────────────────────────
 // ── Holder Distribution ───────────────────────────────────────────────────
+
+// ── Whale Wallet Tracker ──────────────────────────────────────────────────────
+async function renderWhaleWalletTracker() {
+  const el    = document.getElementById('whale-wallet-tracker-content');
+  const badge = document.getElementById('whale-wallet-tracker-badge');
+  if (!el) return;
+  const sym  = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/whale-wallet-tracker?symbol=${sym}`);
+  if (!data) { setErr('whale-wallet-tracker-content'); return; }
+
+  const signal      = data.whale_signal || 'neutral';
+  const moves       = data.large_moves_24h || [];
+  const ad          = data.age_distribution || {};
+  const topWallets  = data.top_wallets || [];
+  const netFlow     = data.net_whale_flow_7d ?? 0;
+
+  const sigCls = signal === 'accumulating' ? 'badge-green'
+               : signal === 'distributing' ? 'badge-red'
+               : 'badge-blue';
+  if (badge) {
+    badge.textContent  = signal.toUpperCase();
+    badge.className    = `card-badge ${sigCls}`;
+    badge.style.display = '';
+  }
+
+  const netFlowCol  = netFlow > 0 ? 'var(--green)' : netFlow < 0 ? 'var(--red)' : 'var(--muted)';
+  const netFlowIcon = netFlow > 0 ? '↑' : netFlow < 0 ? '↓' : '→';
+
+  // Age distribution bar
+  const whalePct = ad.whale ? ad.whale.pct : 0;
+  const sharkPct = ad.shark ? ad.shark.pct : 0;
+  const fishPct  = ad.fish  ? ad.fish.pct  : 0;
+  const ageBars = `
+    <div style="display:flex;height:6px;border-radius:3px;overflow:hidden;margin-bottom:4px">
+      <div style="width:${whalePct}%;background:var(--blue)" title="whale ${whalePct}%"></div>
+      <div style="width:${sharkPct}%;background:#f59e0b" title="shark ${sharkPct}%"></div>
+      <div style="width:${fishPct}%;background:var(--green)" title="fish ${fishPct}%"></div>
+    </div>
+    <div style="display:flex;gap:8px;font-size:9px;color:var(--muted);margin-bottom:6px">
+      <span><span style="color:var(--blue)">■</span> whale ${whalePct}%</span>
+      <span><span style="color:#f59e0b">■</span> shark ${sharkPct}%</span>
+      <span><span style="color:var(--green)">■</span> fish ${fishPct}%</span>
+    </div>`;
+
+  // Top-5 wallets table
+  const top5 = topWallets.slice(0, 5);
+  const walletRows = top5.map((w, i) => {
+    const ageCls = w.age_class === 'whale' ? 'var(--blue)'
+                 : w.age_class === 'shark' ? '#f59e0b'
+                 : 'var(--green)';
+    const exchTag = w.is_exchange
+      ? `<span style="font-size:8px;color:var(--muted)">[CEX]</span>`
+      : `<span style="font-size:8px;color:var(--muted)">[cold]</span>`;
+    return `<tr>
+      <td style="color:var(--muted);font-size:9px">#${i + 1}</td>
+      <td style="font-family:monospace;font-size:9px;color:var(--fg)">${w.address.slice(0, 10)}…</td>
+      <td style="text-align:right;font-size:9px;color:var(--fg)">${fmtUsd(w.balance_usd)}</td>
+      <td style="text-align:center;font-size:9px;color:${ageCls}">${w.age_class}</td>
+      <td style="text-align:right;font-size:9px">${exchTag}</td>
+    </tr>`;
+  }).join('');
+
+  // Recent large moves (last 3)
+  const recentMoves = moves.slice(0, 3).map(m => {
+    const dirCol  = m.direction === 'in' ? 'var(--green)' : 'var(--red)';
+    const dirIcon = m.direction === 'in' ? '↙' : '↗';
+    return `<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-bottom:2px">
+      <span style="font-family:monospace;font-size:9px">${String(m.wallet_id).slice(0, 14)}…</span>
+      <span style="color:${dirCol}">${dirIcon} ${fmtUsd(m.amount_usd)}</span>
+    </div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="font-size:10px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:6px">
+      <span>net 7d: <b style="color:${netFlowCol}">${netFlowIcon} ${fmtUsd(Math.abs(netFlow))}</b></span>
+      <span>exch: <b style="color:var(--fg)">${data.pct_exchange ?? 0}%</b></span>
+      <span>cold: <b style="color:var(--fg)">${data.pct_cold ?? 0}%</b></span>
+      <span>moves 24h: <b style="color:var(--fg)">${moves.length}</b></span>
+    </div>
+    ${ageBars}
+    <table style="width:100%;border-collapse:collapse;margin-bottom:6px">
+      <thead><tr style="font-size:9px;color:var(--muted)">
+        <th style="text-align:left">#</th>
+        <th style="text-align:left">address</th>
+        <th style="text-align:right">balance</th>
+        <th style="text-align:center">age</th>
+        <th style="text-align:right">type</th>
+      </tr></thead>
+      <tbody>${walletRows}</tbody>
+    </table>
+    ${moves.length > 0 ? `<div style="font-size:9px;color:var(--muted);margin-bottom:3px">large moves &gt;$1M</div>${recentMoves}` : ''}`;
+}
+
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 async function init() {
   const safeInit = (fn) => { try { fn(); } catch(e) { console.warn('Chart init failed:', e.message); } };

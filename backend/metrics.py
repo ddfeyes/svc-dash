@@ -8537,3 +8537,116 @@ async def compute_cross_chain_bridge_monitor() -> dict:
         "zscore":           float(zscore),
         "description":      desc,
     }
+
+
+# ── Whale Wallet Tracker ───────────────────────────────────────────────────────
+
+def _wwt_age_class(wallet_age_days: float) -> str:
+    """Classify wallet by age: whale >2yr, shark 6mo-2yr, fish <6mo."""
+    if wallet_age_days >= 730:
+        return "whale"
+    if wallet_age_days >= 180:
+        return "shark"
+    return "fish"
+
+
+def _wwt_whale_signal(net_flow: float) -> str:
+    """Determine accumulation/distribution signal from net whale flow."""
+    if net_flow > 0:
+        return "accumulating"
+    if net_flow < 0:
+        return "distributing"
+    return "neutral"
+
+
+async def compute_whale_wallet_tracker(symbol: str = None) -> dict:
+    """
+    Whale wallet tracker: top-50 addresses by balance, large moves >$1M in last 24h,
+    wallet age classification (whale/shark/fish), exchange vs cold wallet ratio,
+    and net whale flow signal (accumulating/distributing/neutral).
+
+    Data is seeded-random per symbol for deterministic results.
+    """
+    import random
+    import time
+
+    sym = symbol or "BANANAS31USDT"
+
+    # Seed deterministically from symbol so different symbols give different data
+    seed_val = sum(ord(c) * (i + 1) for i, c in enumerate(sym))
+    rng = random.Random(seed_val)
+
+    now = time.time()
+
+    # ── Generate 50 seeded wallet addresses ──────────────────────────────────
+    top_wallets: list = []
+    for i in range(50):
+        wallet_id = f"0x{rng.randint(0x100000000000, 0xffffffffffff):012x}{i:04x}"
+        address = f"0x{rng.getrandbits(160):040x}"
+        # Balance decreases as rank increases
+        balance_usd = round(rng.uniform(500_000, 50_000_000) / (1 + i * 0.18), 2)
+        balance = round(balance_usd / rng.uniform(0.001, 10.0), 4)
+        wallet_age_days = round(rng.uniform(10, 2500), 1)
+        age_class = _wwt_age_class(wallet_age_days)
+        is_exchange = rng.random() < 0.25
+
+        top_wallets.append({
+            "wallet_id":       wallet_id,
+            "address":         address,
+            "balance":         balance,
+            "balance_usd":     balance_usd,
+            "wallet_age_days": wallet_age_days,
+            "age_class":       age_class,
+            "is_exchange":     is_exchange,
+        })
+
+    # Sort descending by balance_usd
+    top_wallets.sort(key=lambda w: w["balance_usd"], reverse=True)
+
+    # ── Large moves >$1M in last 24h ─────────────────────────────────────────
+    n_moves = rng.randint(3, 12)
+    large_moves_24h: list = []
+    for _ in range(n_moves):
+        wid = rng.choice(top_wallets)["wallet_id"]
+        direction = rng.choice(["in", "out"])
+        amount_usd = round(rng.uniform(1_000_000, 25_000_000), 2)
+        ts = round(now - rng.uniform(0, 86400), 3)
+        large_moves_24h.append({
+            "wallet_id":  wid,
+            "direction":  direction,
+            "amount_usd": amount_usd,
+            "ts":         ts,
+        })
+
+    # ── Age distribution ──────────────────────────────────────────────────────
+    whale_count = sum(1 for w in top_wallets if w["age_class"] == "whale")
+    shark_count = sum(1 for w in top_wallets if w["age_class"] == "shark")
+    fish_count  = sum(1 for w in top_wallets if w["age_class"] == "fish")
+    age_distribution: dict = {
+        "whale": {"count": whale_count, "pct": round(whale_count / 50 * 100, 1)},
+        "shark": {"count": shark_count, "pct": round(shark_count / 50 * 100, 1)},
+        "fish":  {"count": fish_count,  "pct": round(fish_count  / 50 * 100, 1)},
+    }
+
+    # ── Exchange vs cold wallet ratio ─────────────────────────────────────────
+    exchange_count = sum(1 for w in top_wallets if w["is_exchange"])
+    pct_exchange   = round(exchange_count / 50 * 100, 1)
+    pct_cold       = round((50 - exchange_count) / 50 * 100, 1)
+
+    # ── Net whale flow 7d: top-10 whales ─────────────────────────────────────
+    top10 = top_wallets[:10]
+    net_whale_flow_7d = round(
+        sum(rng.uniform(-5_000_000, 8_000_000) for _ in top10), 2
+    )
+
+    whale_signal = _wwt_whale_signal(net_whale_flow_7d)
+
+    return {
+        "top_wallets":       top_wallets,
+        "large_moves_24h":   large_moves_24h,
+        "age_distribution":  age_distribution,
+        "pct_exchange":      pct_exchange,
+        "pct_cold":          pct_cold,
+        "net_whale_flow_7d": net_whale_flow_7d,
+        "whale_signal":      whale_signal,
+    }
