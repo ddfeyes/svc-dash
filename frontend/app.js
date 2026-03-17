@@ -13,6 +13,8 @@ const ALERT_MAX    = 50;     // max rows in alerts feed
 const WHALE_USD    = 10000;  // highlight threshold
 
 // ── State ─────────────────────────────────────────────────────────────────────
+let _refreshRunning = false;
+const delay = ms => new Promise(r => setTimeout(r, ms));
 let activeSymbol = null;
 let allSymbols   = [];
 let priceChart   = null;   // TradingView Lightweight Charts instance
@@ -23,13 +25,14 @@ let spreadChart        = null;   // Chart.js
 let aggressorChart     = null;   // Chart.js
 let volumeProfileChart = null;   // Chart.js
 let regimeTimelineChart = null;  // Chart.js
+let adaptiveVpChart    = null;   // Chart.js
 let wsAlerts     = null;
 
 let refreshTimer = null;
 let _lastPrice   = null;   // most recent close price (for OI USDT calc)
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-async function apiFetch(path, timeoutMs = 8000) {
+async function apiFetch(path, timeoutMs = 15000) {
   const url = API + path;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -2582,7 +2585,7 @@ async function renderSocialSentiment() {
   const badge = document.getElementById('social-sentiment-badge');
   if (!el) return;
   const data = await apiFetch('/social-sentiment');
-  if (!data) { setErr('social-sentiment-content'); return; }
+  if (!data) { el.textContent = 'No data'; return; }
 
   const sent   = data.sentiment    || {};
   const vol    = data.social_volume || {};
@@ -2865,7 +2868,7 @@ async function renderTokenVelocityNvt() {
   const badge = document.getElementById('token-velocity-nvt-badge');
   if (!el) return;
   const data = await apiFetch('/token-velocity-nvt');
-  if (!data) { setErr('token-velocity-nvt-content'); return; }
+  if (!data) { el.textContent = 'No data'; return; }
 
   const vel    = data.velocity || {};
   const nvt    = data.nvt      || {};
@@ -2948,7 +2951,7 @@ async function refreshDexVsCexFlow() {
   const el = document.getElementById('dex-vs-cex-content');
   if (!el) return;
   const sym = activeSymbol ? `?symbol=${activeSymbol}` : '';
-  const data = await apiFetch(`/api/dex-vs-cex-flow${sym}`);
+  const data = await apiFetch(`/dex-vs-cex-flow${sym}`);
   if (!data) { el.textContent = 'Unavailable'; return; }
 
   const badge = document.getElementById('dex-vs-cex-badge');
@@ -3135,7 +3138,7 @@ async function refreshCrossChainArb() {
   const badge = document.getElementById('cross-chain-arb-badge');
   if (!el) return;
   const data = await apiFetch('/cross-chain-arb');
-  if (!data) { setErr('cross-chain-arb-content'); return; }
+  if (!data) { el.textContent = 'No data'; return; }
 
   const signal  = data.signal            || 'low';
   const opps    = data.top_opportunities || [];
@@ -3217,6 +3220,635 @@ async function refreshCrossChainArb() {
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
+
+
+// === RECOVERED MISSING RENDER FUNCTIONS ===
+async function renderSmartMoneyIndex() {
+  const el    = document.getElementById('smi-content');
+  const badge = document.getElementById('smi-badge');
+  if (!el) return;
+  const data = await apiFetch('/smart-money-index');
+  if (!data) { setErr('smi-content'); return; }
+
+  const score  = data.smi_score ?? 0;
+  const signal = data.signal || 'neutral';
+  const inst   = data.institutional_flow ?? 0;
+  const retail = data.retail_flow ?? 0;
+  const div_   = data.divergence ?? 0;
+  const comp   = data.components || {};
+
+  // Badge
+  const sigCls = signal === 'accumulation' ? 'badge-green'
+               : signal === 'distribution' ? 'badge-red'
+               : 'badge-blue';
+  if (badge) {
+    badge.textContent = signal.toUpperCase();
+    badge.className = 'card-badge ' + sigCls;
+    badge.style.display = '';
+  }
+
+  // Gauge bar: score in [-1, 1] → 0..100%
+  const pct = ((score + 1) / 2 * 100).toFixed(1);
+  const gaugeCol = score > 0.2 ? 'var(--green)' : score < -0.2 ? 'var(--red)' : 'var(--muted)';
+
+  const fmtFlow = v => (v >= 0 ? '+' : '') + (v / 1e3).toFixed(1) + 'B';
+
+  el.innerHTML =
+    '<div style="margin-bottom:6px">' +
+      '<div style="display:flex;justify-content:space-between;margin-bottom:2px">' +
+        '<span style="font-size:9px;color:var(--muted)">SMI SCORE</span>' +
+        '<span style="font-size:13px;font-weight:700;color:' + gaugeCol + '">' + (score > 0 ? '+' : '') + score.toFixed(4) + '</span>' +
+      '</div>' +
+      '<div style="height:6px;background:var(--bg2);border-radius:3px;overflow:hidden">' +
+        '<div style="width:' + pct + '%;height:100%;background:' + gaugeCol + ';border-radius:3px;transition:width 0.4s"></div>' +
+      '</div>' +
+      '<div style="display:flex;justify-content:space-between;font-size:8px;color:var(--muted);margin-top:1px">' +
+        '<span>-1 Distribution</span><span>Neutral</span><span>Accumulation +1</span>' +
+      '</div>' +
+    '</div>' +
+    '<div style="display:flex;gap:10px;margin-bottom:6px;flex-wrap:wrap">' +
+      '<div><div style="font-size:9px;color:var(--muted)">INST FLOW</div>' +
+        '<div style="font-size:12px;font-weight:700;color:' + (inst >= 0 ? 'var(--green)' : 'var(--red)') + '">' + fmtFlow(inst) + '</div></div>' +
+      '<div><div style="font-size:9px;color:var(--muted)">RETAIL FLOW</div>' +
+        '<div style="font-size:12px;font-weight:700;color:' + (retail >= 0 ? 'var(--green)' : 'var(--red)') + '">' + fmtFlow(retail) + '</div></div>' +
+      '<div><div style="font-size:9px;color:var(--muted)">DIVERGENCE</div>' +
+        '<div style="font-size:12px;font-weight:700;color:' + (div_ >= 0 ? 'var(--green)' : 'var(--red)') + '">' + fmtFlow(div_) + '</div></div>' +
+    '</div>' +
+    '<div style="font-size:9px;color:var(--muted);font-weight:600;margin-bottom:3px">COMPONENTS</div>' +
+    '<table style="width:100%;border-collapse:collapse"><tbody>' +
+      '<tr><td style="font-size:9px;color:var(--muted)">Block Ratio</td>' +
+        '<td style="font-size:9px;text-align:right;color:var(--text)">' + ((comp.block_ratio || 0) * 100).toFixed(1) + '%</td></tr>' +
+      '<tr><td style="font-size:9px;color:var(--muted)">OI Skew</td>' +
+        '<td style="font-size:9px;text-align:right;color:' + ((comp.oi_skew || 0) >= 0 ? 'var(--green)' : 'var(--red)') + '">' + (comp.oi_skew >= 0 ? '+' : '') + (comp.oi_skew || 0).toFixed(4) + '</td></tr>' +
+      '<tr><td style="font-size:9px;color:var(--muted)">Futures Basis</td>' +
+        '<td style="font-size:9px;text-align:right;color:' + ((comp.futures_basis || 0) >= 0 ? 'var(--green)' : 'var(--red)') + '">' + (comp.futures_basis >= 0 ? '+' : '') + (comp.futures_basis || 0).toFixed(2) + '%</td></tr>' +
+      '<tr><td style="font-size:9px;color:var(--muted)">Whale Accum</td>' +
+        '<td style="font-size:9px;text-align:right;color:' + ((comp.whale_accumulation || 0) >= 0 ? 'var(--green)' : 'var(--red)') + '">' + (comp.whale_accumulation >= 0 ? '+' : '') + ((comp.whale_accumulation || 0) / 1e3).toFixed(1) + 'k BTC</td></tr>' +
+    '</tbody></table>';
+}
+
+async function renderLiqCascadeDetector() {
+  const el    = document.getElementById('liq-cascade-detector-content');
+  const badge = document.getElementById('liq-cascade-detector-badge');
+  if (!el) return;
+  const data = await apiFetch('/liquidation-cascade-detector');
+  if (!data) { setErr('liq-cascade-detector-content'); return; }
+
+  const prob = (data.cascade_probability ?? 0);
+  const probPct = Math.round(prob * 100);
+  const regime = (data.regime || 'calm').toLowerCase();
+  const regimeColors = { calm: '#22c55e', building: '#f59e0b', cascade: '#ef4444', peak: '#dc2626' };
+  const regimeColor = regimeColors[regime] || '#888';
+
+  if (badge) {
+    badge.style.display = 'inline-block';
+    badge.textContent = regime.toUpperCase();
+    badge.style.background = regimeColor;
+    badge.style.color = '#fff';
+    badge.style.padding = '1px 6px';
+    badge.style.borderRadius = '4px';
+    badge.style.fontSize = '9px';
+    badge.style.fontWeight = '600';
+  }
+
+  const totalLiq = data.total_liquidated_usd ?? 0;
+  const liqVel = data.liq_velocity ?? 0;
+  const timeMin = data.time_to_cascade_minutes ?? 0;
+  const exchanges = (data.exchanges || []).join(', ');
+  const supportLevels = (data.support_levels || []).slice(0, 6);
+  const chain = (data.cascade_chain || []).slice(0, 5);
+
+  const supportRows = supportLevels.map(lvl =>
+    `<span style="display:inline-block;margin:1px 3px;font-size:9px;color:var(--muted)">$${lvl.toLocaleString()}</span>`
+  ).join('');
+
+  const chainRows = chain.map(e =>
+    `<tr>
+      <td style="padding:1px 3px;font-size:9px">${e.asset}</td>
+      <td style="padding:1px 3px;font-size:9px;text-align:right">$${(e.amount/1e6).toFixed(1)}M</td>
+      <td style="padding:1px 3px;font-size:9px;text-align:right;color:var(--muted)">t+${e.time}m</td>
+    </tr>`
+  ).join('');
+
+  el.innerHTML =
+    `<div style="margin-bottom:6px">` +
+      `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">` +
+        `<span style="font-size:9px;color:var(--muted);font-weight:600">CASCADE PROBABILITY</span>` +
+        `<span style="font-size:11px;font-weight:700;color:${regimeColor}">${probPct}%</span>` +
+      `</div>` +
+      `<div style="background:var(--border);border-radius:3px;height:8px;overflow:hidden">` +
+        `<div id="cascade-probability-bar" style="height:100%;width:${probPct}%;background:${regimeColor};transition:width 0.5s;border-radius:3px"></div>` +
+      `</div>` +
+    `</div>` +
+    `<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:6px">` +
+      `<div><span style="font-size:8px;color:var(--muted)">TIME TO CASCADE</span><br><span style="font-size:10px;font-weight:600">${timeMin.toFixed(1)} min</span></div>` +
+      `<div><span style="font-size:8px;color:var(--muted)">LIQ VELOCITY</span><br><span style="font-size:10px;font-weight:600">$${(liqVel/1e6).toFixed(1)}M/min</span></div>` +
+      `<div><span style="font-size:8px;color:var(--muted)">TOTAL LIQUIDATED</span><br><span style="font-size:10px;font-weight:600">$${(totalLiq/1e9).toFixed(2)}B</span></div>` +
+      `<div><span style="font-size:8px;color:var(--muted)">EXCHANGES</span><br><span style="font-size:9px">${exchanges}</span></div>` +
+    `</div>` +
+    `<div style="margin-bottom:6px">` +
+      `<div style="font-size:9px;color:var(--muted);font-weight:600;margin-bottom:2px">SUPPORT LEVELS</div>` +
+      `<div style="line-height:1.6">${supportRows || '<span style="font-size:9px;color:var(--muted)">–</span>'}</div>` +
+    `</div>` +
+    `<div>` +
+      `<div style="font-size:9px;color:var(--muted);font-weight:600;margin-bottom:2px">CASCADE CHAIN (TOP 5)</div>` +
+      `<table style="width:100%;border-collapse:collapse">` +
+        `<thead><tr>` +
+          `<th style="font-size:8px;color:var(--muted);text-align:left;font-weight:500">ASSET</th>` +
+          `<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">AMOUNT</th>` +
+          `<th style="font-size:8px;color:var(--muted);text-align:right;font-weight:500">TIME</th>` +
+        `</tr></thead>` +
+        `<tbody>${chainRows || '<tr><td colspan="3" style="font-size:9px;color:var(--muted)">No data</td></tr>'}</tbody>` +
+      `</table>` +
+    `</div>`;
+}
+
+
+async function renderTapeSpeed() {
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/tape-speed?symbol=${sym}`);
+  const el = document.getElementById('tape-speed-content');
+  if (!el) return;
+  if (!data) { el.innerHTML = '<div class="text-muted" style="font-size:11px;">No data</div>'; return; }
+
+  const cur    = data.current_tpm  != null ? data.current_tpm.toFixed(1)  : '—';
+  const avg    = data.avg_tpm      != null ? data.avg_tpm.toFixed(1)      : '—';
+  const high   = data.high_watermark != null ? data.high_watermark.toFixed(1) : '—';
+  const low    = data.low_watermark  != null ? data.low_watermark.toFixed(1)  : '—';
+
+  const heatColor = data.heating_up ? 'var(--red)' : data.cooling_down ? 'var(--blue)' : 'var(--fg)';
+  const heatLabel = data.heating_up ? 'HEATING' : data.cooling_down ? 'COOLING' : 'STABLE';
+  const badgeClass = data.heating_up ? 'badge-red' : data.cooling_down ? 'badge-blue' : 'badge-yellow';
+
+  const badge = document.getElementById('tape-speed-badge');
+  if (badge) {
+    badge.textContent = heatLabel;
+    badge.className = `card-badge ${badgeClass}`;
+    badge.style.display = '';
+  }
+
+  // Bar chart: last N buckets as sparkline
+  const buckets = (data.buckets || []).slice(-20);
+  const maxTpm  = data.high_watermark || 1;
+  const bars = buckets.map(b => {
+    const pct = Math.min((b.tpm / maxTpm) * 100, 100).toFixed(1);
+    return `<div class="ts-bar" style="height:${pct}%;background:var(--blue)" title="${b.tpm.toFixed(1)} tpm"></div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="ts-metrics">
+      <span class="ts-stat">Current <span style="color:${heatColor};font-weight:700">${cur} tpm</span></span>
+      <span class="ts-stat">Avg <span>${avg} tpm</span></span>
+      <span class="ts-stat">High <span class="text-yellow">${high}</span></span>
+      <span class="ts-stat">Low <span class="text-muted">${low}</span></span>
+    </div>
+    <div class="ts-chart">${bars}</div>
+  `;
+}
+
+async function renderAggressorStreak() {
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/aggressor-streak?symbol=${sym}`);
+  if (!data) return;
+
+  const el    = document.getElementById('aggressor-streak-content');
+  const badge = document.getElementById('aggressor-streak-badge');
+  if (!el) return;
+
+  const streak    = data.streak || 0;
+  const dir       = data.streak_direction;
+  const alert     = data.alert;
+  const threshold = data.alert_streak || 3;
+  const candles   = data.candles || [];
+  const desc      = data.description || '—';
+
+  const dirColor = dir === 'buy' ? 'var(--green)' : dir === 'sell' ? 'var(--red)' : 'var(--muted)';
+  const dirLabel = dir ? dir.toUpperCase() : '—';
+
+  if (badge) {
+    if (streak === 0) {
+      badge.textContent  = 'no streak';
+      badge.className    = 'card-badge badge-gray';
+    } else if (alert) {
+      badge.textContent  = `ALERT ${streak}x ${dirLabel}`;
+      badge.className    = 'card-badge ' + (dir === 'buy' ? 'badge-green' : 'badge-red');
+    } else {
+      badge.textContent  = `${streak}x ${dirLabel}`;
+      badge.className    = 'card-badge ' + (dir === 'buy' ? 'badge-green' : 'badge-red');
+    }
+    badge.style.display = 'inline-block';
+  }
+
+  // Last 10 candles as mini bar indicators
+  const recent = candles.slice(-10);
+  const bars = recent.map(c => {
+    const col = c.direction === 'buy' ? 'var(--green)' : c.direction === 'sell' ? 'var(--red)' : 'var(--muted)';
+    const pct = c.direction === 'buy' ? c.buy_pct.toFixed(0) : c.direction === 'sell' ? c.sell_pct.toFixed(0) : '—';
+    return `<div class="metric-box" style="border-top:3px solid ${col}">
+      <div class="metric-label">${new Date(c.ts * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</div>
+      <div class="metric-value" style="color:${col};font-size:13px">${pct}%</div>
+    </div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="display:flex;gap:12px;align-items:center;margin-bottom:8px">
+      <div>
+        <div style="font-size:28px;font-weight:700;color:${dirColor}">${streak}</div>
+        <div style="font-size:11px;color:var(--muted)">streak</div>
+      </div>
+      <div style="flex:1">
+        <div style="font-size:13px;color:${alert ? dirColor : 'var(--fg)'}">
+          ${alert ? '⚡ ' : ''}${desc}
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">
+          alert at ${threshold}+ consecutive candles · 70% threshold
+        </div>
+      </div>
+    </div>
+    <div class="phase-metrics" style="flex-wrap:wrap">${bars || '<span style="color:var(--muted);font-size:11px">No candle data</span>'}</div>
+  `;
+}
+
+async function renderOiDivergence() {
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/oi-divergence?symbol=${sym}&window=3600`);
+  if (!data) {
+    const el = document.getElementById('oi-divergence-content');
+    if (el && el.textContent.includes('Loading')) el.innerHTML = '<div class="text-muted" style="font-size:11px;">No data yet</div>';
+    return;
+  }
+
+  const badge = document.getElementById('oi-divergence-badge');
+  if (badge) {
+    if (data.divergence) {
+      const sevClass = data.severity === 'high'   ? 'badge-red'
+                     : data.severity === 'medium' ? 'badge-yellow'
+                     : 'badge-blue';
+      badge.textContent = data.severity.toUpperCase()
+        + (data.opposing ? ' · OPPOSING' : '');
+      badge.className = `card-badge ${sevClass}`;
+      badge.style.display = 'inline-block';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+
+  const el = document.getElementById('oi-divergence-content');
+  if (!el) return;
+
+  const exs = data.exchanges || {};
+  const exNames = Object.keys(exs);
+
+  if (!exNames.length) {
+    el.innerHTML = '<div class="text-muted" style="font-size:11px;">No exchange data yet</div>';
+    return;
+  }
+
+  const divColor = data.divergence
+    ? (data.severity === 'high' ? 'var(--red)' : data.severity === 'medium' ? 'var(--yellow)' : '#64b4ff')
+    : 'var(--green)';
+
+  const rows = exNames.map(ex => {
+    const e = exs[ex];
+    const pctStr = e.pct_change >= 0 ? `+${e.pct_change.toFixed(2)}%` : `${e.pct_change.toFixed(2)}%`;
+    const devStr = e.deviation  >= 0 ? `+${e.deviation.toFixed(2)}%`  : `${e.deviation.toFixed(2)}%`;
+    const dirColor = e.direction === 'up' ? 'var(--green)' : e.direction === 'down' ? 'var(--red)' : 'var(--muted)';
+    const isDiverging = data.diverging_exchange === ex;
+    return `
+      <div class="metric-box" style="${isDiverging ? 'border:1px solid ' + divColor + ';border-radius:6px;' : ''}">
+        <div class="metric-label">${ex.charAt(0).toUpperCase() + ex.slice(1)}</div>
+        <div class="metric-value" style="color:${dirColor}">${pctStr}</div>
+        <div class="metric-label">dev ${devStr}</div>
+      </div>`;
+  }).join('');
+
+  const meanStr = data.mean_pct_change >= 0
+    ? `+${data.mean_pct_change.toFixed(2)}%`
+    : `${data.mean_pct_change.toFixed(2)}%`;
+
+  el.innerHTML = `
+    <div class="phase-metrics">
+      ${rows}
+      <div class="metric-box">
+        <div class="metric-label">Mean</div>
+        <div class="metric-value" style="color:var(--muted)">${meanStr}</div>
+        <div class="metric-label">max dev ${data.divergence_pct.toFixed(2)}%</div>
+      </div>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-top:6px;line-height:1.4">${data.description || ''}</div>
+  `;
+}
+
+async function renderNetTakerDelta() {
+  const el    = document.getElementById('net-taker-delta-content');
+  const badge = document.getElementById('net-taker-delta-badge');
+  if (!el) return;
+
+  // Fetch for all symbols in parallel
+  const symbols = getSymbols();
+  const results = await Promise.all(
+    symbols.map(sym =>
+      apiFetch(`/net-taker-delta?symbol=${encodeURIComponent(sym)}&window=3600`)
+        .then(d => d ? { symbol: sym, total_net: d.total_net, total_buy: d.total_buy, total_sell: d.total_sell } : null)
+        .catch(() => null)
+    )
+  );
+
+  const rows = results.filter(Boolean);
+  if (!rows.length) { setErr('net-taker-delta-content'); return; }
+
+  // Sort by total_net descending for ranking
+  rows.sort((a, b) => b.total_net - a.total_net);
+  rows.forEach((r, i) => { r.rank = i + 1; });
+
+  // Badge reflects top symbol's direction
+  const top = rows[0];
+  if (badge) {
+    let label = 'neutral', cls = 'badge-blue';
+    if (top.total_net > 0)      { label = 'buying';  cls = 'badge-green'; }
+    else if (top.total_net < 0) { label = 'selling'; cls = 'badge-red'; }
+    badge.textContent = label;
+    badge.className   = `card-badge ${cls}`;
+    badge.style.display = '';
+  }
+
+  function fmtVol(v) {
+    const abs = Math.abs(v);
+    if (abs >= 1_000_000) return `${(v / 1_000_000).toFixed(2)}M`;
+    if (abs >= 1_000)     return `${(v / 1_000).toFixed(1)}k`;
+    return v.toFixed(2);
+  }
+
+  const rowsHtml = rows.map(r => {
+    const total = r.total_buy + r.total_sell;
+    const buyPct = total > 0 ? Math.round(r.total_buy / total * 100) : 50;
+    const netPos = r.total_net >= 0;
+    const netColor = netPos ? 'var(--green)' : 'var(--red)';
+    const netSign  = netPos ? '+' : '';
+    return `<tr>
+      <td style="color:var(--muted);font-size:10px;">#${r.rank}</td>
+      <td style="font-size:11px;">${r.symbol.replace('USDT','')}</td>
+      <td style="font-size:11px;color:${netColor};text-align:right;">${netSign}${fmtVol(r.total_net)}</td>
+      <td style="width:60px;padding-left:6px;">
+        <div style="background:var(--red);height:6px;border-radius:3px;position:relative;">
+          <div style="background:var(--green);width:${buyPct}%;height:100%;border-radius:3px 0 0 3px;"></div>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:11px;">
+    <thead><tr>
+      <th style="color:var(--muted);text-align:left;font-size:10px;padding-bottom:4px;">#</th>
+      <th style="color:var(--muted);text-align:left;font-size:10px;">Symbol</th>
+      <th style="color:var(--muted);text-align:right;font-size:10px;">Net Δ</th>
+      <th style="color:var(--muted);font-size:10px;padding-left:6px;">Buy/Sell</th>
+    </tr></thead>
+    <tbody>${rowsHtml}</tbody>
+  </table>`;
+}
+
+async function renderRealizedVolBands() {
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/realized-volatility-bands?symbol=${sym}&window=20`);
+  const el    = document.getElementById('realized-vol-bands-content');
+  const badge = document.getElementById('realized-vol-bands-badge');
+  if (!el) return;
+
+  if (!data) {
+    setErr('realized-vol-bands-content');
+    return;
+  }
+
+  const upper   = data.upper         != null ? fmtPrice(data.upper)         : '—';
+  const center  = data.center        != null ? fmtPrice(data.center)        : '—';
+  const lower   = data.lower         != null ? fmtPrice(data.lower)         : '—';
+  const curP    = data.current_price != null ? fmtPrice(data.current_price) : '—';
+  const vol     = data.realized_vol  != null ? (data.realized_vol * 100).toFixed(4) + '%' : '—';
+  const pct     = data.band_percentile != null ? parseFloat(data.band_percentile) : null;
+  const zone    = data.zone || 'inside';
+
+  const zoneColor = zone === 'above_upper' ? 'var(--red)'
+                  : zone === 'below_lower' ? 'var(--green)'
+                  :                          'var(--yellow)';
+
+  const pctStr = pct != null ? pct.toFixed(1) + '%' : '—';
+
+  // Percentile bar fill
+  const barFill = pct != null ? Math.round(pct) : 50;
+  const barColor = zone === 'above_upper' ? '#e74c3c'
+                 : zone === 'below_lower' ? '#2ecc71'
+                 :                          '#f39c12';
+
+  if (badge) {
+    badge.textContent = zone.replace(/_/g, ' ');
+    badge.className   = 'card-badge ' + (zone === 'above_upper' ? 'badge-red' : zone === 'below_lower' ? 'badge-green' : 'badge-yellow');
+    badge.style.display = 'inline-block';
+  }
+
+  el.innerHTML = `
+    <div class="phase-metrics">
+      <div class="metric-box">
+        <div class="metric-label">Percentile</div>
+        <div class="metric-value" style="color:${zoneColor};font-size:22px">${pctStr}</div>
+        <div class="metric-label" style="color:${zoneColor}">${zone.replace(/_/g, ' ')}</div>
+      </div>
+      <div class="metric-box">
+        <div class="metric-label">Upper</div>
+        <div class="metric-value" style="color:var(--red);font-size:13px">${upper}</div>
+        <div class="metric-label">Center</div>
+        <div class="metric-value" style="font-size:13px">${center}</div>
+        <div class="metric-label">Lower</div>
+        <div class="metric-value" style="color:var(--green);font-size:13px">${lower}</div>
+      </div>
+      <div class="metric-box">
+        <div class="metric-label">Price</div>
+        <div class="metric-value" style="font-size:13px">${curP}</div>
+        <div class="metric-label">RealVol/c</div>
+        <div class="metric-value" style="color:var(--muted);font-size:13px">${vol}</div>
+      </div>
+    </div>
+    <div style="margin-top:6px;padding:0 4px">
+      <div style="background:var(--bg2);border-radius:3px;height:6px;position:relative">
+        <div style="position:absolute;left:0;top:0;height:6px;width:${barFill}%;background:${barColor};border-radius:3px;transition:width 0.4s"></div>
+        <div style="position:absolute;left:50%;top:-2px;width:2px;height:10px;background:var(--muted);opacity:0.4"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted);margin-top:2px">
+        <span>lower</span><span>center</span><span>upper</span>
+      </div>
+    </div>
+  `;
+}
+
+async function renderOrderFlowToxicity() {
+  const sym   = encodeURIComponent(activeSymbol);
+  const el    = document.getElementById('order-flow-toxicity-content');
+  const badge = document.getElementById('order-flow-toxicity-badge');
+  if (!el) return;
+  const data = await apiFetch(`/order-flow-toxicity?symbol=${sym}`);
+  if (!data) { setErr('order-flow-toxicity-content'); return; }
+
+  const score    = data.score;
+  const severity = data.severity || 'insufficient_data';
+
+  // Badge
+  const SEV_BADGE = {
+    extreme:           ['EXTREME', 'badge-red'],
+    high:              ['HIGH',    'badge-red'],
+    medium:            ['MEDIUM',  'badge-yellow'],
+    low:               ['low',     'badge-green'],
+    insufficient_data: ['—',       'badge-blue'],
+  };
+  const [bLabel, bCls] = SEV_BADGE[severity] || ['—', 'badge-blue'];
+  if (badge) {
+    badge.textContent = bLabel;
+    badge.className   = `card-badge ${bCls}`;
+    badge.style.display = '';
+  }
+
+  const sessions = data.sessions || {};
+  const SESSION_ORDER = ['asia', 'eu', 'us'];
+  const SESSION_COLORS = { asia: 'var(--blue)', eu: 'var(--yellow)', us: 'var(--green)' };
+
+  function fmtP(p) {
+    if (p == null) return '—';
+    return p < 0.01 ? p.toFixed(6) : p < 1 ? p.toFixed(4) : p.toFixed(2);
+  }
+  function fmtV(v) {
+    if (!v) return '0';
+    if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+    if (v >= 1e3) return (v / 1e3).toFixed(1) + 'k';
+    return v.toFixed(1);
+  }
+
+  let html = '';
+  for (const key of SESSION_ORDER) {
+    const s = sessions[key];
+    if (!s) continue;
+    const col   = SESSION_COLORS[key];
+    const isAct = s.active;
+    const bins  = s.bins || [];
+
+    // Mini horizontal volume profile (up to 15 bars shown)
+    let profileHtml = '';
+    if (bins.length > 0) {
+      const step  = Math.max(1, Math.floor(bins.length / 15));
+      const shown = bins.filter((_, i) => i % step === 0).slice(-15);
+      profileHtml = `<div style="display:flex;gap:1px;align-items:flex-end;height:28px;margin:4px 0">`;
+      for (const b of shown) {
+        const w    = Math.max(4, b.pct_of_max);
+        const isPoc = b.is_poc;
+        const inVa  = b.in_value_area;
+        const bg    = isPoc ? col : inVa ? col + '88' : 'var(--bg3)';
+        const outline = isPoc ? `outline:1px solid ${col};` : '';
+        profileHtml += `<div title="${fmtP(b.price)}: ${fmtV(b.volume)}" style="flex:1;height:${w}%;background:${bg};${outline}border-radius:1px 1px 0 0;min-height:2px"></div>`;
+      }
+      profileHtml += `</div>`;
+      // Price range labels
+      if (bins.length > 0) {
+        const lo = bins[0].price, hi = bins[bins.length - 1].price;
+        profileHtml += `<div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted);margin-bottom:2px"><span>${fmtP(lo)}</span><span>${fmtP(hi)}</span></div>`;
+      }
+    } else {
+      profileHtml = `<div style="font-size:10px;color:var(--muted);padding:4px 0">No data for this session</div>`;
+    }
+
+    // VPOC + VAH/VAL line
+    let levelsHtml = '';
+    if (s.poc != null) {
+      levelsHtml = `
+        <div style="display:flex;gap:8px;font-size:10px;flex-wrap:wrap;color:var(--muted);margin-bottom:2px">
+          <span>VPOC <span style="color:${col};font-weight:700;font-family:monospace">${fmtP(s.poc)}</span></span>
+          <span>VAH  <span style="color:var(--fg);font-family:monospace">${fmtP(s.vah)}</span></span>
+          <span>VAL  <span style="color:var(--fg);font-family:monospace">${fmtP(s.val)}</span></span>
+          <span style="margin-left:auto">vol ${fmtV(s.total_volume)}</span>
+        </div>`;
+    }
+
+    html += `<div style="margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border)">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">
+        <span style="font-size:11px;font-weight:700;color:${col}">${s.name}</span>
+        <span style="font-size:9px;color:var(--muted)">${s.hours}</span>
+        ${isAct ? `<span class="card-badge badge-green" style="font-size:9px;padding:1px 4px">LIVE</span>` : ''}
+      </div>
+      ${levelsHtml}
+      ${profileHtml}
+    </div>`;
+  }
+
+  el.innerHTML = html || '<div class="text-muted" style="font-size:11px;">No session data</div>';
+  if (score == null) {
+    el.innerHTML = `<div style="color:var(--muted);font-size:11px;">${data.description || 'Insufficient data'}</div>`;
+    return;
+  }
+
+  // Gauge: horizontal segmented bar (low/medium/high/extreme bands)
+  const gaugePct = Math.max(0, Math.min(100, Math.round(score)));
+  const SEV_COLOR = { extreme: 'var(--red)', high: 'var(--red)', medium: 'var(--yellow)', low: 'var(--green)' };
+  const scoreColor = SEV_COLOR[severity] || 'var(--muted)';
+
+  const gaugeHtml = `
+    <div style="position:relative;height:12px;border-radius:6px;overflow:hidden;background:linear-gradient(to right,var(--green) 0%,var(--green) 25%,var(--yellow) 25%,var(--yellow) 50%,var(--red) 50%,var(--red) 75%,#ff2040 75%);opacity:0.25;margin-bottom:2px"></div>
+    <div style="position:relative;margin-top:-14px;margin-bottom:8px">
+      <div style="height:12px;display:flex;align-items:center">
+        <div style="width:${gaugePct}%;height:4px;background:${scoreColor};border-radius:2px;transition:width .4s"></div>
+        <div style="width:8px;height:12px;background:${scoreColor};border-radius:2px;margin-left:-2px;flex-shrink:0"></div>
+      </div>
+    </div>
+    <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted);margin-bottom:8px">
+      <span>0 low</span><span>25</span><span>50</span><span>75 extreme</span>
+    </div>`;
+
+  // Score + description
+  const scoreHtml = `
+    <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:4px">
+      <span style="font-size:24px;font-weight:700;color:${scoreColor};font-family:monospace">${score.toFixed(1)}</span>
+      <span style="font-size:11px;color:var(--muted)">/100</span>
+      <span style="font-size:11px;color:var(--muted);margin-left:4px">${data.n_trades || 0} trades</span>
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:8px">${data.description || ''}</div>`;
+
+  // Multi-window table
+  const wins = data.windows || {};
+  const WIN_ORDER = ['5m', '15m', '1h'];
+  const winRows = WIN_ORDER.filter(k => wins[k]).map(k => {
+    const w = wins[k];
+    const sc = w.score != null ? w.score.toFixed(1) : '—';
+    const sev = w.severity || 'low';
+    const [sl, sc2] = SEV_BADGE[sev] || ['—', 'badge-blue'];
+    return `<tr>
+      <td style="font-size:10px;color:var(--muted);padding:2px 8px 2px 0">${k}</td>
+      <td style="font-size:11px;font-family:monospace;padding:2px 8px 2px 0;color:${SEV_COLOR[sev]||'var(--fg)'}">${sc}</td>
+      <td style="padding:2px 0"><span class="card-badge ${sc2}" style="font-size:9px">${sl}</span></td>
+      <td style="font-size:10px;color:var(--muted);padding:2px 0 2px 8px">${w.n_pairs} pairs</td>
+    </tr>`;
+  }).join('');
+  const winTableHtml = winRows ? `<table style="width:100%;border-collapse:collapse;margin-bottom:8px">${winRows}</table>` : '';
+
+  // Sparkline: mini SVG line chart
+  const spark = (data.sparkline || []).filter(b => b.score != null);
+  let sparkHtml = '';
+  if (spark.length >= 2) {
+    const W = 200, H = 28;
+    const scores = spark.map(b => b.score);
+    const sMax = Math.max(...scores, 1);
+    const pts = spark.map((b, i) => {
+      const x = Math.round(i / (spark.length - 1) * W);
+      const y = Math.round(H - (b.score / sMax) * H);
+      return `${x},${y}`;
+    }).join(' ');
+    sparkHtml = `
+      <div style="margin-top:4px">
+        <div style="font-size:9px;color:var(--muted);margin-bottom:2px">toxicity over time</div>
+        <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" style="overflow:visible">
+          <polyline points="${pts}" fill="none" stroke="${scoreColor}" stroke-width="1.5" stroke-linejoin="round"/>
+        </svg>
+      </div>`;
+  }
+
+  el.innerHTML = scoreHtml + gaugeHtml + winTableHtml + sparkHtml;
+}
+
 async function init() {
   const safeInit = (fn) => { try { fn(); } catch(e) { console.warn('Chart init failed:', e.message); } };
   safeInit(initPriceChart);
@@ -3225,9 +3857,9 @@ async function init() {
   safeInit(initFundingChart);
   safeInit(initSpreadChart);
   safeInit(initAggressorChart);
-  safeInit(initVolumeProfileChart);
-  safeInit(initRegimeTimelineChart);
-  safeInit(initAdaptiveVpChart);
+  try { if (typeof initVolumeProfileChart === 'function') safeInit(initVolumeProfileChart); } catch(e) { console.warn('initVolumeProfileChart not defined'); }
+  try { if (typeof initRegimeTimelineChart === 'function') safeInit(initRegimeTimelineChart); } catch(e) { console.warn('initRegimeTimelineChart not defined'); }
+  try { if (typeof initAdaptiveVpChart === 'function') safeInit(initAdaptiveVpChart); } catch(e) { console.warn('initAdaptiveVpChart not defined'); }
   connectAlerts();
 
   // After 10s replace any still-Loading cards with Error badge
@@ -3896,7 +4528,7 @@ async function renderWhaleFlow() {
   if (!el) return;
 
   try {
-    const sym = activeSymbol || 'BTCUSDT';
+    const sym = activeSymbol || 'BANANAS31USDT';
     const res = await fetch(`/api/whale-flow?symbol=${sym}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
@@ -4003,7 +4635,7 @@ async function renderGammaExposure() {
   if (!el) return;
 
   try {
-    const sym = activeSymbol || 'BTCUSDT';
+    const sym = activeSymbol || 'BANANAS31USDT';
     const res = await fetch(`/api/gamma-exposure?symbol=${sym}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
@@ -4318,72 +4950,6 @@ async function renderRealizedImpliedVol() {
     </div>
     <div style="color:var(--muted);font-size:10px;margin-bottom:2px;">${desc}</div>
     <div style="color:var(--muted);font-size:9px;">${n} candles</div>
-  `;
-}
-
-
-// ── Net Taker Delta Chart (Wave 24, Issue #127) ──────────────────────────────
-async function renderNetTakerDelta() {
-  const el    = document.getElementById('net-taker-delta-content');
-  const badge = document.getElementById('net-taker-delta-badge');
-  if (!el) return;
-
-  const sym  = encodeURIComponent(activeSymbol);
-  const data = await apiFetch(`/net-taker-delta?symbol=${sym}`);
-  if (!data) { setErr('net-taker-delta-content'); return; }
-
-  const { total_buy = 0, total_sell = 0, total_net = 0, buckets = [] } = data;
-
-  // Badge: BUYING / SELLING / FLAT with $100k threshold
-  const THRESHOLD = 100000;
-  let badgeLabel = 'FLAT', badgeCls = 'badge-blue';
-  if (total_net > THRESHOLD)       { badgeLabel = 'BUYING';  badgeCls = 'badge-green'; }
-  else if (total_net < -THRESHOLD) { badgeLabel = 'SELLING'; badgeCls = 'badge-red'; }
-  if (badge) {
-    badge.textContent   = badgeLabel;
-    badge.className     = `card-badge ${badgeCls}`;
-    badge.style.display = '';
-  }
-
-  // $M formatter
-  function fmtM(v) {
-    const abs = Math.abs(v);
-    if (abs >= 1e6) return `$${(v / 1e6).toFixed(2)}M`;
-    if (abs >= 1e3) return `$${(v / 1e3).toFixed(1)}K`;
-    return `$${v.toFixed(0)}`;
-  }
-
-  const netColor = total_net >= 0 ? '#27ae60' : '#e74c3c';
-  const netSign  = total_net >= 0 ? '+' : '';
-
-  // Mini bar chart — last 60 buckets, height proportional to abs(net_delta)/max
-  const BAR_MAX = 16, BAR_MIN = 2;
-  const last60  = buckets.slice(-60);
-  const maxAbs  = last60.reduce((m, b) => Math.max(m, Math.abs(b.net_delta)), 1);
-  const bars    = last60.map(b => {
-    const h   = Math.max(BAR_MIN, Math.round(Math.abs(b.net_delta) / maxAbs * BAR_MAX));
-    const clr = b.net_delta >= 0 ? '#27ae60' : '#e74c3c';
-    return `<span style="display:inline-block;width:3px;height:${h}px;background:${clr};margin:0 0.5px;vertical-align:bottom;"></span>`;
-  }).join('');
-
-  el.innerHTML = `
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;font-size:10px;margin-bottom:6px;">
-      <div style="text-align:center;">
-        <div style="color:#27ae60;font-weight:bold;">${fmtM(total_buy)}</div>
-        <div style="color:#888;font-size:9px;">Buy Vol</div>
-      </div>
-      <div style="text-align:center;">
-        <div style="color:#e74c3c;font-weight:bold;">${fmtM(total_sell)}</div>
-        <div style="color:#888;font-size:9px;">Sell Vol</div>
-      </div>
-      <div style="text-align:center;">
-        <div style="color:${netColor};font-weight:bold;">${netSign}${fmtM(total_net)}</div>
-        <div style="color:#888;font-size:9px;">Net Δ</div>
-      </div>
-    </div>
-    <div style="height:${BAR_MAX + 4}px;white-space:nowrap;overflow:hidden;padding:2px 0;">
-      ${bars || '<span style="color:#888;font-size:9px;">No data</span>'}
-    </div>
   `;
 }
 

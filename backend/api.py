@@ -81,7 +81,28 @@ from metrics import (
     compute_liquidation_heatmap,
     compute_exchange_flow_divergence,
     compute_perp_spot_basis,
+    compute_aggressor_imbalance_streak,
+    compute_inter_exchange_oi_divergence,
+    compute_market_microstructure_score,
+    compute_max_drawdown,
+    compute_net_taker_delta,
+    compute_ob_recovery_speed,
+    compute_price_ladder,
+    compute_session_stats,
+    compute_smart_money_divergence,
+    compute_tape_speed,
+    compute_tick_imbalance_bars,
+    compute_tod_volatility,
+    compute_volume_bars,
+    compute_whale_clustering,
+    compute_leverage_ratio_heatmap,
+    compute_holder_distribution_card,
+    compute_protocol_revenue_card,
+    compute_dex_vs_cex_flow,
 )
+from whale_flow import compute_whale_flow
+from gamma_exposure import compute_gamma_exposure
+
 
 router = APIRouter(prefix="/api")
 
@@ -5559,4 +5580,19 @@ async def whale_flow_endpoint(symbol: Optional[str] = None):
     """
     from whale_flow import compute_whale_flow
     data = compute_whale_flow(symbol)
+    return JSONResponse(data)
+
+
+@router.get("/dex-vs-cex-flow")
+@cache_result(ttl_seconds=60)
+async def dex_vs_cex_flow_endpoint(symbol: Optional[str] = None):
+    """DEX vs CEX volume divergence: Uniswap/Curve/Balancer vs CEX spot.
+
+    Returns divergence Z-score, DEX dominance ratio trend, and early price
+    discovery signal. Cache TTL: 60s.
+
+    Query params:
+        symbol: trading pair (default: BANANAS31USDT)
+    """
+    data = await compute_dex_vs_cex_flow(symbol)
     return JSONResponse(data)
