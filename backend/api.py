@@ -5378,14 +5378,19 @@ async def cross_asset_corr_endpoint(
     window: int = Query(3600, ge=300, le=86400),
     bucket: int = Query(60, ge=30, le=3600),
     rolling: int = Query(12, ge=3, le=60),
+    method: str = Query("pearson", pattern="^(pearson|spearman)$"),
 ):
-    """Cross-asset correlation: tracked alts vs BTC/ETH/SOL/BNB benchmarks."""
+    """Cross-asset correlation: tracked alts vs BTC/ETH/SOL/BNB benchmarks.
+
+    Supports Pearson (default) and Spearman rank correlation via ?method=spearman.
+    """
     target = symbol or get_symbols()[0]
     data = await compute_cross_asset_corr(
         symbol=target,
         window_seconds=window,
         bucket_seconds=bucket,
         rolling_window=rolling,
+        corr_method=method,
     )
     return JSONResponse(data)
 

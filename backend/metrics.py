@@ -4887,17 +4887,44 @@ def _cac_pearson(x: List[float], y: List[float]) -> Optional[float]:
     return round(max(-1.0, min(1.0, num / (dx * dy))), 6)
 
 
+def _cac_spearman(x: List[float], y: List[float]) -> Optional[float]:
+    """Spearman rank correlation for two equal-length sequences."""
+    n = min(len(x), len(y))
+    if n < 2:
+        return None
+    x, y = x[:n], y[:n]
+
+    def _rank(seq: List[float]) -> List[float]:
+        sorted_vals = sorted(enumerate(seq), key=lambda t: t[1])
+        ranks = [0.0] * n
+        i = 0
+        while i < n:
+            j = i
+            while j < n - 1 and sorted_vals[j + 1][1] == sorted_vals[i][1]:
+                j += 1
+            avg_rank = (i + j) / 2.0 + 1.0
+            for k in range(i, j + 1):
+                ranks[sorted_vals[k][0]] = avg_rank
+            i = j + 1
+        return ranks
+
+    rx = _rank(x)
+    ry = _rank(y)
+    return _cac_pearson(rx, ry)
+
+
 def _cac_rolling_corr(
-    x: List[float], y: List[float], window: int
+    x: List[float], y: List[float], window: int, method: str = "pearson"
 ) -> List[Optional[float]]:
     n = min(len(x), len(y))
     result: List[Optional[float]] = []
+    corr_fn = _cac_spearman if method == "spearman" else _cac_pearson
     for i in range(n):
         if i < window - 1:
             result.append(None)
         else:
             result.append(
-                _cac_pearson(
+                corr_fn(
                     x[i - window + 1 : i + 1],
                     y[i - window + 1 : i + 1],
                 )
@@ -4910,11 +4937,13 @@ async def compute_cross_asset_corr(
     window_seconds: int = 3600,
     bucket_seconds: int = 60,
     rolling_window: int = 12,
+    corr_method: str = "pearson",
 ) -> dict:
     """
     Cross-asset correlation: tracked alt symbols vs major crypto benchmarks
-    (BTC/ETH/SOL/BNB) using bucketed price-return Pearson correlation.
+    (BTC/ETH/SOL/BNB) using bucketed price-return correlation.
 
+    Supports Pearson (default) and Spearman rank correlation via corr_method.
     Distinct from /correlations (symbol-to-symbol) — this always computes
     correlations against the major-crypto reference axis.
     """
@@ -4981,6 +5010,9 @@ async def compute_cross_asset_corr(
         pb = [pm_b[t] for t in common]
         return _cac_log_returns(pa), _cac_log_returns(pb)
 
+    # ── select correlation function based on method ───────────────────────────
+    _corr_fn = _cac_spearman if corr_method == "spearman" else _cac_pearson
+
     # ── correlation matrix: {symbol: {benchmark: corr}} ──────────────────────
     matrix: Dict[str, Dict[str, Optional[float]]] = {}
     for sym in all_syms:
@@ -4992,7 +5024,7 @@ async def compute_cross_asset_corr(
                 matrix[sym][bench] = None
                 continue
             rx, rb = _aligned_returns(pm_sym, pm_bench)
-            matrix[sym][bench] = _cac_pearson(rx, rb)
+            matrix[sym][bench] = _corr_fn(rx, rb)
 
     # ── rolling correlation for active symbol vs each benchmark ──────────────
     rolling: Dict[str, List[dict]] = {}
@@ -5017,7 +5049,7 @@ async def compute_cross_asset_corr(
                 continue
             bench_rets = _cac_log_returns(filled)
             n = min(len(active_rets), len(bench_rets))
-            rc = _cac_rolling_corr(active_rets[:n], bench_rets[:n], rolling_window)
+            rc = _cac_rolling_corr(active_rets[:n], bench_rets[:n], rolling_window, method=corr_method)
             pts: List[dict] = []
             for i, corr_val in enumerate(rc):
                 if corr_val is not None:
@@ -5063,6 +5095,7 @@ async def compute_cross_asset_corr(
         "rolling": rolling,
         "strongest_pair": strongest_pair,
         "weakest_pair": weakest_pair,
+        "corr_method": corr_method,
         "description": desc,
     }
 
