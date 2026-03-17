@@ -2567,6 +2567,8 @@ async function refresh() {
     await Promise.all([safe(renderRealizedImpliedVol)]);
     // Batch 37: net taker delta chart (Wave 24)
     await Promise.all([safe(renderNetTakerDelta)]);
+    // Batch 38: trade size distribution histogram (Wave 24)
+    await Promise.all([safe(renderTradeSizeDist)]);
   } finally {
     _refreshRunning = false;
   }
@@ -4380,6 +4382,74 @@ async function renderNetTakerDelta() {
     <div style="height:${BAR_MAX + 4}px;white-space:nowrap;overflow:hidden;padding:2px 0;">
       ${bars || '<span style="color:#888;font-size:9px;">No data</span>'}
     </div>
+  `;
+}
+
+
+// ── Trade Size Distribution Histogram (Wave 24, Issue #128) ─────────────────
+async function renderTradeSizeDist() {
+  const el    = document.getElementById('trade-size-dist-content');
+  const badge = document.getElementById('trade-size-dist-badge');
+  if (!el) return;
+  const sym  = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/trade-size-dist?symbol=${sym}`);
+  if (!data) { setErr('trade-size-dist-content'); return; }
+
+  const buckets = data.buckets || [];
+  if (!buckets.length) {
+    el.innerHTML = '<span style="color:#666;">No data</span>';
+    return;
+  }
+
+  // Badge: dominant tier
+  const totalTrades = buckets.reduce((s, b) => s + b.total_count, 0);
+  const retailCount = buckets[0] ? buckets[0].total_count : 0;
+  const whaleCnt    = buckets.slice(3).reduce((s, b) => s + b.total_count, 0);
+  let tier = 'MID', tierColor = '#f39c12';
+  if (totalTrades > 0 && retailCount / totalTrades > 0.60) {
+    tier = 'RETAIL'; tierColor = '#27ae60';
+  } else if (totalTrades > 0 && whaleCnt / totalTrades > 0.10) {
+    tier = 'WHALE'; tierColor = '#e74c3c';
+  }
+  if (badge) {
+    badge.textContent = tier;
+    badge.style.background = tierColor;
+    badge.style.color = '#fff';
+    badge.style.fontSize = '10px';
+    badge.style.padding = '2px 6px';
+    badge.style.display = 'inline-block';
+    badge.style.borderRadius = '3px';
+  }
+
+  const maxCount = Math.max(...buckets.map(b => b.total_count), 1);
+  const BAR_MAX  = 80; // px
+
+  const rows = buckets.map(b => {
+    const buyW  = Math.round((b.buy_count  / maxCount) * BAR_MAX);
+    const sellW = Math.round((b.sell_count / maxCount) * BAR_MAX);
+    const vol   = b.total_usd >= 1e6
+      ? `$${(b.total_usd / 1e6).toFixed(1)}M`
+      : b.total_usd >= 1e3
+        ? `$${(b.total_usd / 1e3).toFixed(1)}k`
+        : `$${b.total_usd.toFixed(0)}`;
+    return `<div style="display:flex;align-items:center;gap:4px;margin-bottom:3px;">
+      <span style="width:72px;color:#aaa;flex-shrink:0;">${b.label}</span>
+      <div style="display:flex;gap:1px;align-items:center;flex-shrink:0;">
+        <div style="width:${buyW}px;height:8px;background:#27ae60;border-radius:1px;min-width:${buyW > 0 ? 1 : 0}px;"></div>
+        <div style="width:${sellW}px;height:8px;background:#e74c3c;border-radius:1px;min-width:${sellW > 0 ? 1 : 0}px;"></div>
+      </div>
+      <span style="color:#ccc;min-width:36px;text-align:right;">${b.total_count.toLocaleString()}</span>
+      <span style="color:#888;min-width:52px;text-align:right;">${vol}</span>
+    </div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="margin-bottom:4px;font-size:9px;color:#666;display:flex;gap:8px;">
+      <span style="color:#27ae60;">■ buy</span><span style="color:#e74c3c;">■ sell</span>
+      <span style="margin-left:auto;">count · volume</span>
+    </div>
+    ${rows}
+    <div style="margin-top:5px;color:#666;font-size:10px;">Total: ${totalTrades.toLocaleString()} trades · 1h window</div>
   `;
 }
 

@@ -2431,7 +2431,7 @@ async def trade_size_distribution(
 
     trades = await get_recent_trades(limit=100000, since=since, symbol=target)
     if not trades:
-        return {"status": "ok", "symbol": target, "buckets": []}
+        return {"status": "ok", "symbol": target, "window": window, "buckets": []}
 
     buckets = [
         {
