@@ -1,4 +1,15 @@
 'use strict';
+// ── Error Logger (injected for debug) ───────────────────────────────────────
+window.__renderErrors = [];
+window.onerror = (msg, src, line, col, err) => {
+  window.__renderErrors.push({msg: String(msg), line, col, errMsg: err?.message});
+};
+const __origWarn = console.warn;
+console.warn = (...a) => {
+  window.__renderErrors.push({warn: a.join(" ")});
+  __origWarn(...a);
+};
+
 
 // ── Config ────────────────────────────────────────────────────────────────────
 // Use same host for API (nginx will proxy /api to backend:8765)
@@ -26,6 +37,7 @@ let aggressorChart     = null;   // Chart.js
 let volumeProfileChart = null;   // Chart.js
 let regimeTimelineChart = null;  // Chart.js
 let adaptiveVpChart    = null;   // Chart.js
+let smDivChart         = null;   // Chart.js
 let wsAlerts     = null;
 
 let refreshTimer = null;
@@ -2489,8 +2501,8 @@ async function refresh() {
     await Promise.all([safe(renderTapeSpeed), safe(renderAggressorStreak), safe(renderObWalls)]);
     await delay(200);
 
-    // Batch 10: movers, heatmap, net taker
-    await Promise.all([safe(renderTopMovers), safe(renderLiqHeatmap), safe(renderNetTakerDelta)]);
+    // Batch 10: movers, heatmap, net taker, smart money divergence
+    await Promise.all([safe(renderTopMovers), safe(renderLiqHeatmap), safe(renderNetTakerDelta), safe(renderSmartMoneyDivergence)]);
     await delay(200);
 
     // Batch 11: new signal cards
@@ -2568,8 +2580,8 @@ async function refresh() {
     await Promise.all([safe(renderSupportResistance)]);
     // Batch 36: realized vs implied volatility (Wave 24)
     await Promise.all([safe(renderRealizedImpliedVol)]);
-    // Batch 37: net taker delta chart (Wave 24)
-    await Promise.all([safe(renderNetTakerDelta)]);
+    // Batch 37: net taker delta chart + smart money divergence (Wave 24/25)
+    await Promise.all([safe(renderNetTakerDelta), safe(renderSmartMoneyDivergence)]);
     // Batch 38: trade size distribution histogram (Wave 24)
     await Promise.all([safe(renderTradeSizeDist)]);
     // Batch 39: leverage ratio heatmap (Wave 24)
@@ -3606,6 +3618,136 @@ async function renderNetTakerDelta() {
     </tr></thead>
     <tbody>${rowsHtml}</tbody>
   </table>`;
+}
+
+// ── Smart Money Divergence (Wave 25, Issue #137) ─────────────────────────────
+async function renderSmartMoneyDivergence() {
+  const el    = document.getElementById('smart-money-div-content');
+  const badge = document.getElementById('smart-money-div-badge');
+  if (!el) return;
+  const sym  = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/smart-money-divergence?symbol=${sym}&window=1800`);
+  if (!data) { setErr('smart-money-div-content'); return; }
+
+  // Badge
+  const signal = data.signal || 'neutral';
+  if (badge) {
+    if (signal === 'neutral') {
+      badge.style.display = 'none';
+    } else {
+      const cls = signal === 'accumulation' ? 'badge-green'
+                : signal === 'distribution' ? 'badge-red'
+                : 'badge-blue'; // aligned
+      badge.textContent = signal;
+      badge.className   = `card-badge ${cls}`;
+      badge.style.display = '';
+    }
+  }
+
+  function fmtCvd(v) {
+    if (v == null) return '—';
+    const abs  = Math.abs(v);
+    const sign = v < 0 ? '-' : '+';
+    if (abs >= 1e6) return `${sign}$${(abs / 1e6).toFixed(2)}M`;
+    if (abs >= 1e3) return `${sign}$${(abs / 1e3).toFixed(1)}k`;
+    return `${sign}$${abs.toFixed(2)}`;
+  }
+
+  const score      = data.divergence_score != null ? data.divergence_score.toFixed(3) : '—';
+  const scoreColor = (data.divergence_score ?? 0) > 0.1  ? 'var(--green)'
+                   : (data.divergence_score ?? 0) < -0.1 ? 'var(--red)'
+                   : 'var(--muted)';
+  const smartPct   = data.smart_pct != null ? (data.smart_pct * 100).toFixed(1) + '%' : '—';
+
+  // Destroy old chart before replacing DOM
+  if (smDivChart) { smDivChart.destroy(); smDivChart = null; }
+
+  el.innerHTML = `
+    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:6px;">
+      <span style="color:var(--muted)">Score <span style="color:${scoreColor};font-weight:700">${score}</span></span>
+      <span style="color:var(--muted)">Smart CVD <span style="color:#27ae60">${fmtCvd(data.smart_cvd)}</span></span>
+      <span style="color:var(--muted)">Retail CVD <span style="color:#e67e22">${fmtCvd(data.retail_cvd)}</span></span>
+      <span style="color:var(--muted)">Smart% <span style="color:var(--fg)">${smartPct}</span></span>
+    </div>
+    <div style="position:relative;height:80px;"><canvas id="smart-money-div-canvas"></canvas></div>`;
+
+  const buckets = data.buckets || [];
+  if (!buckets.length || !window.Chart) return;
+
+  const canvas = document.getElementById('smart-money-div-canvas');
+  if (!canvas) return;
+
+  const labels     = buckets.map(b => {
+    const d = new Date(b.ts * 1000);
+    return d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
+  });
+  const smartVals  = buckets.map(b => b.smart_cvd);
+  const retailVals = buckets.map(b => b.retail_cvd);
+
+  smDivChart = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Smart CVD',
+          data: smartVals,
+          borderColor: '#27ae60',
+          backgroundColor: 'rgba(39,174,96,0.08)',
+          borderWidth: 1.5,
+          pointRadius: 0,
+          tension: 0.3,
+          fill: false,
+        },
+        {
+          label: 'Retail CVD',
+          data: retailVals,
+          borderColor: '#e67e22',
+          backgroundColor: 'rgba(230,126,34,0.08)',
+          borderWidth: 1.5,
+          pointRadius: 0,
+          tension: 0.3,
+          fill: false,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: {
+        legend: { display: true, labels: { color: '#6b7280', font: { size: 10 }, boxWidth: 10 } },
+        tooltip: {
+          mode: 'index',
+          intersect: false,
+          backgroundColor: '#1c2030',
+          titleColor: '#6b7280',
+          bodyColor: '#e2e8f0',
+          borderColor: 'rgba(255,255,255,0.08)',
+          borderWidth: 1,
+        },
+      },
+      scales: {
+        x: {
+          ticks: { color: '#6b7280', font: { size: 9 }, maxTicksLimit: 8 },
+          grid: { color: 'rgba(255,255,255,0.04)' },
+        },
+        y: {
+          ticks: {
+            color: '#6b7280',
+            font: { size: 9 },
+            callback: v => {
+              const abs = Math.abs(v);
+              if (abs >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+              if (abs >= 1e3) return (v / 1e3).toFixed(1) + 'k';
+              return v.toFixed(0);
+            },
+          },
+          grid: { color: 'rgba(255,255,255,0.04)' },
+        },
+      },
+    },
+  });
 }
 
 async function renderRealizedVolBands() {
