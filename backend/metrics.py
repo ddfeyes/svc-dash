@@ -1078,9 +1078,9 @@ async def detect_accumulation_distribution_pattern(symbol: str = None) -> Dict:
     }
 
 
-async def compute_market_regime(symbol: str = None) -> Dict:
+async def compute_market_regime_v1(symbol: str = None) -> Dict:
     """
-    Composite market regime score combining all signals.
+    Composite market regime score combining all signals (v1).
     Returns a score from -100 (extreme bear) to +100 (extreme bull)
     with a confidence level and actionable summary.
     """
@@ -11422,8 +11422,8 @@ async def compute_market_regime_v2(symbol: str = None) -> dict:
 
 # ── Alias for compatibility ───────────────────────────────────────────────────
 async def compute_market_regime(symbol: str = None) -> dict:
-    """Alias to compute_market_regime_v2 for compatibility with existing callers."""
-    return await compute_market_regime_v2(symbol=symbol)
+    """Alias to compute_market_regime_v1 for full schema compatibility."""
+    return await compute_market_regime_v1(symbol=symbol)
 
 
 async def compute_protocol_revenue_card() -> dict:

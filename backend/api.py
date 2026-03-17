@@ -66,6 +66,7 @@ from metrics import (
     detect_funding_extreme,
     detect_cvd_momentum,
     compute_market_regime,
+    compute_market_regime_v1,
     compute_market_regime_v2,
     detect_accumulation_distribution_pattern,
     detect_cross_symbol_oi_spike,
@@ -969,8 +970,15 @@ async def market_regime_endpoint(
 ):
     syms = get_symbols()
     target = symbol if symbol and symbol in syms else syms[0]
-    data = await compute_market_regime_v2(symbol=target)
-    return {"status": "ok", **data}
+    # Get v1 data (score, action, phase, phase_confidence, weights)
+    v1 = await compute_market_regime_v1(symbol=target)
+    # Get v2 data (confidence, volatility, momentum, correlation, regime_history)
+    v2 = await compute_market_regime_v2(symbol=target)
+    # Merge: v1 provides score/action/phase/weights, v2 adds confidence/volatility/etc.
+    merged = {**v2, **v1}
+    merged["score"] = v1.get("score", 0)
+    merged["status"] = "ok"
+    return merged
 
 
 @router.get("/market-regime/all")
