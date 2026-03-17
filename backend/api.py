@@ -98,6 +98,7 @@ from metrics import (
     compute_leverage_ratio_heatmap,
     compute_holder_distribution_card,
     compute_protocol_revenue_card,
+    compute_dex_vs_cex_flow,
 )
 from whale_flow import compute_whale_flow
 from gamma_exposure import compute_gamma_exposure
@@ -5579,4 +5580,19 @@ async def whale_flow_endpoint(symbol: Optional[str] = None):
     """
     from whale_flow import compute_whale_flow
     data = compute_whale_flow(symbol)
+    return JSONResponse(data)
+
+
+@router.get("/dex-vs-cex-flow")
+@cache_result(ttl_seconds=60)
+async def dex_vs_cex_flow_endpoint(symbol: Optional[str] = None):
+    """DEX vs CEX volume divergence: Uniswap/Curve/Balancer vs CEX spot.
+
+    Returns divergence Z-score, DEX dominance ratio trend, and early price
+    discovery signal. Cache TTL: 60s.
+
+    Query params:
+        symbol: trading pair (default: BANANAS31USDT)
+    """
+    data = await compute_dex_vs_cex_flow(symbol)
     return JSONResponse(data)
