@@ -2563,6 +2563,8 @@ async function refresh() {
     await Promise.all([safe(renderFundingArbScanner)]);
     // Batch 35: support/resistance levels (Wave 24)
     await Promise.all([safe(renderSupportResistance)]);
+    // Batch 36: realized vs implied volatility (Wave 24)
+    await Promise.all([safe(renderRealizedImpliedVol)]);
   } finally {
     _refreshRunning = false;
   }
@@ -4256,6 +4258,61 @@ async function renderSupportResistance() {
     if (el) el.innerHTML = `<span class="card-badge badge-red" style="display:inline-block">Error</span>`;
     console.warn('[renderSupportResistance]', e.message);
   }
+}
+
+
+// ── Realized vs Implied Volatility (Wave 24, Issue #126) ─────────────────────
+async function renderRealizedImpliedVol() {
+  const sym   = encodeURIComponent(activeSymbol);
+  const el    = document.getElementById('rv-iv-content');
+  const badge = document.getElementById('rv-iv-badge');
+  if (!el) return;
+  const data = await apiFetch(`/realized-implied-vol?symbol=${sym}`);
+  if (!data) { setErr('rv-iv-content'); return; }
+
+  const rv    = data.realized_vol_pct;
+  const iv    = data.implied_vol_pct;
+  const ratio = data.vol_ratio;
+  const desc  = data.description || '';
+  const n     = data.n_candles   ?? 0;
+
+  // Badge: determined by ratio thresholds per spec
+  if (badge) {
+    let label, cls;
+    if (ratio != null && ratio < 0.8) {
+      label = 'CHEAP'; cls = 'badge-green';
+    } else if (ratio != null && ratio > 1.2) {
+      label = 'EXPENSIVE'; cls = 'badge-red';
+    } else {
+      label = 'CONVERGED'; cls = 'badge-blue';
+    }
+    badge.textContent = label;
+    badge.className   = `card-badge ${cls}`;
+    badge.style.display = '';
+  }
+
+  const fmtV = v => (v != null ? v.toFixed(1) + '%' : '—');
+  const arrow = ratio != null ? (ratio < 1 ? '↓ cheaper' : ratio > 1 ? '↑ expensive' : '≈') : '—';
+  const ratioStr = ratio != null ? ratio.toFixed(2) + 'x  ' + arrow : '—';
+
+  el.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px;">
+      <div style="text-align:center;">
+        <div style="font-size:18px;font-weight:700;color:var(--green);">${fmtV(rv)}</div>
+        <div style="color:var(--muted);font-size:9px;">Realized Vol</div>
+      </div>
+      <div style="text-align:center;">
+        <div style="font-size:18px;font-weight:700;color:var(--yellow);">${fmtV(iv)}</div>
+        <div style="color:var(--muted);font-size:9px;">Implied Vol (ATR)</div>
+      </div>
+    </div>
+    <div style="text-align:center;font-size:11px;margin-bottom:4px;">
+      <span style="color:var(--muted);">ratio: </span>
+      <span style="font-weight:600;">${ratioStr}</span>
+    </div>
+    <div style="color:var(--muted);font-size:10px;margin-bottom:2px;">${desc}</div>
+    <div style="color:var(--muted);font-size:9px;">${n} candles</div>
+  `;
 }
 
 
