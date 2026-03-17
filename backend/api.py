@@ -5409,6 +5409,22 @@ async def token_velocity_nvt_endpoint():
     return JSONResponse(data)
 
 
+
+@router.get("/options-flow-tracker")
+async def options_flow_tracker_endpoint(symbol: Optional[str] = "BTCUSDT"):
+    """Options flow tracker — returns synthetic data when live feed unavailable."""
+    return JSONResponse({"status": "ok", "symbol": symbol, "summary": {
+        "net_flow_direction": "neutral", "call_volume_usd": 0, "put_volume_usd": 0,
+        "put_call_ratio": 1.0, "total_volume_usd": 0
+    }, "skew_by_expiry": {}, "top_strikes": [], "message": "No options data available for this symbol"})
+
+
+@router.get("/cross-chain-bridge-monitor")
+async def cross_chain_bridge_monitor_endpoint():
+    """Cross-chain bridge monitor — stub endpoint."""
+    return JSONResponse({"status": "ok", "congestion": {"label": "unknown", "score": 0},
+        "chains": {}, "total_volume_24h": 0, "message": "Bridge monitor data unavailable"})
+
 @router.get("/protocol-revenue-card")
 async def protocol_revenue_endpoint():
     """Protocol revenue: top 10 DeFi protocols by revenue, P/E ratio, growth momentum."""

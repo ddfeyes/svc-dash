@@ -2404,7 +2404,7 @@ async function renderCrossAssetCorr() {
   const el    = document.getElementById('cross-asset-corr-content');
   const badge = document.getElementById('cross-asset-corr-badge');
   if (!el) return;
-  const data = await apiFetch(`/cross-asset-corr?symbol=${sym}`);
+  const data = await apiFetch(`/cross-asset-corr?symbol=${sym}`, 30000);
   if (!data) { setErr('cross-asset-corr-content'); return; }
 
   const benchmarks = data.benchmarks || ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
@@ -2462,7 +2462,12 @@ async function renderCrossAssetCorr() {
 // ── Main Refresh Loop ─────────────────────────────────────────────────────────
 async function refresh() {
   if (!activeSymbol) return;
-  const safe = fn => fn().catch(e => console.warn('[refresh]', fn.name, e.message));
+  const safe = fn => fn().catch(e => {
+    console.warn('[refresh]', fn.name, e.message);
+    // Try to find the card content element and mark it as error
+    const guess = fn.name.replace(/^render|^refresh/, '').replace(/([A-Z])/g, (m,c,i) => (i>0?'-':'')+c.toLowerCase()).replace(/^-/,'') + '-content';
+    setErr(guess);
+  });
 
   try {
     // Batch 1: core price charts
@@ -2559,6 +2564,8 @@ async function refresh() {
         // Batch 25: holder distribution card
         // Batch 26: cross-chain arb monitor
     await Promise.all([safe(refreshCrossChainArb)]);
+    // Batch 26.5: bridge monitor
+    await Promise.all([safe(renderCrossChainBridge)]);
     // Batch 27: volatility regime detector
     await Promise.all([safe(refreshVolatilityRegimeDetector)]);
     // Batch 28: smart money index
@@ -3557,7 +3564,7 @@ async function renderNetTakerDelta() {
   if (!el) return;
 
   // Fetch for all symbols in parallel
-  const symbols = getSymbols();
+  const symbols = allSymbols.length ? allSymbols : [activeSymbol];
   const results = await Promise.all(
     symbols.map(sym =>
       apiFetch(`/net-taker-delta?symbol=${encodeURIComponent(sym)}&window=3600`)
@@ -4004,7 +4011,7 @@ async function init() {
   try { if (typeof initAdaptiveVpChart === 'function') safeInit(initAdaptiveVpChart); } catch(e) { console.warn('initAdaptiveVpChart not defined'); }
   connectAlerts();
 
-  // After 10s replace any still-Loading cards with Error badge
+  // After 35s replace any still-Loading cards with Error badge
   setTimeout(() => {
     document.querySelectorAll('[id$="-content"]').forEach(el => {
       const txt = el.textContent.trim();
@@ -4540,6 +4547,7 @@ async function renderLiquidationHeatmap() {
 async function renderExchangeFlowDivergence() {
   try {
     const data = await apiFetch('/exchange-flow-divergence');
+    if (!data) { setErr('exchange-flow-divergence-content'); return; }
     const binance_cvd = data.binance_cvd || 0;
     const bybit_cvd = data.bybit_cvd || 0;
     const correlation = typeof data.correlation === 'number' ? data.correlation : 0;
@@ -4613,7 +4621,9 @@ async function renderExchangeFlowDivergence() {
 async function renderPerpSpotBasis() {
   try {
     const res = await fetch('/api/perp-spot-basis');
+    if (!res.ok) { setErr('perp-spot-basis-content'); return; }
     const data = await res.json();
+    if (!data || !data.assets) { setErr('perp-spot-basis-content'); return; }
     const { assets, avg_basis_bps, market_signal, timestamp } = data;
 
     const signalColor = (s) => s === 'contango' ? '#27ae60' : s === 'backwardation' ? '#e74c3c' : '#f39c12';
@@ -4671,9 +4681,8 @@ async function renderWhaleFlow() {
 
   try {
     const sym = activeSymbol || 'BANANAS31USDT';
-    const res = await fetch(`/api/whale-flow?symbol=${sym}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
+    const data = await apiFetch(`/whale-flow?symbol=${encodeURIComponent(sym)}`);
+    if (!data) { setErr('whale-flow-content'); return; }
 
     const {
       whale_inflow_7d,
@@ -4778,9 +4787,8 @@ async function renderGammaExposure() {
 
   try {
     const sym = activeSymbol || 'BANANAS31USDT';
-    const res = await fetch(`/api/gamma-exposure?symbol=${sym}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
+    const data = await apiFetch(`/gamma-exposure?symbol=${encodeURIComponent(sym)}`);
+    if (!data) { setErr('gamma-exposure-content'); return; }
 
     const {
       spot,
@@ -4913,9 +4921,8 @@ async function renderFundingArbScanner() {
   if (!el) return;
 
   try {
-    const res = await fetch('/api/funding-arb-scanner');
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
+    const data = await apiFetch('/funding-arb-scanner');
+    if (!data) { setErr('funding-arb-scanner-content'); return; }
 
     const { top_pairs, avg_spread_bps, extreme_count } = data;
 
@@ -4983,9 +4990,8 @@ async function renderSupportResistance() {
 
   try {
     const sym = encodeURIComponent(activeSymbol || 'BANANAS31USDT');
-    const res = await fetch(`/api/support-resistance?symbol=${sym}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
+    const data = await apiFetch(`/support-resistance?symbol=${sym}`);
+    if (!data) { setErr('support-resistance-content'); return; }
 
     const { current_price, levels } = data;
 
