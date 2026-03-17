@@ -12669,3 +12669,98 @@ async def compute_vol_regime_hmm(
         "smoothing_min_duration": smoothing_min_duration,
         "description": description,
     }
+
+
+# ── Social Sentiment Momentum ─────────────────────────────────────────────────
+
+async def compute_social_sentiment_momentum() -> Dict:
+    """
+    Social sentiment momentum indicator.
+    Simulates tweet/reddit volume, bull/bear ratio, sentiment velocity.
+    Deterministic seed 20260323. No real external calls.
+    """
+    import datetime as _dt
+
+    _rng = _random.Random(20260323)
+
+    # ── Tweet & Reddit volume ─────────────────────────────────────────────────
+    tweet_volume: int = _rng.randint(50_000, 500_000)
+    reddit_volume: int = _rng.randint(500, 5_000)
+
+    # ── Bull/Bear ratio (0.5–3.0) ─────────────────────────────────────────────
+    bull_bear_ratio: float = round(_rng.uniform(0.5, 3.0), 4)
+
+    # ── Sentiment score (0–100, 50=neutral) ──────────────────────────────────
+    raw_score: float = _rng.uniform(0.0, 100.0)
+    sentiment_score: float = round(raw_score, 2)
+
+    if sentiment_score >= 75:
+        sentiment_label = "very_bullish"
+    elif sentiment_score >= 60:
+        sentiment_label = "bullish"
+    elif sentiment_score >= 40:
+        sentiment_label = "neutral"
+    elif sentiment_score >= 25:
+        sentiment_label = "bearish"
+    else:
+        sentiment_label = "very_bearish"
+
+    # ── Sentiment velocity (-100 to +100, 24h change) ────────────────────────
+    sentiment_velocity: float = round(_rng.uniform(-100.0, 100.0), 2)
+
+    if sentiment_velocity > 5.0:
+        velocity_direction = "accelerating"
+    elif sentiment_velocity < -5.0:
+        velocity_direction = "decelerating"
+    else:
+        velocity_direction = "stable"
+
+    # ── Fear & Greed index (0–100) ────────────────────────────────────────────
+    fear_greed_index: float = round(_rng.uniform(0.0, 100.0), 2)
+
+    if fear_greed_index >= 75:
+        fear_greed_label = "extreme_greed"
+    elif fear_greed_index >= 60:
+        fear_greed_label = "greed"
+    elif fear_greed_index >= 40:
+        fear_greed_label = "neutral"
+    elif fear_greed_index >= 25:
+        fear_greed_label = "fear"
+    else:
+        fear_greed_label = "extreme_fear"
+
+    # ── Top 5 trending tokens ─────────────────────────────────────────────────
+    _token_pool = ["BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "AVAX", "DOT", "LINK"]
+    _selected = _rng.sample(_token_pool, 5)
+
+    trending_tokens = []
+    for rank, symbol in enumerate(_selected, start=1):
+        shift = round(_rng.uniform(-50.0, 50.0), 2)
+        if shift > 1.0:
+            direction = "up"
+        elif shift < -1.0:
+            direction = "down"
+        else:
+            direction = "flat"
+        trending_tokens.append({
+            "symbol": symbol,
+            "sentiment_shift": shift,
+            "direction": direction,
+            "rank": rank,
+        })
+
+    timestamp = _dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    return {
+        "tweet_volume": tweet_volume,
+        "reddit_volume": reddit_volume,
+        "bull_bear_ratio": bull_bear_ratio,
+        "sentiment_score": sentiment_score,
+        "sentiment_label": sentiment_label,
+        "sentiment_velocity": sentiment_velocity,
+        "velocity_direction": velocity_direction,
+        "fear_greed_index": fear_greed_index,
+        "fear_greed_label": fear_greed_label,
+        "trending_tokens": trending_tokens,
+        "timestamp": timestamp,
+    }

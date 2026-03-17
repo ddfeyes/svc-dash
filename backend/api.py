@@ -126,6 +126,7 @@ from metrics import (
     detect_smart_money_patterns,
     compute_smart_money_flow,
     compute_vol_regime_hmm,
+    compute_social_sentiment_momentum,
 )
 from whale_flow import compute_whale_flow
 from gamma_exposure import compute_gamma_exposure
@@ -5408,6 +5409,12 @@ async def social_sentiment_endpoint():
     """Social sentiment aggregator: keyword scoring + Reddit/Twitter volume proxy."""
     data = await compute_social_sentiment()
     return JSONResponse(data)
+
+
+@router.get("/social-sentiment-momentum")
+async def social_sentiment_momentum_endpoint():
+    """Social sentiment momentum: tweet/reddit volume, bull/bear ratio, velocity, fear-greed."""
+    return JSONResponse(await compute_social_sentiment_momentum())
 
 
 @router.get("/miner-reserve")

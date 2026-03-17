@@ -2600,6 +2600,8 @@ async function refresh() {
     await Promise.all([safe(renderLeverageHeatmap)]);
     // Batch 40: smart money flow + vol regime hmm
     await Promise.all([safe(renderSmartMoneyFlow), safe(renderVolatilityRegimeHMM)]);
+    // Batch 41: social sentiment momentum (Wave 25)
+    await Promise.all([safe(refreshSocialSentimentMomentum)]);
   } finally {
     _refreshRunning = false;
   }
@@ -5646,6 +5648,59 @@ async function renderValidatorActivity() {
 
 // ── Leverage Heatmap alias ────────────────────────────────────────────────────
 const renderLeverageHeatmap = renderLeverageRatioHeatmap;
+
+// ── Social Sentiment Momentum ─────────────────────────────────────────────────
+async function refreshSocialSentimentMomentum() {
+  const el    = document.getElementById('social-sentiment-content');
+  const badge = document.getElementById('social-sentiment-badge');
+  if (!el) return;
+  const data = await apiFetch('/social-sentiment-momentum');
+  if (!data) { el.textContent = 'No data'; return; }
+
+  const label    = data.sentiment_label   || 'neutral';
+  const score    = data.sentiment_score   ?? 50;
+  const velocity = data.sentiment_velocity ?? 0;
+  const velDir   = data.velocity_direction || 'stable';
+  const bbRatio  = data.bull_bear_ratio   ?? 1;
+  const fgIndex  = data.fear_greed_index  ?? 50;
+  const fgLabel  = data.fear_greed_label  || 'neutral';
+  const tokens   = data.trending_tokens   || [];
+
+  const sigCls = (label === 'very_bullish' || label === 'bullish') ? 'badge-green'
+               : (label === 'very_bearish' || label === 'bearish') ? 'badge-red'
+               : 'badge-blue';
+  if (badge) {
+    badge.textContent = label.replace(/_/g, ' ').toUpperCase();
+    badge.className   = `card-badge ${sigCls}`;
+    badge.style.display = '';
+  }
+
+  const scoreCol   = score >= 60 ? 'var(--green)' : score <= 40 ? 'var(--red)' : 'var(--muted)';
+  const velCol     = velocity > 0 ? 'var(--green)' : velocity < 0 ? 'var(--red)' : 'var(--muted)';
+  const bbCol      = bbRatio > 1 ? 'var(--green)' : bbRatio < 1 ? 'var(--red)' : 'var(--muted)';
+  const fgCol      = fgIndex >= 60 ? 'var(--green)' : fgIndex <= 40 ? 'var(--red)' : 'var(--muted)';
+
+  const tokenRows = tokens.map(t => {
+    const col = t.direction === 'up' ? 'var(--green)' : t.direction === 'down' ? 'var(--red)' : 'var(--muted)';
+    const arrow = t.direction === 'up' ? '▲' : t.direction === 'down' ? '▼' : '—';
+    return `<span style="margin-right:8px">${t.rank}. <b>${t.symbol}</b> <span style="color:${col}">${arrow}${Math.abs(t.sentiment_shift).toFixed(1)}</span></span>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="font-size:10px;color:var(--muted);margin-bottom:4px;display:flex;gap:10px;flex-wrap:wrap">
+      <span>score: <b style="color:${scoreCol}">${score.toFixed(1)}/100</b></span>
+      <span>velocity: <b style="color:${velCol}">${velocity >= 0 ? '+' : ''}${velocity.toFixed(1)}</b> <span style="color:var(--muted)">(${velDir})</span></span>
+      <span>bull/bear: <b style="color:${bbCol}">${bbRatio.toFixed(2)}</b></span>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-bottom:4px;display:flex;gap:10px;flex-wrap:wrap">
+      <span>tweets: <b>${(data.tweet_volume||0).toLocaleString()}</b></span>
+      <span>reddit: <b>${(data.reddit_volume||0).toLocaleString()}</b></span>
+      <span>fear/greed: <b style="color:${fgCol}">${fgIndex.toFixed(1)}</b> <span style="color:var(--muted)">(${fgLabel.replace(/_/g,' ')})</span></span>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-top:4px">
+      <span style="margin-right:4px">trending:</span>${tokenRows}
+    </div>`;
+}
 
 // ── Bootstrap on Load ──────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', init);
