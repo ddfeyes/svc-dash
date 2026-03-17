@@ -1,0 +1,67 @@
+{
+  "project": "svc-dash",
+  "branchName": "main",
+  "description": "Crypto trading dashboard — perpetual futures monitoring (BANANAS31, COS, DEXE, LYN)",
+  "userStories": [
+    {
+      "id": "sd-001",
+      "title": "Fix broken render functions for 37 non-working cards",
+      "priority": 1,
+      "passes": false,
+      "acceptanceCriteria": [
+        "Each card renders real data from its endpoint",
+        "No 'No data' or blank chart states",
+        "Verify in browser: card shows live values"
+      ],
+      "tags": ["fix", "frontend"]
+    },
+    {
+      "id": "sd-002",
+      "title": "Fix OI USDT display + price precision 6 decimals + Loading→No data",
+      "priority": 2,
+      "passes": false,
+      "acceptanceCriteria": [
+        "OI shows USDT value not raw contracts",
+        "Price shows 6 decimal places",
+        "Loading spinner resolves to data or explicit error"
+      ],
+      "tags": ["fix", "frontend"]
+    },
+    {
+      "id": "sd-003",
+      "title": "Fix empty/broken charts: correlations, vol profile, aggressor",
+      "priority": 3,
+      "passes": false,
+      "acceptanceCriteria": [
+        "Correlation matrix renders with real data",
+        "Volume profile chart shows bars",
+        "Aggressor ratio shows live imbalance"
+      ],
+      "tags": ["fix", "frontend"]
+    },
+    {
+      "id": "sd-004",
+      "title": "Full restart recovery test — simulate crash and verify all cards reload",
+      "priority": 4,
+      "passes": false,
+      "acceptanceCriteria": [
+        "Kill + restart docker compose",
+        "All working cards recover within 30s",
+        "No stale state after restart"
+      ],
+      "tags": ["infra", "test"]
+    },
+    {
+      "id": "sd-005",
+      "title": "End-to-end flow: think→brainstorm→spec→AO→PR→CI",
+      "priority": 5,
+      "passes": false,
+      "acceptanceCriteria": [
+        "One feature goes through full pipeline",
+        "CI green on merge",
+        "Kanban updated"
+      ],
+      "tags": ["test", "infra"]
+    }
+  ]
+}

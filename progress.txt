@@ -1,0 +1,13 @@
+# progress.txt — svc-dash
+# Append-only learnings for AO iterations. Each entry: [date] tag: lesson
+
+[2026-03-15] pattern: AO was stamping out PRs blind — no visual verification. Every PR must include browser check.
+[2026-03-15] pattern: 80 PRs merged but only 9/46 cards working. Root cause: render() functions not tested in browser.
+[2026-03-15] fix: DOMContentLoaded wasn't triggering init(). Added explicit trigger, all 46 cards now visible.
+[2026-03-15] fix: Removed 17 cards with broken endpoints (404/500). Now 46 remain, 9 working.
+[2026-03-16] gotcha: Docker rebuild required after EVERY backend merge. git push alone is NOT enough.
+[2026-03-16] gotcha: After any auto-merge conflict resolution — run syntax check before git add (python3 -c "import ast; ast.parse(...)" or node --check).
+[2026-03-16] pattern: Dangling imports in api.py cascade — bulk-scan all missing functions before fixing one at a time.
+[2026-03-16] pattern: CI commit on main makes all open PRs non-mergeable without rebase. Batch-merge first.
+[2026-03-16] gotcha: Never declare a card "done" until verified at working Docker endpoint, not just in git.
+[2026-03-17] infra: prd.json + progress.txt pattern adopted from Ralph (snarktank/ralph). AO reads this file each iteration.
