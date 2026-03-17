@@ -365,13 +365,14 @@
   </section>
 
   <!-- Liq Cascade -->
-  <section class="card" id="card-liq-cascade">
+  <section class="card" id="card-liq-cascade-detector">
     <div class="card-header">
-      <span class="card-title">Liq Cascade</span>
-      <span id="liq-cascade-badge" class="card-badge" style="display:none"></span>
-      <span class="card-meta">liquidation burst detector · 60s</span>
+      <span class="card-title">Liquidation Cascade Detector</span>
+      <span id="liq-cascade-detector-badge" class="card-badge" style="display:none"></span>
+      <span class="card-meta">cascade probability · support-levels · total-liquidated</span>
     </div>
-    <div id="liq-cascade-content">
+    <div id="liq-cascade-detector-content">
+      <progress style="display:none" max="100" value="0"></progress>
       <div class="text-muted" style="font-size:11px;">Loading…</div>
     </div>
   </section>
@@ -652,6 +653,24 @@
     <div id="realized-vol-surface-content" style="font-size:11px;">Loading…</div>
   </section>
 
+  <section class="card" id="card-smart-money-flow">
+    <div class="card-header">
+      <span class="card-title">Smart Money Flow</span>
+      <span id="smart-money-flow-badge" class="card-badge" style="display:none"></span>
+      <span class="card-meta">institutional vs retail flow · SMF index [0-100] · 15m/1h windows</span>
+    </div>
+    <div id="smart-money-flow-content" style="font-size:11px;">Loading…</div>
+  </section>
+
+  <section class="card" id="card-vol-regime-hmm">
+    <div class="card-header">
+      <span class="card-title">Vol Regime (HMM)</span>
+      <span id="vol-regime-hmm-badge" class="card-badge" style="display:none"></span>
+      <span class="card-meta">low/mid/high/extreme · RV percentile · state smoothing</span>
+    </div>
+    <div id="vol-regime-hmm-content" style="font-size:11px;">Loading…</div>
+  </section>
+
   <section class="card" id="card-liq-heatmap-matrix">
     <div class="card-header">
       <span class="card-title">Liquidation Heatmap</span>
@@ -722,7 +741,7 @@
   <!-- Realized vs Implied Volatility Card -->
   <section class="card" id="card-rv-iv">
     <div class="card-header">
-      <span class="card-title">RV / IV</span>
+      <span class="card-title">RV vs IV</span>
       <span id="rv-iv-badge" class="card-badge" style="display:none"></span>
       <span class="card-meta">realized vs implied vol · vol premium</span>
     </div>

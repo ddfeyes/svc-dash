@@ -11375,3 +11375,272 @@ async def compute_protocol_revenue_card() -> dict:
         "signal": "unavailable",
         "error": None,
     }
+
+
+# ── Smart Money Flow Index ────────────────────────────────────────────────────
+
+async def compute_smart_money_flow(
+    symbol: str = None,
+    window_seconds: int = 3600,
+    threshold_usd: float = 50000.0,
+) -> dict:
+    """Smart Money Flow Index: institutional vs retail flow divergence.
+
+    Splits trades into smart (>= threshold_usd notional) and retail,
+    computes normalized SMF index [0-100] and multi-window breakdown.
+    """
+    import math as _math
+
+    now = time.time()
+    trades = await get_trades_for_cvd(now - window_seconds, symbol=symbol)
+
+    def _split(trades_list):
+        smart, retail = [], []
+        for t in trades_list:
+            notional = t["qty"] * t["price"]
+            (smart if notional >= threshold_usd else retail).append(t)
+        return smart, retail
+
+    def _flow_stats(trades_list, since):
+        buy_usd = sell_usd = 0.0
+        count = 0
+        for t in trades_list:
+            if t["ts"] < since:
+                continue
+            notional = t["qty"] * t["price"]
+            if t.get("side") == "buy":
+                buy_usd += notional
+            else:
+                sell_usd += notional
+            count += 1
+        total = buy_usd + sell_usd
+        ratio = (buy_usd - sell_usd) / total if total > 0 else 0.0
+        index = round((ratio + 1.0) / 2.0 * 100.0, 4)
+        return buy_usd, sell_usd, count, index
+
+    smart_trades, retail_trades = _split(trades)
+
+    s_buy, s_sell, s_count, smf_index = _flow_stats(smart_trades, now - window_seconds)
+    r_buy, r_sell, r_count, retail_index = _flow_stats(retail_trades, now - window_seconds)
+
+    divergence = round(smf_index - retail_index, 4)
+    total_smart_vol = s_buy + s_sell
+    total_vol = total_smart_vol + r_buy + r_sell
+    smart_pct_volume = round(total_smart_vol / total_vol, 4) if total_vol > 0 else 0.0
+
+    # Bias classification
+    if smf_index >= 60 and smf_index > retail_index:
+        bias = "bullish"
+    elif smf_index <= 40 and smf_index < retail_index:
+        bias = "bearish"
+    else:
+        bias = "neutral"
+
+    bias_strength = 1
+    if abs(divergence) > 20:
+        bias_strength = 3
+    elif abs(divergence) > 10:
+        bias_strength = 2
+
+    # Signal
+    if divergence > 10:
+        signal = "accumulation"
+    elif divergence < -10:
+        signal = "distribution"
+    else:
+        signal = "neutral"
+
+    # Window breakdown
+    windows = {}
+    for w_label, w_secs in [("15m", 900), ("1h", 3600)]:
+        ws_buy, ws_sell, _, w_smf = _flow_stats(smart_trades, now - w_secs)
+        wr_buy, wr_sell, _, w_ret = _flow_stats(retail_trades, now - w_secs)
+        w_div = round(w_smf - w_ret, 4)
+        if w_div > 10:
+            w_sig = "accumulation"
+        elif w_div < -10:
+            w_sig = "distribution"
+        else:
+            w_sig = "neutral"
+        windows[w_label] = {
+            "smf_index": w_smf,
+            "retail_index": w_ret,
+            "divergence": w_div,
+            "signal": w_sig,
+        }
+
+    # Time series (last 20 points, 5-min buckets)
+    series = []
+    bucket = 300
+    n_buckets = min(20, window_seconds // bucket)
+    for i in range(n_buckets):
+        t_start = now - (n_buckets - i) * bucket
+        t_end = t_start + bucket
+        sb, ss, _, si = _flow_stats(
+            [t for t in smart_trades if t_start <= t["ts"] < t_end], t_start
+        )
+        rb, rs, _, ri = _flow_stats(
+            [t for t in retail_trades if t_start <= t["ts"] < t_end], t_start
+        )
+        series.append({
+            "ts": t_end,
+            "smart_flow": round((sb - ss) / (sb + ss + 1e-9), 4),
+            "retail_flow": round((rb - rs) / (rb + rs + 1e-9), 4),
+            "smf_index": si,
+            "retail_index": ri,
+        })
+
+    sym = symbol or "ALL"
+    description = (
+        f"Smart money {'buying' if bias == 'bullish' else 'selling' if bias == 'bearish' else 'neutral'}: "
+        f"institutional flow {'+' if divergence >= 0 else ''}{divergence:.1f}pts {'above' if divergence >= 0 else 'below'} retail"
+    )
+
+    return {
+        "status": "ok",
+        "symbol": sym,
+        "window_seconds": window_seconds,
+        "threshold_usd": threshold_usd,
+        "smf_index": smf_index,
+        "retail_index": retail_index,
+        "divergence": divergence,
+        "bias": bias,
+        "bias_strength": bias_strength,
+        "signal": signal,
+        "smart_buy_usd": s_buy,
+        "smart_sell_usd": s_sell,
+        "retail_buy_usd": r_buy,
+        "retail_sell_usd": r_sell,
+        "smart_trade_count": s_count,
+        "retail_trade_count": r_count,
+        "smart_pct_volume": smart_pct_volume,
+        "windows": windows,
+        "series": series,
+        "description": description,
+    }
+
+
+# ── Volatility Regime HMM ─────────────────────────────────────────────────────
+
+async def compute_vol_regime_hmm(
+    symbol: str = None,
+    window_seconds: int = 3600,
+    bucket_seconds: int = 300,
+    smoothing_min_duration: int = 2,
+) -> dict:
+    """Volatility regime classifier with HMM-style state smoothing.
+
+    4 regimes: low / mid / high / extreme based on realized volatility percentiles.
+    State persistence: min-duration smoothing prevents flickering.
+    """
+    import math as _math
+
+    now = time.time()
+    trades = await get_trades_for_cvd(now - window_seconds, symbol=symbol)
+
+    # Build RV per bucket
+    def _bucket_rv(trades_list, t_start, t_end):
+        pts = [t["price"] for t in trades_list if t_start <= t["ts"] < t_end]
+        if len(pts) < 2:
+            return 0.0
+        log_rets = [_math.log(pts[i] / pts[i - 1]) for i in range(1, len(pts)) if pts[i - 1] > 0]
+        if len(log_rets) < 1:
+            return 0.0
+        mean_r = sum(log_rets) / len(log_rets)
+        variance = sum((r - mean_r) ** 2 for r in log_rets) / max(len(log_rets) - 1, 1)
+        return _math.sqrt(variance)
+
+    n_buckets = max(1, window_seconds // bucket_seconds)
+    rv_buckets = []
+    for i in range(n_buckets):
+        t_s = now - (n_buckets - i) * bucket_seconds
+        t_e = t_s + bucket_seconds
+        rv = _bucket_rv(trades, t_s, t_e)
+        rv_buckets.append({"ts": t_e, "rv": rv})
+
+    rv_vals = [b["rv"] for b in rv_buckets]
+    sorted_rvs = sorted(rv_vals) if rv_vals else [0.0]
+    p25 = sorted_rvs[max(0, int(len(sorted_rvs) * 0.25) - 1)]
+    p50 = sorted_rvs[max(0, int(len(sorted_rvs) * 0.50) - 1)]
+    p75 = sorted_rvs[max(0, int(len(sorted_rvs) * 0.75) - 1)]
+
+    def _classify(rv):
+        if rv <= p25:
+            return "low"
+        elif rv <= p50:
+            return "mid"
+        elif rv <= p75:
+            return "high"
+        return "extreme"
+
+    # Assign raw regimes
+    for b in rv_buckets:
+        b["regime"] = _classify(b["rv"])
+
+    # HMM-style smoothing: persist state for min_duration buckets
+    smoothed = list(rv_buckets)
+    if len(smoothed) >= smoothing_min_duration:
+        for i in range(1, len(smoothed)):
+            if smoothed[i]["regime"] != smoothed[i - 1]["regime"]:
+                # Check if previous state held long enough
+                prev = smoothed[i - 1]["regime"]
+                # Count consecutive previous
+                run = 1
+                j = i - 2
+                while j >= 0 and smoothed[j]["regime"] == prev:
+                    run += 1
+                    j -= 1
+                if run < smoothing_min_duration:
+                    smoothed[i]["regime"] = prev
+
+    current_rv = rv_vals[-1] if rv_vals else 0.0
+    current_regime = smoothed[-1]["regime"] if smoothed else "low"
+    regime_index = {"low": 0, "mid": 1, "high": 2, "extreme": 3}[current_regime]
+
+    # Percentile of current RV
+    below = sum(1 for v in sorted_rvs if v <= current_rv)
+    percentile = round(100.0 * below / max(len(sorted_rvs), 1), 2)
+
+    # State duration (consecutive buckets in current regime)
+    state_duration = 0
+    for b in reversed(smoothed):
+        if b["regime"] == current_regime:
+            state_duration += 1
+        else:
+            break
+
+    # Transition matrix
+    transitions: Dict = {r: {"low": 0, "mid": 0, "high": 0, "extreme": 0} for r in ("low", "mid", "high", "extreme")}
+    for i in range(1, len(smoothed)):
+        fr = smoothed[i - 1]["regime"]
+        to = smoothed[i]["regime"]
+        transitions[fr][to] += 1
+    for fr, counts in transitions.items():
+        total = sum(counts.values())
+        if total > 0:
+            transitions[fr] = {r: round(c / total, 4) for r, c in counts.items()}
+        else:
+            transitions[fr] = {"low": 0.0, "mid": 0.0, "high": 0.0, "extreme": 0.0}
+
+    sym = symbol or "ALL"
+    description = (
+        f"{current_regime.capitalize()} volatility regime: "
+        f"RV at {percentile:.1f}th percentile, stable for {state_duration} bucket{'s' if state_duration != 1 else ''}"
+    )
+
+    return {
+        "status": "ok",
+        "symbol": sym,
+        "window_seconds": window_seconds,
+        "bucket_seconds": bucket_seconds,
+        "regime": current_regime,
+        "regime_index": regime_index,
+        "percentile": percentile,
+        "rv_current": round(current_rv, 6),
+        "rv_history": [{"ts": b["ts"], "rv": round(b["rv"], 6), "regime": b["regime"]} for b in smoothed],
+        "boundaries": {"p25": round(p25, 6), "p50": round(p50, 6), "p75": round(p75, 6)},
+        "transitions": transitions,
+        "state_duration": state_duration,
+        "smoothing_min_duration": smoothing_min_duration,
+        "description": description,
+    }

@@ -2593,6 +2593,8 @@ async function refresh() {
     await Promise.all([safe(renderTradeSizeDist)]);
     // Batch 39: leverage ratio heatmap (Wave 24)
     await Promise.all([safe(renderLeverageHeatmap)]);
+    // Batch 40: smart money flow + vol regime hmm
+    await Promise.all([safe(renderSmartMoneyFlow), safe(renderVolatilityRegimeHMM)]);
   } finally {
     _refreshRunning = false;
   }
@@ -3237,6 +3239,46 @@ async function refreshCrossChainArb() {
     + hmapHtml
     + footer;
 }
+
+// ── Volatility Regime Detector ────────────────────────────────────────────────
+async function refreshVolatilityRegimeDetector() {
+  const el    = document.getElementById('volatility-regime-content');
+  const badge = document.getElementById('volatility-regime-badge');
+  if (!el) return;
+  const data = await apiFetch('/volatility-regime-detector');
+  if (!data) { setErr('volatility-regime-content'); return; }
+
+  const regime = (data.regime || 'unknown').toLowerCase();
+  const regimeColor = regime === 'low' ? '#2ecc71' : regime === 'medium' ? '#f39c12' : regime === 'high' ? '#e74c3c' : '#9b59b6';
+  const rv = data.realized_vol_30d != null ? data.realized_vol_30d.toFixed(2) : '—';
+  const iv = data.implied_vol != null ? data.implied_vol.toFixed(2) : '—';
+  const vov = data.vol_of_vol != null ? data.vol_of_vol.toFixed(3) : '—';
+  const conf = data.regime_confidence != null ? (data.regime_confidence * 100).toFixed(1) : '—';
+  const dur = data.regime_duration_days != null ? data.regime_duration_days : '—';
+
+  if (badge) {
+    badge.textContent = regime.toUpperCase();
+    badge.style.display = '';
+    badge.style.background = regimeColor;
+    badge.style.color = '#fff';
+  }
+
+  const tp = data.transition_probability || {};
+  const tpRows = Object.entries(tp).map(([r, p]) =>
+    `<span style="margin-right:8px;color:${r === regime ? regimeColor : '#aaa'}">${r}: ${(p * 100).toFixed(1)}%</span>`
+  ).join('');
+
+  el.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:10px;margin-bottom:6px;">
+      <div>RV 30d: <span style="color:${regimeColor};font-weight:bold;">${rv}%</span></div>
+      <div>IV: <span style="color:#4a9eff;">${iv}%</span></div>
+      <div>Vol-of-Vol: <span style="color:#f39c12;">${vov}</span></div>
+      <div>Confidence: <span style="color:#aaa;">${conf}%</span></div>
+      <div>Duration: <span style="color:#aaa;">${dur}d</span></div>
+    </div>
+    <div style="font-size:9px;color:#888;margin-top:4px;">${tpRows}</div>`;
+}
+
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
@@ -4166,8 +4208,7 @@ async function refreshOptionsFlowTracker() {
 
 async function renderCrossCorrelationSignal() {
   try {
-    const resp = await fetch('/api/cross-correlation-signal');
-    const data = await resp.json();
+    const data = await apiFetch('/cross-correlation-signal');
     
     if (!data || typeof data !== 'object') {
       document.getElementById('cross-correlation-signal-content').innerHTML = 
@@ -4620,9 +4661,7 @@ async function renderExchangeFlowDivergence() {
 // ── Perp/Spot Basis Monitor ────────────────────────────────────────────────────
 async function renderPerpSpotBasis() {
   try {
-    const res = await fetch('/api/perp-spot-basis');
-    if (!res.ok) { setErr('perp-spot-basis-content'); return; }
-    const data = await res.json();
+    const data = await apiFetch('/perp-spot-basis');
     if (!data || !data.assets) { setErr('perp-spot-basis-content'); return; }
     const { assets, avg_basis_bps, market_signal, timestamp } = data;
 
@@ -5053,7 +5092,7 @@ async function renderRealizedImpliedVol() {
   const el    = document.getElementById('rv-iv-content');
   const badge = document.getElementById('rv-iv-badge');
   if (!el) return;
-  const data = await apiFetch(`/realized-implied-vol?symbol=${sym}`);
+  const data = await apiFetch(`/rv-iv?symbol=${sym}`);
   if (!data) { setErr('rv-iv-content'); return; }
 
   const rv    = data.realized_vol_pct;
@@ -5101,6 +5140,8 @@ async function renderRealizedImpliedVol() {
   `;
 }
 
+
+const renderRVIV = renderRealizedImpliedVol;
 
 // ── Trade Size Distribution Histogram (Wave 24, Issue #128) ─────────────────
 async function renderTradeSizeDist() {
@@ -5246,6 +5287,95 @@ async function renderLeverageHeatmap() {
     </div>
     <div style="color:#888;font-size:9px;line-height:1.4;">${description || ''}</div>
   `;
+}
+
+
+// ── Smart Money Flow ─────────────────────────────────────────────────────────
+async function renderSmartMoneyFlow() {
+  const el    = document.getElementById('smart-money-flow-content');
+  const badge = document.getElementById('smart-money-flow-badge');
+  if (!el) return;
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/smart-money-flow?symbol=${sym}`);
+  if (!data) { setErr('smart-money-flow-content'); return; }
+
+  const smf  = (data.smf_index    ?? 50).toFixed(1);
+  const ret  = (data.retail_index ?? 50).toFixed(1);
+  const div  = (data.divergence   ?? 0).toFixed(1);
+  const bias = data.bias  || 'neutral';
+  const biasColor = bias === 'bullish' ? '#27ae60' : bias === 'bearish' ? '#e74c3c' : '#f39c12';
+
+  if (badge) {
+    badge.textContent = bias.toUpperCase();
+    badge.style.display = '';
+    badge.style.background = biasColor;
+    badge.style.color = '#fff';
+  }
+
+  const windows = data.windows || {};
+  const winRows = Object.entries(windows).map(([w, v]) =>
+    `<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid #2a2a3a;">
+      <span style="font-size:9px;color:#888;">${w}</span>
+      <span style="font-size:9px;">SMF:<b>${(v.smf_index||0).toFixed(1)}</b></span>
+      <span style="font-size:9px;">Ret:<b>${(v.retail_index||0).toFixed(1)}</b></span>
+      <span style="font-size:9px;color:${(v.divergence||0)>=0?'#27ae60':'#e74c3c'};">${(v.divergence||0)>=0?'+':''}${(v.divergence||0).toFixed(1)}</span>
+    </div>`
+  ).join('');
+
+  el.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;margin-bottom:6px;font-size:10px;">
+      <div>SMF:<span style="color:${biasColor};font-weight:bold;">${smf}</span></div>
+      <div>Retail:<span style="color:#4a9eff;">${ret}</span></div>
+      <div>Div:<span style="color:${Number(div)>=0?'#27ae60':'#e74c3c'};font-weight:bold;">${Number(div)>=0?'+':''}${div}</span></div>
+    </div>
+    <div style="font-size:9px;margin-bottom:6px;">${winRows}</div>
+    <div style="font-size:9px;color:#888;">${data.description || ''}</div>`;
+}
+
+
+// ── Vol Regime HMM ────────────────────────────────────────────────────────────
+async function renderVolatilityRegimeHMM() {
+  const el    = document.getElementById('vol-regime-hmm-content');
+  const badge = document.getElementById('vol-regime-hmm-badge');
+  if (!el) return;
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/vol-regime-hmm?symbol=${sym}`);
+  if (!data) { setErr('vol-regime-hmm-content'); return; }
+
+  const regime = (data.regime || 'low').toLowerCase();
+  const regimeColors = { low: '#22c55e', mid: '#4a9eff', high: '#f59e0b', extreme: '#ef4444' };
+  const regimeColor  = regimeColors[regime] || '#888';
+  const pct   = (data.percentile ?? 0).toFixed(1);
+  const rvCur = (data.rv_current ?? 0).toFixed(6);
+  const dur   = data.state_duration ?? 0;
+  const { p25 = 0, p50 = 0, p75 = 0 } = data.boundaries || {};
+
+  if (badge) {
+    badge.textContent = regime.toUpperCase();
+    badge.style.display = '';
+    badge.style.background = regimeColor;
+    badge.style.color = '#fff';
+  }
+
+  const history = (data.rv_history || []).slice(-12);
+  const rvVals = history.map(h => h.rv);
+  const maxRv = Math.max(...rvVals, 1e-9);
+  const bars = history.map(h => {
+    const hPct = (h.rv / maxRv * 100).toFixed(1);
+    const c = regimeColors[h.regime] || '#888';
+    return `<div style="flex:1;height:${hPct}%;background:${c};min-height:2px;border-radius:1px 1px 0 0;"></div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:10px;margin-bottom:6px;">
+      <div>Regime:<span style="color:${regimeColor};font-weight:bold;">${regime.toUpperCase()}</span></div>
+      <div>Pct:<span style="color:#aaa;">${pct}th</span></div>
+      <div>RV:<span style="color:#4a9eff;">${rvCur}</span></div>
+      <div>Dur:<span style="color:#aaa;">${dur} buckets</span></div>
+    </div>
+    <div style="font-size:9px;color:#888;margin-bottom:4px;">p25:${p25.toFixed(6)} p50:${p50.toFixed(6)} p75:${p75.toFixed(6)}</div>
+    <div style="display:flex;align-items:flex-end;height:32px;gap:1px;border-bottom:1px solid #333;margin-bottom:4px;">${bars}</div>
+    <div style="font-size:9px;color:#888;">${data.description || ''}</div>`;
 }
 
 

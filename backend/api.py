@@ -119,6 +119,11 @@ from metrics import (
     compute_holder_distribution_card,
     compute_protocol_revenue_card,
     compute_dex_vs_cex_flow,
+    compute_realized_vol_surface,
+    compute_liquidation_cascade_detector,
+    detect_smart_money_patterns,
+    compute_smart_money_flow,
+    compute_vol_regime_hmm,
 )
 from whale_flow import compute_whale_flow
 from gamma_exposure import compute_gamma_exposure
@@ -862,6 +867,7 @@ async def mtf_rsi_divergence_endpoint(
     return {"status": "ok", "symbol": target, **data}
 
 
+@router.get("/rv-iv")
 @router.get("/realized-implied-vol")
 async def realized_implied_vol_endpoint(
     symbol: Optional[str] = None,
@@ -5495,13 +5501,6 @@ async def volatility_regime_detector_endpoint():
     return JSONResponse(data)
 
 
-@router.get("/volatility-regime-detector")
-async def volatility_regime_detector_endpoint():
-    """Volatility regime detector: classifies market into low/medium/high/extreme vol regimes."""
-    data = await compute_volatility_regime_detector()
-    return JSONResponse(data)
-
-
 @router.get("/smart-money-index")
 async def smart_money_index_endpoint():
     """Smart Money Index: institutional vs retail flow divergence, accumulation/distribution signal."""
@@ -5509,10 +5508,65 @@ async def smart_money_index_endpoint():
     return JSONResponse(data)
 
 
-@router.get("/volatility-regime-detector")
-async def volatility_regime_detector_endpoint():
-    """Volatility regime detector: classifies market into low/medium/high/extreme vol regimes."""
-    data = await compute_volatility_regime_detector()
+@router.get("/cross-correlation-signal")
+async def cross_correlation_signal_endpoint(
+    series_a: Optional[str] = None,
+    series_b: Optional[str] = None,
+):
+    """Cross-correlation signal between two price series (comma-separated floats)."""
+    def _parse(s: Optional[str]) -> list:
+        if not s:
+            return []
+        try:
+            return [float(x) for x in s.split(",") if x.strip()]
+        except (ValueError, TypeError):
+            return []
+    a = _parse(series_a)
+    b = _parse(series_b)
+    data = compute_cross_correlation_signal(a, b)
+    return JSONResponse(data)
+
+
+@router.get("/realized-vol-surface")
+async def realized_vol_surface_endpoint():
+    """Realized volatility surface: 8 symbols × 4 time windows."""
+    data = await compute_realized_vol_surface()
+    return JSONResponse(data)
+
+
+@router.get("/liquidation-cascade-detector")
+async def liquidation_cascade_detector_endpoint():
+    """Liquidation cascade detector: cascade probability, chain, and support levels."""
+    data = await compute_liquidation_cascade_detector()
+    return JSONResponse(data)
+
+
+@router.get("/smart-money-patterns")
+async def smart_money_patterns_endpoint(symbol: Optional[str] = None):
+    """Smart money pattern detector: accumulation, distribution, absorption signals."""
+    data = await detect_smart_money_patterns(symbol=symbol)
+    return JSONResponse(data)
+
+
+@router.get("/smart-money-flow")
+async def smart_money_flow_endpoint(
+    symbol: Optional[str] = None,
+    window: int = Query(default=3600, ge=300, le=86400),
+    threshold: float = Query(default=50000.0, ge=1000.0),
+):
+    """Smart Money Flow Index: institutional vs retail flow divergence [0-100]."""
+    data = await compute_smart_money_flow(symbol=symbol, window_seconds=window, threshold_usd=threshold)
+    return JSONResponse(data)
+
+
+@router.get("/vol-regime-hmm")
+async def vol_regime_hmm_endpoint(
+    symbol: Optional[str] = None,
+    window: int = Query(default=3600, ge=300, le=86400),
+    bucket: int = Query(default=300, ge=60, le=3600),
+):
+    """Volatility regime classifier with HMM-style state smoothing (4 classes)."""
+    data = await compute_vol_regime_hmm(symbol=symbol, window_seconds=window, bucket_seconds=bucket)
     return JSONResponse(data)
 
 
