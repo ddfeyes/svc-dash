@@ -1,52 +1,85 @@
-# Lain State
-last_updated: "2026-03-16T10:50:00Z"
+# Lain State — svc-dash
+# Last updated: 2026-03-17T19:46:00Z
 
-tasks:
-  - id: svc-dash
-    goal: "Fix dashboard rendering — 80 PRs were merged but only 8/54 cards worked"
-    status: in_progress
-    repo: "https://github.com/ddfeyes/svc-dash"
-    running: true
+task: svc-dash
+goal: "Fix all test failures and achieve CI green for Wave 24 + Wave 25 planning"
+status: in_progress
+repo: https://github.com/ddfeyes/svc-dash
 
-    current_work:
-      - "Removed 17 broken cards (404 + 500 endpoints)"
-      - "Fixed DOMContentLoaded trigger so init() actually runs"
-      - "46 cards now visible, 9 working, 37 need JS debugging"
-      - "All endpoints work, problem is JS rendering logic"
+## Wave 24 Status
+wave_24: COMPLETED
+  - 5 card features merged (PRs #125-129): support/resistance, rv-iv, trade-size-dist, net-taker-delta, leverage-ratio-heatmap
+  - PR #136 (endpoint audit) merged to main
+  - Issues #125-#129 closed on GitHub
+  - Main branch synchronized
 
-    working_cards: 9
-      - Price Chart (OHLCV)
-      - Open Interest (OI)
-      - CVD
-      - Funding Rate
-      - Bid-Ask Spread
-      - Aggressor Ratio
-      - Volume Profile
-      - Market Regime (timeline chart)
-      - (Whale Clustering or similar)
+## Current Test Status
+timestamp: 2026-03-17T19:46:00Z
+test_summary:
+  passed: 3507
+  failed: 94
+  errors: 67  # 9 import errors (missing helper functions) blocking ~480 tests
 
-    broken_cards: 37
-      - All have working endpoints
-      - Problem: render() functions have wrong selectors, wrong data parsing, or incorrect HTML structure
-      - Examples: Funding Momentum, Trade Tape, Volume Imbalance, Alerts, VPIN, Liquidation Heatmap, Top Movers, etc.
-      
-    blocker: "AO cannot write working JS without testing in browser. Need systematic debugging per card."
-    next_step: "Fix render functions one by one: test endpoint → check HTML → verify JS logic"
+## Blockers
+blocker_1:
+  title: "9 missing helper function imports in backend/metrics.py"
+  severity: CRITICAL
+  description: >
+    9 test files fail at collection due to missing helper functions:
+    - test_cross_chain_bridge_monitor.py: _cb_net_flow, _cb_flow_label, _cb_chain_dominance, _cb_utilization_rate, _cb_anomaly_flag, _cb_bridge_rank, _cb_volume_zscore, _cb_congestion_label (8 funcs)
+    - test_derivatives_heatmap.py: _dh_parse_instrument, _dh_total_payout, _dh_max_pain, _dh_gex_at_strike, _dh_oi_concentration, _dh_put_call_ratio, _dh_nearest_expiries (7 funcs)
+    - test_exchange_netflow_dashboard.py: _enf_net_flow_proxy, _enf_flow_direction, _enf_accumulation_signal, _enf_flow_strength, _enf_exchange_rank, _enf_trend, _enf_zscore (7 funcs)
+    - test_fear_greed_composite.py: _fg_clamp, _fg_normalize, _fg_label, _fg_label_color, _fg_funding_score, _fg_oi_momentum_score, _fg_price_deviation_score, _fg_volatility_score, _fg_taker_score, _fg_liquidation_score, _fg_composite (11 funcs)
+    - test_network_health_score.py: _nh_hash_rate_score, _nh_mempool_score, _nh_address_score, _nh_fee_score, _nh_composite, _nh_health_label, _nh_trend, _nh_normalize (8 funcs)
+    - test_onchain_stablecoin_flow.py: _sf_net_flow, _sf_flow_direction, _sf_flow_signal, _sf_momentum, _sf_rolling_average, _sf_flow_zscore, _sf_combine_stables (7 funcs)
+    - test_perpetual_basis_tracker.py: _pb_basis_pct, _pb_annualized_from_price, _pb_funding_annualized, _pb_carry_signal, _pb_carry_strength, _pb_carry_action, _pb_basis_zscore (7 funcs)
+    - test_staking_yield_tracker.py: _sy_real_yield, _sy_stake_ratio, _sy_concentration_risk, _sy_apy_trend, _sy_yield_label, _sy_validator_growth, _sy_risk_label, _sy_apy_zscore (8 funcs)
+    - test_whale_alert.py: _wa_classify_size, _wa_flow_score, _wa_flow_direction, _wa_cluster_trades, _wa_cluster_stats, _wa_exchange_flow_summary (6 funcs)
+  total_functions: 69
+  workaround: "Read each test file to understand expected signatures, implement all functions"
+  next_action: "Delegate to Claude Code subagent to implement all 69 functions"
 
-    stats:
-      cards_total: 46
-      cards_working: 9
-      cards_broken: 37
-      endpoints_tested: 51
-      endpoints_working: 41
-      endpoints_broken: 10 (removed from frontend)
-      prs_merged_today: 80
-      tests: 1995 passing
+blocker_2:
+  title: "~94 frontend structural failures"
+  severity: HIGH
+  description: >
+    Missing API routes, HTML cards, or JS render functions for ~15-20 features.
+    Examples: rv-iv (route missing), options-flow (404), macro-liquidity (404), cross-chain-bridge (404), realized-vol-surface (timeout).
+    Many routes exist in api.py but aren't wired to HTML/JS, or vice versa.
+  next_action: "After fixing imports, audit missing routes and wire frontend stubs"
 
-notes:
-  - "Major insight: AO was stamping out PRs blind — no visual verification"
-  - "Pipeline had no 'does this card actually show data in browser?' check"
-  - "Commit f023449: removed 17 broken cards (404 + 500 endpoints)"
-  - "Commit 7d18a4c: added init() trigger"
-  - "Now dashing actually loads! But 37 cards need fixing"
-  - "Remaining work: debug each broken render function"
+## Cards Status
+cards_total: 62
+cards_live: 62  # All HTML cards present
+endpoints_tested: 50+
+endpoints_working: ~46
+endpoints_broken: ~4 (404s or timeouts)
+
+## Next Steps (Priority Order)
+1. IMMEDIATE: Implement 69 missing helper functions in metrics.py
+   - delegate to subagent
+   - expected: +480 passing tests
+   - time: 20-30 min
+
+2. Fix ~4 broken endpoints (404/timeout)
+   - rv-iv route
+   - options-flow route
+   - macro-liquidity route
+   - cross-chain-bridge route
+   - realized-vol-surface timeout fix
+
+3. Wire missing frontend routes
+   - check each failing test to understand exact route/function/card names
+   - add routes to api.py if missing
+   - add HTML cards if missing
+   - add JS render functions if missing
+
+4. Run full test suite → should see 3500+ passing
+
+5. Plan Wave 25 features based on available spec cards
+
+## Notes
+- svc-dash-driver cron completed Wave 24 close-out but did not fix import errors
+- Main is now fully merged with PR #136
+- CI health check: next main CI run will show if imports fixed
+- Backend healthy (endpoints responding), frontend wiring is the work item
