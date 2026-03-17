@@ -25,6 +25,7 @@ let spreadChart        = null;   // Chart.js
 let aggressorChart     = null;   // Chart.js
 let volumeProfileChart = null;   // Chart.js
 let regimeTimelineChart = null;  // Chart.js
+let adaptiveVpChart    = null;   // Chart.js
 let wsAlerts     = null;
 
 let refreshTimer = null;
@@ -2584,7 +2585,7 @@ async function renderSocialSentiment() {
   const badge = document.getElementById('social-sentiment-badge');
   if (!el) return;
   const data = await apiFetch('/social-sentiment');
-  if (!data) { setErr('social-sentiment-content'); return; }
+  if (!data) { el.textContent = 'No data'; return; }
 
   const sent   = data.sentiment    || {};
   const vol    = data.social_volume || {};
@@ -2867,7 +2868,7 @@ async function renderTokenVelocityNvt() {
   const badge = document.getElementById('token-velocity-nvt-badge');
   if (!el) return;
   const data = await apiFetch('/token-velocity-nvt');
-  if (!data) { setErr('token-velocity-nvt-content'); return; }
+  if (!data) { el.textContent = 'No data'; return; }
 
   const vel    = data.velocity || {};
   const nvt    = data.nvt      || {};
@@ -2950,7 +2951,7 @@ async function refreshDexVsCexFlow() {
   const el = document.getElementById('dex-vs-cex-content');
   if (!el) return;
   const sym = activeSymbol ? `?symbol=${activeSymbol}` : '';
-  const data = await apiFetch(`/api/dex-vs-cex-flow${sym}`);
+  const data = await apiFetch(`/dex-vs-cex-flow${sym}`);
   if (!data) { el.textContent = 'Unavailable'; return; }
 
   const badge = document.getElementById('dex-vs-cex-badge');
@@ -3137,7 +3138,7 @@ async function refreshCrossChainArb() {
   const badge = document.getElementById('cross-chain-arb-badge');
   if (!el) return;
   const data = await apiFetch('/cross-chain-arb');
-  if (!data) { setErr('cross-chain-arb-content'); return; }
+  if (!data) { el.textContent = 'No data'; return; }
 
   const signal  = data.signal            || 'low';
   const opps    = data.top_opportunities || [];
