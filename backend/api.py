@@ -5399,12 +5399,14 @@ async def miner_reserve_endpoint():
 async def macro_liquidity_endpoint():
     """Macro liquidity: M2 proxy, Fed balance sheet, USD/BTC divergence, regime score."""
     data = await compute_macro_liquidity_indicator()
+    return JSONResponse(data)
 
 
 @router.get("/token-velocity-nvt")
 async def token_velocity_nvt_endpoint():
     """Token velocity + NVT signal: on-chain BTC valuation using tx volume / market cap."""
     data = await compute_token_velocity_nvt()
+    return JSONResponse(data)
 
 
 @router.get("/protocol-revenue-card")

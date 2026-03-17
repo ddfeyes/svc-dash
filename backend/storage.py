@@ -809,7 +809,7 @@ async def cleanup_old_data(max_age_seconds: int = 86400 * 7):
         await db.execute("DELETE FROM alert_history WHERE ts < ?", (time.time() - 86400 * 30,))
         await db.commit()
     # Reclaim space (VACUUM requires its own connection)
-    async with aiosqlite.connect(DB_PATH) as db2:
+    async with open_db() as db2:
         await db2.execute("VACUUM")
         await db2.execute("ANALYZE")
 
