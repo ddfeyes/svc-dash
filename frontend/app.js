@@ -2604,6 +2604,8 @@ async function refresh() {
     await Promise.all([safe(refreshSocialSentimentMomentum)]);
     // Batch 42: miner flow signals (Wave 25)
     await Promise.all([safe(fetchMinerFlowSignals)]);
+    // Batch 42: derivatives term structure (Wave 25)
+    await Promise.all([safe(renderDerivativesTermStructure)]);
   } finally {
     _refreshRunning = false;
   }
@@ -5743,6 +5745,53 @@ function renderMinerFlowSignals(data) {
       <span>cap risk: <b style="color:${riskCol}">${risk}</b></span>
     </div>
     <div style="font-size:10px;color:var(--muted)">forecast (7d): <b>${forecastStr}</b> BTC/day</div>`;
+}
+
+// ── Derivatives Term Structure ────────────────────────────────────────────────
+async function renderDerivativesTermStructure() {
+  const el    = document.getElementById('derivatives-term-structure-content');
+  const badge = document.getElementById('derivatives-term-structure-badge');
+  if (!el) return;
+  const data = await apiFetch('/derivatives-term-structure');
+  if (!data) { el.textContent = 'No data'; return; }
+
+  const cb        = data.contango_backwardation || 'flat';
+  const health    = data.structure_health || 'normal';
+  const rollCost  = data.roll_cost_bps ?? 0;
+  const oidist    = data.oi_distribution || {};
+  const tenors    = data.tenors || [];
+
+  const cbCls = cb === 'contango' ? 'badge-green' : cb === 'backwardation' ? 'badge-red' : 'badge-blue';
+  if (badge) {
+    badge.textContent = cb.toUpperCase();
+    badge.className   = `card-badge ${cbCls}`;
+    badge.style.display = '';
+  }
+
+  const tenorRows = tenors.map(t => {
+    const basisCol = t.basis_annualized > 0 ? 'var(--green)' : t.basis_annualized < 0 ? 'var(--red)' : 'var(--muted)';
+    const dte = t.days_to_expiry === 0 ? 'perp' : `${t.days_to_expiry}d`;
+    return `<div style="display:flex;gap:8px;margin-bottom:2px">
+      <span style="width:90px;color:var(--muted)">${t.tenor.replace('_',' ')}</span>
+      <span style="width:60px">${dte}</span>
+      <span style="width:80px">OI: <b>$${(t.oi_usd/1e6).toFixed(1)}M</b></span>
+      <span style="width:70px"><b>${t.oi_pct.toFixed(1)}%</b></span>
+      <span>basis: <b style="color:${basisCol}">${t.basis_annualized >= 0 ? '+' : ''}${t.basis_annualized.toFixed(2)}%</b></span>
+    </div>`;
+  }).join('');
+
+  const healthCol = health === 'healthy' ? 'var(--green)' : health === 'inverted' ? 'var(--red)' : 'var(--muted)';
+  const rcCol = rollCost >= 0 ? 'var(--green)' : 'var(--red)';
+
+  el.innerHTML = `
+    <div style="font-size:10px;color:var(--muted);margin-bottom:6px;display:flex;gap:12px;flex-wrap:wrap">
+      <span>structure: <b style="color:${healthCol}">${health}</b></span>
+      <span>roll cost: <b style="color:${rcCol}">${rollCost >= 0 ? '+' : ''}${rollCost.toFixed(1)} bps</b></span>
+      <span>perp: <b>${(oidist.perpetual||0).toFixed(1)}%</b></span>
+      <span>qtr: <b>${(oidist.quarterly||0).toFixed(1)}%</b></span>
+      <span>bi-qtr: <b>${(oidist.bi_quarterly||0).toFixed(1)}%</b></span>
+    </div>
+    <div style="font-size:10px">${tenorRows}</div>`;
 }
 
 // ── Bootstrap on Load ──────────────────────────────────────────────────────────

@@ -128,6 +128,7 @@ from metrics import (
     compute_vol_regime_hmm,
     compute_social_sentiment_momentum,
     compute_miner_flow_signals,
+    compute_derivatives_term_structure,
 )
 from whale_flow import compute_whale_flow
 from gamma_exposure import compute_gamma_exposure
@@ -5849,8 +5850,14 @@ async def validator_activity_endpoint():
     data = await compute_validator_activity()
     return JSONResponse(data)
 
-
 @router.get("/miner-flow-signals")
 async def miner_flow_signals_endpoint():
     """Miner flow signals: wallet outflow rate, reserve ratio, price correlation, 30d forecast."""
     return JSONResponse(await compute_miner_flow_signals())
+
+@router.get("/derivatives-term-structure")
+async def derivatives_term_structure_endpoint():
+    """Derivatives term structure: perp/quarterly/bi-quarterly OI distribution,
+    annualised basis per tenor, contango/backwardation indicator, roll cost."""
+    data = await compute_derivatives_term_structure()
+    return JSONResponse(data)
