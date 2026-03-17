@@ -129,7 +129,7 @@ from metrics import (
     compute_social_sentiment_momentum,
     compute_miner_flow_signals,
     compute_derivatives_term_structure,
-    compute_perpetual_funding_heatmap,
+    compute_liquidation_cascade_risk,
 )
 from whale_flow import compute_whale_flow
 from gamma_exposure import compute_gamma_exposure
@@ -5863,7 +5863,8 @@ async def derivatives_term_structure_endpoint():
     data = await compute_derivatives_term_structure()
     return JSONResponse(data)
 
-@router.get("/perpetual-funding-heatmap")
-async def perpetual_funding_heatmap_endpoint():
-    """Perpetual funding rate heatmap across exchanges."""
-    return JSONResponse(await compute_perpetual_funding_heatmap())
+
+@router.get("/liquidation-cascade-risk")
+async def liquidation_cascade_risk_endpoint():
+    """Liquidation cascade risk score and trigger zones."""
+    return JSONResponse(await compute_liquidation_cascade_risk())

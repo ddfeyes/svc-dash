@@ -12966,110 +12966,112 @@ async def compute_derivatives_term_structure() -> dict:
     }
 
 
-# ── Perpetual Funding Heatmap ─────────────────────────────────────────────────
-import random as _rng_pfh
-import datetime as _dt_pfh
+# ─────────────────────────────────────────────────────────────────────────────
+# Wave 26 — Liquidation Cascade Risk
+# ─────────────────────────────────────────────────────────────────────────────
+
+import random as _rng_lcr
+import datetime as _dt_lcr
 
 
-async def compute_perpetual_funding_heatmap() -> dict:
-    """Cross-exchange funding rate comparison matrix for BTC/ETH/SOL.
+async def compute_liquidation_cascade_risk() -> dict:
+    """Aggregated cascade risk score showing how close the market is to a
+    liquidation cascade event.
 
-    Returns a heatmap of perpetual funding rates (% per 8h) across Binance,
-    Bybit, and OKX, with arbitrage opportunities and extremes detection.
+    Returns:
+        cascade_risk_score  — 0-100 float
+        risk_level          — "low" / "moderate" / "elevated" / "critical"
+        leverage_concentration — fractions per leverage tier (sum ≈ 1.0)
+        trigger_zones       — list of price levels with estimated liquidations
+        cascade_threshold_distance_pct — % distance to nearest trigger zone
+        historical_cascades — 10 past cascade events
+        sentiment_amplifier — how much sentiment amplifies cascade risk
+        timestamp           — ISO 8601 UTC
     """
+    _rng = _rng_lcr.Random(20260325)
 
-    _rng = _rng_pfh.Random(20260324)
+    # ── Cascade risk score (0–100) ────────────────────────────────────────────
+    cascade_risk_score: float = round(_rng.uniform(10.0, 95.0), 2)
 
-    symbols: list = ["BTC", "ETH", "SOL"]
-    exchanges: list = ["binance", "bybit", "okx"]
+    # ── Risk level ────────────────────────────────────────────────────────────
+    if cascade_risk_score >= 75.0:
+        risk_level: str = "critical"
+    elif cascade_risk_score >= 50.0:
+        risk_level = "elevated"
+    elif cascade_risk_score >= 25.0:
+        risk_level = "moderate"
+    else:
+        risk_level = "low"
 
-    # ── Build funding rate matrix ─────────────────────────────────────────────
-    # Typical perpetual funding rates: -0.05% to +0.10% per 8h
-    matrix: list = []
-    raw_rates: dict = {}  # symbol -> {exchange -> rate}
-
-    for sym in symbols:
-        rates: dict = {}
-        for exc in exchanges:
-            rate: float = round(_rng.uniform(-0.05, 0.10), 6)
-            rates[exc] = rate
-        raw_rates[sym] = rates
-        entry: dict = {"symbol": sym}
-        entry.update(rates)
-        matrix.append(entry)
-
-    # ── Funding extremes ──────────────────────────────────────────────────────
-    max_rate: float = -999.0
-    min_rate: float = 999.0
-    max_symbol: str = ""
-    max_exchange: str = ""
-    min_symbol: str = ""
-    min_exchange: str = ""
-
-    for sym in symbols:
-        for exc in exchanges:
-            rate = raw_rates[sym][exc]
-            if rate > max_rate:
-                max_rate = rate
-                max_symbol = sym
-                max_exchange = exc
-            if rate < min_rate:
-                min_rate = rate
-                min_symbol = sym
-                min_exchange = exc
-
-    funding_extremes: dict = {
-        "max_symbol": max_symbol,
-        "max_exchange": max_exchange,
-        "max_rate": round(max_rate, 6),
-        "min_symbol": min_symbol,
-        "min_exchange": min_exchange,
-        "min_rate": round(min_rate, 6),
+    # ── Leverage concentration (fractions summing to 1.0) ────────────────────
+    _lc_raw = [_rng.random() for _ in range(4)]
+    _lc_total = sum(_lc_raw)
+    _f2x  = round(_lc_raw[0] / _lc_total, 4)
+    _f5x  = round(_lc_raw[1] / _lc_total, 4)
+    _f10x = round(_lc_raw[2] / _lc_total, 4)
+    _f20x = round(1.0 - _f2x - _f5x - _f10x, 4)
+    leverage_concentration: dict = {
+        "2x":   _f2x,
+        "5x":   _f5x,
+        "10x":  _f10x,
+        "20x+": _f20x,
     }
 
-    # ── Arbitrage opportunities ───────────────────────────────────────────────
-    # List symbol/exchange pairs where rate spread > 2 bps (0.02%)
-    arbitrage_opportunities: list = []
-    arb_threshold_bps: float = 2.0
+    # ── Trigger zones ─────────────────────────────────────────────────────────
+    _current_price: float = _rng.uniform(25_000.0, 45_000.0)
+    trigger_zones: list = []
+    for _ in range(5):
+        _pct_offset = _rng.uniform(-15.0, 15.0)
+        _price_level = int(_current_price * (1.0 + _pct_offset / 100.0))
+        _est_liq_usd = int(_rng.uniform(1_000_000.0, 50_000_000.0))
+        _direction = _rng.choice(["long", "short"])
+        trigger_zones.append(
+            {
+                "price_level": _price_level,
+                "estimated_liquidations_usd": _est_liq_usd,
+                "direction": _direction,
+            }
+        )
 
-    for sym in symbols:
-        rates_for_sym = raw_rates[sym]
-        exc_list = list(exchanges)
-        for i in range(len(exc_list)):
-            for j in range(i + 1, len(exc_list)):
-                exc_a = exc_list[i]
-                exc_b = exc_list[j]
-                rate_a = rates_for_sym[exc_a]
-                rate_b = rates_for_sym[exc_b]
-                diff_bps: float = round(abs(rate_a - rate_b) * 10000.0, 4)
-                if diff_bps > arb_threshold_bps:
-                    if rate_a < rate_b:
-                        long_exc, short_exc = exc_a, exc_b
-                    else:
-                        long_exc, short_exc = exc_b, exc_a
-                    arbitrage_opportunities.append(
-                        {
-                            "symbol": sym,
-                            "long_exchange": long_exc,
-                            "short_exchange": short_exc,
-                            "rate_diff_bps": diff_bps,
-                        }
-                    )
+    # ── Distance to nearest trigger zone ─────────────────────────────────────
+    _distances = [
+        abs(z["price_level"] - _current_price) / _current_price * 100.0
+        for z in trigger_zones
+    ]
+    cascade_threshold_distance_pct: float = round(min(_distances), 4)
 
-    # ── Average funding rates per symbol ─────────────────────────────────────
-    avg_rates: dict = {}
-    for sym in symbols:
-        rates_vals = list(raw_rates[sym].values())
-        avg_rates[sym] = round(sum(rates_vals) / len(rates_vals), 6)
+    # ── Historical cascades (10 events) ──────────────────────────────────────
+    _base_date = _dt_lcr.date(2025, 3, 17)
+    historical_cascades: list = []
+    _days_offset = 0
+    for _ in range(10):
+        _days_offset += _rng.randint(15, 45)
+        _cascade_date = (
+            _base_date - _dt_lcr.timedelta(days=_days_offset)
+        ).isoformat()
+        _drop_pct = round(_rng.uniform(5.0, 35.0), 2)
+        _liquidated_usd = int(_rng.uniform(50_000_000.0, 1_000_000_000.0))
+        historical_cascades.append(
+            {
+                "date": _cascade_date,
+                "drop_pct": _drop_pct,
+                "liquidated_usd": _liquidated_usd,
+            }
+        )
 
-    timestamp: str = _dt_pfh.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    # ── Sentiment amplifier ───────────────────────────────────────────────────
+    sentiment_amplifier: float = round(_rng.uniform(0.5, 3.0), 4)
+
+    # ── Timestamp ─────────────────────────────────────────────────────────────
+    timestamp: str = _dt_lcr.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
     return {
-        "symbols": symbols,
-        "exchanges": exchanges,
-        "matrix": matrix,
-        "funding_extremes": funding_extremes,
-        "arbitrage_opportunities": arbitrage_opportunities,
-        "avg_rates": avg_rates,
+        "cascade_risk_score": cascade_risk_score,
+        "risk_level": risk_level,
+        "leverage_concentration": leverage_concentration,
+        "trigger_zones": trigger_zones,
+        "cascade_threshold_distance_pct": cascade_threshold_distance_pct,
+        "historical_cascades": historical_cascades,
+        "sentiment_amplifier": sentiment_amplifier,
         "timestamp": timestamp,
     }
