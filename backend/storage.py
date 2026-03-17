@@ -8,6 +8,22 @@ from typing import Any, Dict, List, Optional
 
 DB_PATH = os.getenv("DB_PATH", "data/bananas31.db")
 
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def open_db(path=None):
+    """Open SQLite with WAL + busy_timeout=5000ms."""
+    p = path or DB_PATH
+    import os
+    os.makedirs(os.path.dirname(p) or '.', exist_ok=True)
+    async with aiosqlite.connect(p) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute("PRAGMA synchronous=NORMAL")
+        await db.execute("PRAGMA busy_timeout=5000")
+        yield db
+
+
 
 async def get_db() -> aiosqlite.Connection:
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -15,14 +31,16 @@ async def get_db() -> aiosqlite.Connection:
     db.row_factory = aiosqlite.Row
     await db.execute("PRAGMA journal_mode=WAL")
     await db.execute("PRAGMA synchronous=NORMAL")
+    await db.execute("PRAGMA busy_timeout=5000")
     return db
 
 
 async def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         await db.execute("PRAGMA journal_mode=WAL")
         await db.execute("PRAGMA synchronous=NORMAL")
+        await db.execute("PRAGMA busy_timeout=5000")
 
         await db.execute("""
             CREATE TABLE IF NOT EXISTS orderbook_snapshots (
@@ -169,7 +187,7 @@ async def insert_orderbook(exchange: str, symbol: str, bids: list, asks: list):
     spread_pct = (spread / mid_price * 100) if (spread and mid_price) else None
     spread_bps = round(spread_pct * 100, 4) if spread_pct is not None else None
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         await db.execute("""
             INSERT INTO orderbook_snapshots
             (ts, exchange, symbol, bids, asks, best_bid, best_ask, mid_price, spread, bid_volume, ask_volume, imbalance)
@@ -199,7 +217,7 @@ async def insert_spread(
 ):
     """Explicit spread insert (for external callers)."""
     ts = time.time()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         await db.execute("""
             INSERT INTO spread_history
             (ts, symbol, exchange, spread_pct, spread_bps, spread_abs, bid, ask, mid, bid_vol, ask_vol)
@@ -224,7 +242,7 @@ async def get_spread_history(
         params.append(exchange)
     q += " ORDER BY ts ASC LIMIT ?"
     params.append(limit)
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(q, params) as cur:
             rows = await cur.fetchall()
@@ -281,7 +299,7 @@ async def get_spread_stats(symbol: str, window: int = 1800, exchange: str = None
 
 async def insert_trade(exchange: str, symbol: str, price: float, qty: float, side: str, trade_id: str = None):
     ts = time.time()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         await db.execute("""
             INSERT INTO trades (ts, exchange, symbol, price, qty, side, trade_id)
             VALUES (?,?,?,?,?,?,?)
@@ -291,7 +309,7 @@ async def insert_trade(exchange: str, symbol: str, price: float, qty: float, sid
 
 async def insert_oi(exchange: str, symbol: str, oi_value: float, oi_contracts: float = None):
     ts = time.time()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         await db.execute("""
             INSERT INTO open_interest (ts, exchange, symbol, oi_value, oi_contracts)
             VALUES (?,?,?,?,?)
@@ -301,7 +319,7 @@ async def insert_oi(exchange: str, symbol: str, oi_value: float, oi_contracts: f
 
 async def insert_funding(exchange: str, symbol: str, rate: float, next_ts: float = None):
     ts = time.time()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         await db.execute("""
             INSERT INTO funding_rate (ts, exchange, symbol, rate, next_funding_ts)
             VALUES (?,?,?,?,?)
@@ -312,7 +330,7 @@ async def insert_funding(exchange: str, symbol: str, rate: float, next_ts: float
 async def insert_liquidation(exchange: str, symbol: str, side: str, price: float, qty: float):
     ts = time.time()
     value = price * qty
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         await db.execute("""
             INSERT INTO liquidations (ts, exchange, symbol, side, price, qty, value)
             VALUES (?,?,?,?,?,?,?)
@@ -364,7 +382,7 @@ async def get_latest_orderbook(
         q += " WHERE " + " AND ".join(where)
     q += " ORDER BY ts DESC LIMIT ?"
     params.append(limit)
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(q, params) as cur:
             rows = await cur.fetchall()
@@ -380,7 +398,7 @@ async def get_recent_trades(
     q, params = _build_query_with_since(
         "SELECT * FROM trades", since, symbol, "ORDER BY ts DESC", limit
     )
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(q, params) as cur:
             rows = await cur.fetchall()
@@ -396,7 +414,7 @@ async def get_oi_history(
     q, params = _build_query_with_since(
         "SELECT * FROM open_interest", since, symbol, "ORDER BY ts ASC", limit
     )
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(q, params) as cur:
             rows = await cur.fetchall()
@@ -412,7 +430,7 @@ async def get_funding_history(
     q, params = _build_query_with_since(
         "SELECT * FROM funding_rate", since, symbol, "ORDER BY ts ASC", limit
     )
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(q, params) as cur:
             rows = await cur.fetchall()
@@ -428,7 +446,7 @@ async def get_recent_liquidations(
     q, params = _build_query_with_since(
         "SELECT * FROM liquidations", since, symbol, "ORDER BY ts DESC", limit
     )
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(q, params) as cur:
             rows = await cur.fetchall()
@@ -450,7 +468,7 @@ async def get_trades_for_volume_profile(since: float, symbol: str = None, tick_s
     if tick_size is None:
         # Auto-detect: get avg price to pick tick size
         range_q = f"SELECT AVG(price) as avg_price FROM trades WHERE ts > ?{sym_filter}"
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with open_db() as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(range_q, params) as cur:
                 row = await cur.fetchone()
@@ -478,7 +496,7 @@ async def get_trades_for_volume_profile(since: float, symbol: str = None, tick_s
     if symbol:
         tick_params.append(symbol)
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(q, tick_params) as cur:
             rows = await cur.fetchall()
@@ -504,7 +522,7 @@ async def get_orderbook_history(
         q += " WHERE " + " AND ".join(where)
     q += " ORDER BY ts DESC LIMIT ?"
     params.append(limit)
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(q, params) as cur:
             rows = await cur.fetchall()
@@ -549,7 +567,7 @@ async def get_ohlcv(
     if symbol:
         full_params.append(symbol)
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         # We need open/close as first/last prices — get them in a separate pass
         async with db.execute(q, full_params) as cur:
@@ -575,7 +593,7 @@ async def get_ohlcv(
         oc_params: list = [interval, interval, interval, interval, since]
         if symbol:
             oc_params.append(symbol)
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with open_db() as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(q2, oc_params) as cur:
                 oc_rows = await cur.fetchall()
@@ -617,7 +635,7 @@ async def get_trades_for_cvd(since: float, symbol: str = None) -> List[Dict]:
         q += " AND symbol = ?"
         params.append(symbol)
     q += " ORDER BY ts ASC"
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(q, params) as cur:
             rows = await cur.fetchall()
@@ -628,7 +646,7 @@ async def get_orderbook_depth_history(
     symbol: str, since: float, limit: int = 2000
 ) -> List[Dict]:
     """Get orderbook snapshots with bid_volume and ask_volume for recovery analysis."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         q = """
             SELECT ts, bid_volume, ask_volume, mid_price
@@ -646,7 +664,7 @@ async def get_orderbook_snapshots_for_heatmap(
     symbol: str, since: float, sample_interval: int = 10
 ) -> List[Dict]:
     """Get orderbook snapshots sampled every sample_interval seconds for heatmap."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         q = """
             SELECT ts, bids, asks, mid_price
@@ -676,7 +694,7 @@ async def insert_alert(symbol: str, alert_type: str, severity: str, description:
     """Persist a fired alert to history."""
     import json
     ts = time.time()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         await db.execute("""
             INSERT INTO alert_history (ts, symbol, alert_type, severity, description, data)
             VALUES (?,?,?,?,?,?)
@@ -702,7 +720,7 @@ async def get_alert_history(
         params.append(alert_type)
     q += " ORDER BY ts DESC LIMIT ?"
     params.append(limit)
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(q, params) as cur:
             rows = await cur.fetchall()
@@ -713,7 +731,7 @@ async def insert_pattern(symbol: str, pattern_type: str, confidence: float, sign
     """Persist a detected market pattern to history."""
     import json
     ts = time.time()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS pattern_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -752,7 +770,7 @@ async def get_pattern_history(
     q += " ORDER BY ts DESC LIMIT ?"
     params.append(limit)
     # Ensure table exists
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS pattern_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -780,7 +798,7 @@ async def get_pattern_history(
 
 async def cleanup_old_data(max_age_seconds: int = 86400 * 7):
     cutoff = time.time() - max_age_seconds
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         for table in ["trades", "open_interest", "funding_rate", "liquidations"]:
             await db.execute(f"DELETE FROM {table} WHERE ts < ?", (cutoff,))
         # Keep orderbook only last 30 minutes (enough for heatmap)
@@ -798,7 +816,7 @@ async def cleanup_old_data(max_age_seconds: int = 86400 * 7):
 
 async def insert_whale_trade(symbol: str, price: float, qty: float, side: str, value_usd: float, exchange: str = "binance"):
     """Log a whale trade (value > threshold) to persistent storage."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         await db.execute(
             "INSERT INTO whale_trades (ts, symbol, price, qty, side, value_usd, exchange) VALUES (?,?,?,?,?,?,?)",
             (time.time(), symbol, price, qty, side, value_usd, exchange)
@@ -818,7 +836,7 @@ async def get_whale_trades(limit: int = 100, since: float = None, symbol: str = 
         params.append(symbol)
     q += " ORDER BY ts DESC LIMIT ?"
     params.append(limit)
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(q, params) as cur:
             rows = await cur.fetchall()
@@ -827,7 +845,7 @@ async def get_whale_trades(limit: int = 100, since: float = None, symbol: str = 
 
 async def insert_phase_snapshot(symbol: str, phase: str, confidence: float, signals: dict, composite_score: float = None):
     """Store a periodic market phase snapshot for historical replay."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         await db.execute(
             """CREATE TABLE IF NOT EXISTS phase_snapshots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -854,7 +872,7 @@ async def get_phase_snapshots(
     limit: int = 200,
 ) -> list:
     """Fetch phase snapshots for historical replay."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         # Ensure table exists
         await db.execute(
             """CREATE TABLE IF NOT EXISTS phase_snapshots (
@@ -904,7 +922,7 @@ async def get_data_freshness() -> Dict:
         "liquidations": "liquidations",
     }
     result = {}
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         for key, table in tables.items():
             try:

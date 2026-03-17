@@ -7,6 +7,23 @@ import time
 from typing import Optional, Set
 import aiosqlite
 
+from contextlib import asynccontextmanager as _acm
+
+@_acm
+async def _open_db(path=None):
+    """Open SQLite with WAL + busy_timeout to avoid locking errors."""
+    import storage as _storage
+    p = path or _storage.DB_PATH
+    import os
+    os.makedirs(os.path.dirname(p) or '.', exist_ok=True)
+    async with aiosqlite.connect(p) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute("PRAGMA synchronous=NORMAL")
+        await db.execute("PRAGMA busy_timeout=5000")
+        yield db
+
+
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
@@ -239,7 +256,7 @@ async def stats_summary():
 
     since_24h = time.time() - 86400
     result = {}
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _open_db() as db:
         db.row_factory = aiosqlite.Row
         # Trades aggregates
         async with db.execute(
@@ -1883,7 +1900,7 @@ async def trade_count_rate(
     # fetch raw trades
     db_path = storage.DB_PATH
     q = "SELECT ts FROM trades WHERE ts > ? AND symbol = ? ORDER BY ts ASC"
-    async with aiosqlite.connect(db_path) as db:
+    async with _open_db(db_path) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(q, (since, target)) as cur:
             rows = await cur.fetchall()
@@ -1939,7 +1956,7 @@ async def tape_speed_endpoint(
     target = symbol or get_symbols()[0]
     since = time.time() - window
 
-    async with aiosqlite.connect(storage.DB_PATH) as db:
+    async with _open_db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT ts FROM trades WHERE ts > ? AND symbol = ? ORDER BY ts ASC",
@@ -1973,7 +1990,7 @@ async def spread_history(
            FROM orderbook_snapshots
            WHERE ts > ? AND symbol = ? AND exchange = ?
            ORDER BY ts ASC"""
-    async with aiosqlite.connect(db_path) as db:
+    async with _open_db(db_path) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(q, (since, target, exchange)) as cur:
             rows = await cur.fetchall()
@@ -1984,7 +2001,7 @@ async def spread_history(
                 FROM orderbook_snapshots
                 WHERE ts > ? AND symbol = ?
                 ORDER BY ts ASC"""
-        async with aiosqlite.connect(db_path) as db:
+        async with _open_db(db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(q2, (since, target)) as cur:
                 rows = await cur.fetchall()
