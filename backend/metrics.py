@@ -9791,14 +9791,44 @@ async def compute_cross_market_correlation() -> dict:
     }
 
 
+def _vpin_toxicity_level(score: float) -> str:
+    """Classify VPIN score into toxicity level."""
+    if score < 0.25:
+        return "low"
+    elif score < 0.50:
+        return "medium"
+    elif score < 0.75:
+        return "high"
+    return "extreme"
+
+
+def _vpin_bucket_class(vpin_window: float) -> str:
+    """Classify per-bucket toxicity class from windowed VPIN."""
+    if vpin_window < 0.20:
+        return "low"
+    elif vpin_window < 0.40:
+        return "medium"
+    elif vpin_window < 0.65:
+        return "high"
+    return "extreme"
+
+
 async def compute_order_flow_toxicity() -> Dict:
     """
-    VPIN: Volume-Synchronized Probability of Informed Trading.
+    Enhanced VPIN: Volume-Synchronized Probability of Informed Trading.
 
     Partitions volume into equal-sized buckets and estimates the fraction of
     informed trading using buy/sell volume imbalance per bucket.
 
     VPIN = (1/n) * sum(|V_buy_i - V_sell_i|) / V_bucket
+
+    Enhanced with:
+    - toxicity_percentile: rank 0–100 against historical distribution
+    - toxicity_alert: True when percentile > 80
+    - alert_threshold: fixed at 80
+    - bucket_classifications: per-bucket toxicity class
+    - symbol_comparison: top-10 symbols ranked by VPIN
+    - vpin_history: last 20 VPIN values for trend
     """
     import random
     from datetime import datetime, timezone
@@ -9808,6 +9838,7 @@ async def compute_order_flow_toxicity() -> Dict:
     # ── Parameters ────────────────────────────────────────────────────────────
     N_BUCKETS = 50
     BUCKET_VOLUME = 1000.0  # each bucket has ~1000 units of volume
+    ALERT_THRESHOLD = 80.0  # alert when percentile > 80
 
     # ── Generate synthetic volume buckets ────────────────────────────────────
     volume_buckets: List[Dict] = []
@@ -9860,14 +9891,7 @@ async def compute_order_flow_toxicity() -> Dict:
     sell_volume_frac = round(total_sell_vol / total_vol, 6)
 
     # ── Toxicity level classification ─────────────────────────────────────────
-    if vpin_score < 0.25:
-        toxicity_level = "low"
-    elif vpin_score < 0.50:
-        toxicity_level = "medium"
-    elif vpin_score < 0.75:
-        toxicity_level = "high"
-    else:
-        toxicity_level = "extreme"
+    toxicity_level = _vpin_toxicity_level(vpin_score)
 
     # ── Informed trading signal ───────────────────────────────────────────────
     if vpin_score >= 0.50:
@@ -9876,6 +9900,72 @@ async def compute_order_flow_toxicity() -> Dict:
         informed_trading_signal = "low_toxicity"
     else:
         informed_trading_signal = "neutral"
+
+    # ── Toxicity percentile rank (0–100) ─────────────────────────────────────
+    # Simulate a historical distribution of 200 VPIN values for percentile rank
+    hist_rng = random.Random(20260321)
+    historical_vpins = sorted(
+        round(max(0.0, min(1.0, hist_rng.gauss(0.35, 0.15))), 6)
+        for _ in range(200)
+    )
+    # Count how many historical values are <= current vpin_score
+    n_below = sum(1 for v in historical_vpins if v <= vpin_score)
+    toxicity_percentile = round(n_below / len(historical_vpins) * 100, 2)
+
+    # ── Alert flag ────────────────────────────────────────────────────────────
+    toxicity_alert = toxicity_percentile > ALERT_THRESHOLD
+
+    # ── Per-bucket toxicity classifications ────────────────────────────────────
+    bucket_classifications: List[Dict] = []
+    for i, b in enumerate(volume_buckets):
+        wvpin = rolling_vpin_50[i]
+        bucket_classifications.append(
+            {
+                "bucket_id": i,
+                "vpin_window": wvpin,
+                "toxicity_class": _vpin_bucket_class(wvpin),
+            }
+        )
+
+    # ── Top-10 symbol comparison ──────────────────────────────────────────────
+    symbols = [
+        "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
+        "ADAUSDT", "AVAXUSDT", "DOTUSDT", "MATICUSDT", "LINKUSDT",
+    ]
+    sym_rng = random.Random(20260321)
+    sym_vpins = []
+    for sym in symbols:
+        sv = round(max(0.0, min(1.0, sym_rng.gauss(0.35, 0.15))), 6)
+        n_below_sym = sum(1 for v in historical_vpins if v <= sv)
+        sym_pct = round(n_below_sym / len(historical_vpins) * 100, 2)
+        sym_vpins.append(
+            {
+                "symbol": sym,
+                "vpin_score": sv,
+                "toxicity_level": _vpin_toxicity_level(sv),
+                "toxicity_percentile": sym_pct,
+            }
+        )
+    # rank by vpin_score descending (1 = highest toxicity)
+    sym_vpins.sort(key=lambda x: x["vpin_score"], reverse=True)
+    symbol_comparison = []
+    for rank, s in enumerate(sym_vpins, start=1):
+        symbol_comparison.append({**s, "rank": rank})
+
+    # ── VPIN history (100 rolling values, expand by simulating 50 more buckets) ─
+    # Generate 50 additional historical buckets with the same seed offset
+    hist_bucket_rng = random.Random(20260322)
+    extra_vpin: List[float] = []
+    prev_buckets = []
+    for i in range(50):
+        bf = hist_bucket_rng.gauss(0.52, 0.12)
+        bf = max(0.05, min(0.95, bf))
+        imb = round(abs(bf - (1.0 - bf)), 6)
+        prev_buckets.append(imb)
+        start = max(0, len(prev_buckets) - window)
+        wv = round(sum(prev_buckets[start:]) / len(prev_buckets[start:]), 6)
+        extra_vpin.append(wv)
+    vpin_history = extra_vpin + rolling_vpin_50  # 50 + 50 = 100
 
     return {
         "vpin_score": vpin_score,
@@ -9886,6 +9976,12 @@ async def compute_order_flow_toxicity() -> Dict:
         "informed_trading_signal": informed_trading_signal,
         "rolling_vpin_50": rolling_vpin_50,
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "toxicity_percentile": toxicity_percentile,
+        "toxicity_alert": toxicity_alert,
+        "alert_threshold": ALERT_THRESHOLD,
+        "bucket_classifications": bucket_classifications,
+        "symbol_comparison": symbol_comparison,
+        "vpin_history": vpin_history,
     }
 
 
