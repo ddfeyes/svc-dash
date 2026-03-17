@@ -9,13 +9,16 @@ import aiosqlite
 
 from contextlib import asynccontextmanager as _acm
 
+
 @_acm
 async def _open_db(path=None):
     """Open SQLite with WAL + busy_timeout to avoid locking errors."""
     import storage as _storage
+
     p = path or _storage.DB_PATH
     import os
-    os.makedirs(os.path.dirname(p) or '.', exist_ok=True)
+
+    os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
     async with aiosqlite.connect(p) as db:
         db.row_factory = aiosqlite.Row
         await db.execute("PRAGMA journal_mode=WAL")
@@ -119,7 +122,6 @@ from metrics import (
 )
 from whale_flow import compute_whale_flow
 from gamma_exposure import compute_gamma_exposure
-
 
 router = APIRouter(prefix="/api")
 
@@ -5429,6 +5431,7 @@ async def leverage_ratio_heatmap_endpoint(symbol: Optional[str] = None):
         symbol: trading pair (default: BTCUSDT)
     """
     from leverage_heatmap import compute_leverage_ratio_heatmap
+
     data = compute_leverage_ratio_heatmap(symbol)
     return JSONResponse(data)
 
@@ -5565,6 +5568,7 @@ async def gamma_exposure_endpoint(symbol: Optional[str] = None):
         symbol: trading pair (default: BTCUSDT)
     """
     from gamma_exposure import compute_gamma_exposure
+
     target = symbol or "BTCUSDT"
     data = compute_gamma_exposure(target)
     return JSONResponse(data)
@@ -5581,6 +5585,7 @@ async def funding_arb_scanner_endpoint():
     Data is seeded-mock (deterministic, no live API). Cache TTL: 60s.
     """
     from funding_arb_scanner import compute_funding_arb_scanner
+
     data = compute_funding_arb_scanner()
     return JSONResponse(data)
 
@@ -5598,6 +5603,7 @@ async def whale_flow_endpoint(symbol: Optional[str] = None):
         symbol: trading pair (default: BTCUSDT)
     """
     from whale_flow import compute_whale_flow
+
     data = compute_whale_flow(symbol)
     return JSONResponse(data)
 

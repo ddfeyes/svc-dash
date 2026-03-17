@@ -3,6 +3,7 @@ TDD tests for Support/Resistance Levels card (Wave 24, Issue #125).
 Tests cover: level sorting, type detection, near level, empty levels,
 badge logic, price formatting, distance calculation, multiple symbols.
 """
+
 import os
 import sys
 import tempfile
@@ -18,6 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 
 # ── Inline helpers matching api.py logic ─────────────────────────────────────
+
 
 def find_peaks(series, is_max: bool):
     peaks = []
@@ -68,18 +70,43 @@ def make_candles(prices):
 def make_candles_with_peaks():
     """Candles with clear local maxima and minima."""
     prices = [
-        100, 101, 105, 101, 100,   # peak at 105
-        99,  95,  99, 100,  99,    # trough at 95
-        100, 102, 108, 102, 100,   # peak at 108
-        99,  93,  99, 100,  99,    # trough at 93
-        100, 101, 100, 99,  100,
+        100,
+        101,
+        105,
+        101,
+        100,  # peak at 105
+        99,
+        95,
+        99,
+        100,
+        99,  # trough at 95
+        100,
+        102,
+        108,
+        102,
+        100,  # peak at 108
+        99,
+        93,
+        99,
+        100,
+        99,  # trough at 93
+        100,
+        101,
+        100,
+        99,
+        100,
     ]
     result = []
     for p in prices:
-        result.append({
-            "open": p, "high": p * 1.001, "low": p * 0.999,
-            "close": p, "volume": 100.0
-        })
+        result.append(
+            {
+                "open": p,
+                "high": p * 1.001,
+                "low": p * 0.999,
+                "close": p,
+                "volume": 100.0,
+            }
+        )
     # Make peaks visible in highs and troughs visible in lows
     # index 2 = 105 high, index 7 = 95 low, index 12 = 108 high, index 17 = 93 low
     result[2]["high"] = 105
@@ -90,6 +117,7 @@ def make_candles_with_peaks():
 
 
 # ── 1. Level sorting by abs(distance_pct) ────────────────────────────────────
+
 
 def test_levels_sorted_by_abs_distance():
     """Levels must be sorted by abs(distance_pct) ascending."""
@@ -115,6 +143,7 @@ def test_nearest_level_is_first_after_sort():
 
 
 # ── 2. Type detection (support vs resistance) ─────────────────────────────────
+
 
 def test_resistance_type_above_price():
     """Price above current → resistance."""
@@ -150,6 +179,7 @@ def test_find_peaks_detects_minima():
 
 # ── 3. Near level detection (abs distance < 0.5%) ────────────────────────────
 
+
 def test_near_level_threshold():
     """Levels within 0.5% of current price are 'near'."""
     current = 100.0
@@ -171,6 +201,7 @@ def test_near_level_boundary_not_included():
 
 # ── 4. Empty levels ───────────────────────────────────────────────────────────
 
+
 def test_cluster_empty_input():
     assert cluster([]) == []
 
@@ -190,6 +221,7 @@ def test_cluster_single_value():
 
 
 # ── 5. Badge logic: nearest level determines badge ────────────────────────────
+
 
 def test_badge_shows_support_when_nearest_is_support():
     levels = [
@@ -216,6 +248,7 @@ def test_badge_hidden_when_no_levels():
 
 
 # ── 6. Price formatting ───────────────────────────────────────────────────────
+
 
 def test_fmt_price_small_uses_8_decimals():
     """Prices < 0.01 use toFixed(8) equivalent."""
@@ -252,6 +285,7 @@ def test_fmt_price_bananas_example():
 
 # ── 7. Distance calculation ───────────────────────────────────────────────────
 
+
 def test_distance_pct_positive_for_resistance():
     current = 0.010093
     level_price = 0.01013567
@@ -282,6 +316,7 @@ def test_distance_pct_rounding():
 
 
 # ── 8. Multiple symbols ───────────────────────────────────────────────────────
+
 
 def test_cluster_groups_nearby_levels():
     """Levels within sensitivity are merged into one cluster."""
@@ -316,25 +351,31 @@ def test_response_has_required_fields():
 
 def test_levels_capped_at_20():
     """API returns at most 20 levels (top-20 closest)."""
-    levels = [{"price": i, "type": "resistance", "distance_pct": float(i), "touches": 1}
-              for i in range(1, 30)]
+    levels = [
+        {"price": i, "type": "resistance", "distance_pct": float(i), "touches": 1}
+        for i in range(1, 30)
+    ]
     capped = levels[:20]
     assert len(capped) == 20
 
 
 # ── 9. Route registration smoke test ─────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_support_resistance_route_registered():
     """support-resistance endpoint must be registered on the API router."""
     from storage import init_db
+
     await init_db()
     from api import router
+
     paths = [r.path for r in router.routes]
     assert any("support-resistance" in p for p in paths)
 
 
 # ── 10. HTML / JS smoke tests ─────────────────────────────────────────────────
+
 
 def _read(rel_path):
     base = os.path.join(os.path.dirname(__file__), "..", "..")
