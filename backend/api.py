@@ -133,6 +133,7 @@ from metrics import (
     compute_on_chain_active_addresses,
     compute_liquidation_cascade_risk,
     compute_volatility_regime_forecast,
+    compute_stablecoin_dominance_signal,
 )
 from whale_flow import compute_whale_flow
 from gamma_exposure import compute_gamma_exposure
@@ -5916,3 +5917,9 @@ async def liquidation_cascade_risk_endpoint():
 async def volatility_regime_forecast_endpoint():
     """Forward-looking volatility regime prediction: realized vol, IV, regime history, forecast."""
     return JSONResponse(await compute_volatility_regime_forecast())
+
+
+@router.get("/stablecoin-dominance-signal")
+async def stablecoin_dominance_signal_endpoint():
+    """Stablecoin dominance signal: supply as risk-off/risk-on indicator."""
+    return JSONResponse(await compute_stablecoin_dominance_signal())

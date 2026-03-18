@@ -2614,6 +2614,8 @@ async function refresh() {
     await Promise.all([safe(fetchOnChainActiveAddresses)]);
     // Batch 45: volatility regime forecast (Wave 26)
     await Promise.all([safe(fetchVolatilityRegimeForecast)]);
+    // Batch 45b: stablecoin dominance signal (Wave 26)
+    await Promise.all([safe(fetchStablecoinDominanceSignal)]);
   } finally {
     _refreshRunning = false;
   }
@@ -6043,6 +6045,123 @@ function renderVolatilityRegimeForecast(data) {
       <span>compression: <b>${vcr.toFixed(2)}</b></span>
     </div>
     <div style="font-size:10px;color:var(--muted)">30d: ${histSquares}</div>`;
+}
+
+// ── Stablecoin Dominance Signal ───────────────────────────────────────────────
+async function fetchStablecoinDominanceSignal() {
+  try {
+    const res = await fetch('/api/stablecoin-dominance-signal');
+    const data = await res.json();
+    renderStablecoinDominanceSignal(data);
+  } catch (e) {
+    const el = document.getElementById('stablecoin-dominance-signal-content');
+    if (el) el.textContent = 'Error loading stablecoin dominance signal.';
+  }
+}
+
+function renderStablecoinDominanceSignal(data) {
+  const el    = document.getElementById('stablecoin-dominance-signal-content');
+  const badge = document.getElementById('stablecoin-dominance-signal-badge');
+  if (!el) return;
+
+  const dominancePct   = data.stablecoin_dominance_pct ?? 0;
+  const trend          = data.dominance_trend || 'stable';
+  const totalSupply    = data.total_stablecoin_supply_usd ?? 0;
+  const growth7d       = data.supply_growth_7d ?? 0;
+  const growth30d      = data.supply_growth_30d ?? 0;
+  const signal         = data.signal || 'neutral';
+  const signalStrength = data.signal_strength ?? 0;
+  const breakdown      = data.breakdown || {};
+  const historical     = data.historical_dominance || [];
+
+  // Color coding
+  const sigCls = signal === 'risk-on'  ? 'badge-green'
+               : signal === 'risk-off' ? 'badge-red'
+               : 'badge-blue';
+
+  const trendColor = trend === 'decreasing' ? 'var(--bull, #26a69a)'
+                   : trend === 'increasing' ? 'var(--bear, #ef5350)'
+                   : 'var(--muted)';
+
+  const growthColor = (v) => v >= 0 ? 'var(--bull, #26a69a)' : 'var(--bear, #ef5350)';
+  const fmt = (v) => (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+
+  const supplyBn = (totalSupply / 1e9).toFixed(1);
+
+  // Dominance gauge bar (0-20% maps to 0-100% of bar)
+  const gaugeWidth = Math.min(100, (dominancePct / 20) * 100).toFixed(1);
+  const gaugeColor = signal === 'risk-on'  ? 'var(--bull, #26a69a)'
+                   : signal === 'risk-off' ? 'var(--bear, #ef5350)'
+                   : 'var(--warn, #f0a500)';
+
+  // Breakdown pie as horizontal bar
+  const bdRows = Object.entries(breakdown).map(([k, v]) => {
+    const pct = (v * 100).toFixed(1);
+    const color = k === 'USDT' ? '#26a69a'
+                : k === 'USDC' ? '#2196f3'
+                : k === 'DAI'  ? '#f0a500'
+                : 'var(--muted)';
+    return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">
+      <span style="width:36px;color:var(--muted);font-size:10px">${k}</span>
+      <div style="flex:1;background:var(--bg2,#1a1a2e);border-radius:2px;height:8px;overflow:hidden">
+        <div style="width:${pct}%;height:100%;background:${color};border-radius:2px"></div>
+      </div>
+      <span style="width:38px;text-align:right;color:${color}">${pct}%</span>
+    </div>`;
+  }).join('');
+
+  // Mini sparkline from historical data (last 14 entries)
+  const hist14 = historical.slice(-14);
+  let sparkHtml = '';
+  if (hist14.length > 1) {
+    const minPct = Math.min(...hist14.map(h => h.pct));
+    const maxPct = Math.max(...hist14.map(h => h.pct));
+    const range  = maxPct - minPct || 0.01;
+    const W = 120, H = 28;
+    const pts = hist14.map((h, i) => {
+      const x = (i / (hist14.length - 1)) * W;
+      const y = H - ((h.pct - minPct) / range) * H;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+    sparkHtml = `<svg width="${W}" height="${H}" style="display:block;overflow:visible">
+      <polyline points="${pts}" fill="none" stroke="${gaugeColor}" stroke-width="1.5"/>
+    </svg>`;
+  }
+
+  el.innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:22px;font-weight:700;color:${gaugeColor}">${dominancePct.toFixed(2)}%</div>
+          <div style="font-size:10px;color:var(--muted)">stablecoin dominance</div>
+        </div>
+        <div style="flex:1;min-width:80px">
+          <div style="font-size:10px;color:var(--muted);margin-bottom:3px">dominance gauge (0–20%)</div>
+          <div style="background:var(--bg2,#1a1a2e);border-radius:3px;height:10px;overflow:hidden">
+            <div style="width:${gaugeWidth}%;height:100%;background:${gaugeColor};border-radius:3px;transition:width 0.4s"></div>
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:11px">
+        <span>trend: <b style="color:${trendColor}">${trend}</b></span>
+        <span>signal: <b style="color:${gaugeColor}">${signal}</b> <span style="color:var(--muted)">(${(signalStrength * 100).toFixed(0)}%)</span></span>
+        <span>supply: <b>$${supplyBn}B</b></span>
+        <span>7d: <b style="color:${growthColor(growth7d)}">${fmt(growth7d)}</b></span>
+        <span>30d: <b style="color:${growthColor(growth30d)}">${fmt(growth30d)}</b></span>
+      </div>
+      <div style="font-size:10px;color:var(--muted);margin-bottom:2px">breakdown</div>
+      ${bdRows}
+      <div style="display:flex;align-items:center;gap:8px;margin-top:2px">
+        <span style="font-size:10px;color:var(--muted)">14d history</span>
+        ${sparkHtml}
+      </div>
+    </div>`;
+
+  if (badge) {
+    badge.textContent = signal.toUpperCase();
+    badge.className   = `card-badge ${sigCls}`;
+    badge.style.display = '';
+  }
 }
 
 // ── Bootstrap on Load ──────────────────────────────────────────────────────────
