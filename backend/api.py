@@ -131,6 +131,7 @@ from metrics import (
     compute_derivatives_term_structure,
     compute_perpetual_funding_heatmap,
     compute_on_chain_active_addresses,
+    compute_liquidation_cascade_risk,
 )
 from whale_flow import compute_whale_flow
 from gamma_exposure import compute_gamma_exposure
@@ -5902,3 +5903,9 @@ async def perpetual_funding_heatmap_endpoint():
 async def on_chain_active_addresses_endpoint():
     """On-chain active addresses: daily active, growth rate, price correlation, sparkline."""
     return JSONResponse(await compute_on_chain_active_addresses())
+
+
+@router.get("/liquidation-cascade-risk")
+async def liquidation_cascade_risk_endpoint():
+    """Liquidation cascade risk score and trigger zones."""
+    return JSONResponse(await compute_liquidation_cascade_risk())

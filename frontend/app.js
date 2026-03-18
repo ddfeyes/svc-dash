@@ -2608,6 +2608,8 @@ async function refresh() {
     await Promise.all([safe(renderDerivativesTermStructure)]);
     // Batch 43: perpetual funding heatmap (Wave 26)
     await Promise.all([safe(fetchPerpetualFundingHeatmap)]);
+    // Batch 43b: liquidation cascade risk (Wave 26)
+    await Promise.all([safe(fetchLiquidationCascadeRisk)]);
     // Batch 44: on-chain active addresses (Wave 26, Issue 156)
     await Promise.all([safe(fetchOnChainActiveAddresses)]);
   } finally {
@@ -5798,80 +5800,65 @@ async function renderDerivativesTermStructure() {
     <div style="font-size:10px">${tenorRows}</div>`;
 }
 
-// ── Perpetual Funding Heatmap ─────────────────────────────────────────────────
-async function fetchPerpetualFundingHeatmap() {
+// ── Liquidation Cascade Risk ──────────────────────────────────────────────────
+async function fetchLiquidationCascadeRisk() {
   try {
-    const res = await fetch('/api/perpetual-funding-heatmap');
+    const res = await fetch('/api/liquidation-cascade-risk');
     const data = await res.json();
-    renderPerpetualFundingHeatmap(data);
+    renderLiquidationCascadeRisk(data);
   } catch (e) {
-    const el = document.getElementById('perpetual-funding-heatmap-content');
-    if (el) el.textContent = 'Error loading perpetual funding heatmap.';
+    const el = document.getElementById('liquidation-cascade-risk-content');
+    if (el) el.textContent = 'Error loading liquidation cascade risk.';
   }
 }
 
-function renderPerpetualFundingHeatmap(data) {
-  const el    = document.getElementById('perpetual-funding-heatmap-content');
-  const badge = document.getElementById('perpetual-funding-heatmap-badge');
+function renderLiquidationCascadeRisk(data) {
+  const el    = document.getElementById('liquidation-cascade-risk-content');
+  const badge = document.getElementById('liquidation-cascade-risk-badge');
   if (!el) return;
 
-  const symbols   = data.symbols   || [];
-  const exchanges = data.exchanges || [];
-  const matrix    = data.matrix    || [];
-  const extremes  = data.funding_extremes || {};
-  const arbs      = data.arbitrage_opportunities || [];
-  const avgRates  = data.avg_rates || {};
+  const score    = data.cascade_risk_score ?? 0;
+  const level    = (data.risk_level || 'low').toLowerCase();
+  const dist     = data.cascade_threshold_distance_pct ?? 0;
+  const amp      = data.sentiment_amplifier ?? 1;
+  const lc       = data.leverage_concentration || {};
+  const zones    = data.trigger_zones || [];
+  const cascades = data.historical_cascades || [];
 
-  // Color coding: green = low/negative, red = high positive funding
-  const rateColor = (r) => {
-    if (r <= 0)    return 'var(--bull, #26a69a)';
-    if (r < 0.03)  return 'var(--muted)';
-    if (r < 0.06)  return 'var(--warn, #f0a500)';
-    return 'var(--bear, #ef5350)';
-  };
-
-  // Build matrix table header
-  let tableHtml = `<table style="border-collapse:collapse;font-size:10px;width:100%;margin-bottom:6px">`;
-  tableHtml += `<thead><tr><th style="text-align:left;padding:2px 6px;color:var(--muted)">Symbol</th>`;
-  for (const exc of exchanges) {
-    tableHtml += `<th style="text-align:right;padding:2px 6px;color:var(--muted)">${exc}</th>`;
-  }
-  tableHtml += `<th style="text-align:right;padding:2px 6px;color:var(--muted)">avg</th></tr></thead><tbody>`;
-
-  for (const row of matrix) {
-    tableHtml += `<tr><td style="padding:2px 6px;color:var(--muted)">${row.symbol}</td>`;
-    for (const exc of exchanges) {
-      const r = row[exc] ?? 0;
-      tableHtml += `<td style="text-align:right;padding:2px 6px;color:${rateColor(r)}">${r >= 0 ? '+' : ''}${(r * 100).toFixed(4)}%</td>`;
-    }
-    const avg = avgRates[row.symbol] ?? 0;
-    tableHtml += `<td style="text-align:right;padding:2px 6px;color:${rateColor(avg)}">${avg >= 0 ? '+' : ''}${(avg * 100).toFixed(4)}%</td>`;
-    tableHtml += `</tr>`;
-  }
-  tableHtml += `</tbody></table>`;
-
-  // Extremes row
-  const extremesHtml = `<div style="font-size:10px;color:var(--muted);margin-bottom:4px;display:flex;gap:10px;flex-wrap:wrap">
-    <span>max: <b style="color:var(--bear)">${extremes.max_symbol}/${extremes.max_exchange} ${extremes.max_rate >= 0 ? '+' : ''}${((extremes.max_rate||0)*100).toFixed(4)}%</b></span>
-    <span>min: <b style="color:var(--bull)">${extremes.min_symbol}/${extremes.min_exchange} ${extremes.min_rate >= 0 ? '+' : ''}${((extremes.min_rate||0)*100).toFixed(4)}%</b></span>
-  </div>`;
-
-  // Arbitrage opportunities
-  let arbHtml = '';
-  if (arbs.length > 0) {
-    const arbItems = arbs.slice(0, 5).map(a =>
-      `<span style="color:var(--warn)">${a.symbol}: long ${a.long_exchange} / short ${a.short_exchange} (${a.rate_diff_bps.toFixed(1)} bps)</span>`
-    ).join(' &nbsp;·&nbsp; ');
-    arbHtml = `<div style="font-size:10px;color:var(--muted);margin-top:2px">arb: ${arbItems}</div>`;
-  }
+  const levelCols = { low: 'var(--green)', moderate: 'var(--warn, #f0a500)', elevated: 'var(--orange, #e07800)', critical: 'var(--red)' };
+  const scoreCol  = score >= 75 ? 'var(--red)' : score >= 50 ? 'var(--orange, #e07800)' : score >= 25 ? 'var(--warn, #f0a500)' : 'var(--green)';
+  const levelCol  = levelCols[level] || 'var(--muted)';
 
   if (badge) {
-    badge.textContent = arbs.length > 0 ? `${arbs.length} ARB` : 'NO ARB';
-    badge.className = `card-badge ${arbs.length > 0 ? 'badge-yellow' : 'badge-blue'}`;
+    badge.textContent = level.toUpperCase();
+    badge.className   = `card-badge ${level === 'critical' ? 'badge-red' : level === 'elevated' ? 'badge-red' : level === 'moderate' ? 'badge-yellow' : 'badge-green'}`;
     badge.style.display = '';
   }
 
-  el.innerHTML = tableHtml + extremesHtml + arbHtml;
+  const zoneRows = zones.slice(0, 3).map(z => {
+    const col = z.direction === 'long' ? 'var(--green)' : 'var(--red)';
+    return `<span style="margin-right:8px">$${z.price_level.toLocaleString()} <b style="color:${col}">${z.direction}</b> $${(z.estimated_liquidations_usd/1e6).toFixed(1)}M</span>`;
+  }).join('');
+
+  const lastCascades = cascades.slice(0, 3).map(c =>
+    `<span style="margin-right:8px">${c.date}: <b style="color:var(--red)">-${c.drop_pct}%</b> ($${(c.liquidated_usd/1e9).toFixed(2)}B)</span>`
+  ).join('');
+
+  el.innerHTML = `
+    <div style="font-size:10px;color:var(--muted);margin-bottom:4px;display:flex;gap:10px;flex-wrap:wrap">
+      <span>score: <b style="color:${scoreCol}">${score.toFixed(1)}/100</b></span>
+      <span>risk: <b style="color:${levelCol}">${level}</b></span>
+      <span>distance: <b>${dist.toFixed(2)}%</b></span>
+      <span>sentiment amp: <b>${amp.toFixed(2)}x</b></span>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-bottom:4px;display:flex;gap:10px;flex-wrap:wrap">
+      <span>2x: <b>${((lc['2x']||0)*100).toFixed(1)}%</b></span>
+      <span>5x: <b>${((lc['5x']||0)*100).toFixed(1)}%</b></span>
+      <span>10x: <b>${((lc['10x']||0)*100).toFixed(1)}%</b></span>
+      <span>20x+: <b>${((lc['20x+']||0)*100).toFixed(1)}%</b></span>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-bottom:2px">trigger zones: ${zoneRows || '—'}</div>
+    <div style="font-size:10px;color:var(--muted)">recent cascades: ${lastCascades || '—'}</div>`;
 }
 
 // ── On-Chain Active Addresses ─────────────────────────────────────────────────
