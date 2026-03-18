@@ -2612,6 +2612,8 @@ async function refresh() {
     await Promise.all([safe(fetchLiquidationCascadeRisk)]);
     // Batch 44: on-chain active addresses (Wave 26, Issue 156)
     await Promise.all([safe(fetchOnChainActiveAddresses)]);
+    // Batch 45: volatility regime forecast (Wave 26)
+    await Promise.all([safe(fetchVolatilityRegimeForecast)]);
   } finally {
     _refreshRunning = false;
   }
@@ -5939,6 +5941,107 @@ function renderOnChainActiveAddresses(data) {
   }
 
   el.innerHTML = statsHtml;
+
+// ── Volatility Regime Forecast ────────────────────────────────────────────────
+async function fetchVolatilityRegimeForecast() {
+  try {
+    const res = await fetch('/api/volatility-regime-forecast');
+    const data = await res.json();
+    renderVolatilityRegimeForecast(data);
+  } catch (e) {
+    const el = document.getElementById('volatility-regime-forecast-content');
+    if (el) el.textContent = 'Error loading volatility regime forecast.';
+  }
+}
+
+function renderVolatilityRegimeForecast(data) {
+  const el    = document.getElementById('volatility-regime-forecast-content');
+  const badge = document.getElementById('volatility-regime-forecast-badge');
+  if (!el) return;
+
+  const curRegime  = data.current_regime      || 'unknown';
+  const fc7d       = data.forecast_regime_7d  || 'unknown';
+  const fc30d      = data.forecast_regime_30d || 'unknown';
+  const rv7d       = data.realized_vol_7d     ?? 0;
+  const rv30d      = data.realized_vol_30d    ?? 0;
+  const ivIdx      = data.iv_index            ?? 0;
+  const vrp        = data.vol_risk_premium    ?? 0;
+  const conf       = data.regime_confidence   ?? 0;
+  const vcr        = data.vol_compression_ratio ?? 0;
+  const history    = data.regime_history      || [];
+
+  const regimeColor = (r) => {
+    if (r === 'low_vol')       return 'var(--bull, #26a69a)';
+    if (r === 'normal')        return 'var(--blue, #2196f3)';
+    if (r === 'transitioning') return 'var(--warn, #f0a500)';
+    if (r === 'high_vol')      return 'var(--bear, #ef5350)';
+    return 'var(--muted)';
+  };
+
+  const regimeBadgeClass = (r) => {
+    if (r === 'low_vol')       return 'badge-green';
+    if (r === 'normal')        return 'badge-blue';
+    if (r === 'transitioning') return 'badge-yellow';
+    if (r === 'high_vol')      return 'badge-red';
+    return 'badge-blue';
+  };
+
+  if (badge) {
+    badge.textContent = curRegime.replace('_', ' ').toUpperCase();
+    badge.className = `card-badge ${regimeBadgeClass(curRegime)}`;
+    badge.style.display = '';
+  }
+
+  // Vol comparison bar (max = 100 for display)
+  const barMax = Math.max(rv7d, rv30d, ivIdx, 100);
+  const barW7d  = Math.min((rv7d  / barMax) * 100, 100).toFixed(1);
+  const barW30d = Math.min((rv30d / barMax) * 100, 100).toFixed(1);
+  const barWIV  = Math.min((ivIdx / barMax) * 100, 100).toFixed(1);
+
+  const vrpCol  = vrp >= 0 ? 'var(--bull, #26a69a)' : 'var(--bear, #ef5350)';
+  const confPct = (conf * 100).toFixed(0);
+
+  // Last 10 history entries shown as mini regime squares
+  const recentHist = history.slice(-10);
+  const histSquares = recentHist.map(h =>
+    `<span title="${h.date}: ${h.regime} rv7d=${h.rv7d}%" style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${regimeColor(h.regime)};margin:1px"></span>`
+  ).join('');
+
+  el.innerHTML = `
+    <div style="font-size:10px;color:var(--muted);margin-bottom:6px;display:flex;gap:12px;flex-wrap:wrap">
+      <span>current: <b style="color:${regimeColor(curRegime)}">${curRegime.replace(/_/g,' ')}</b></span>
+      <span>7d: <b style="color:${regimeColor(fc7d)}">${fc7d.replace(/_/g,' ')}</b></span>
+      <span>30d: <b style="color:${regimeColor(fc30d)}">${fc30d.replace(/_/g,' ')}</b></span>
+      <span>conf: <b>${confPct}%</b></span>
+    </div>
+    <div style="font-size:10px;margin-bottom:5px">
+      <div style="margin-bottom:3px;display:flex;align-items:center;gap:6px">
+        <span style="width:42px;color:var(--muted)">RV 7d</span>
+        <div style="flex:1;background:var(--card-bg,#1e222d);border-radius:3px;height:7px">
+          <div style="width:${barW7d}%;background:var(--bull,#26a69a);height:7px;border-radius:3px"></div>
+        </div>
+        <span style="width:38px;text-align:right">${rv7d.toFixed(1)}%</span>
+      </div>
+      <div style="margin-bottom:3px;display:flex;align-items:center;gap:6px">
+        <span style="width:42px;color:var(--muted)">RV 30d</span>
+        <div style="flex:1;background:var(--card-bg,#1e222d);border-radius:3px;height:7px">
+          <div style="width:${barW30d}%;background:var(--muted);height:7px;border-radius:3px"></div>
+        </div>
+        <span style="width:38px;text-align:right">${rv30d.toFixed(1)}%</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <span style="width:42px;color:var(--muted)">IV idx</span>
+        <div style="flex:1;background:var(--card-bg,#1e222d);border-radius:3px;height:7px">
+          <div style="width:${barWIV}%;background:var(--warn,#f0a500);height:7px;border-radius:3px"></div>
+        </div>
+        <span style="width:38px;text-align:right">${ivIdx.toFixed(1)}%</span>
+      </div>
+    </div>
+    <div style="font-size:10px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap;margin-bottom:5px">
+      <span>VRP: <b style="color:${vrpCol}">${vrp >= 0 ? '+' : ''}${vrp.toFixed(1)}%</b></span>
+      <span>compression: <b>${vcr.toFixed(2)}</b></span>
+    </div>
+    <div style="font-size:10px;color:var(--muted)">30d: ${histSquares}</div>`;
 }
 
 // ── Bootstrap on Load ──────────────────────────────────────────────────────────

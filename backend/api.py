@@ -132,6 +132,7 @@ from metrics import (
     compute_perpetual_funding_heatmap,
     compute_on_chain_active_addresses,
     compute_liquidation_cascade_risk,
+    compute_volatility_regime_forecast,
 )
 from whale_flow import compute_whale_flow
 from gamma_exposure import compute_gamma_exposure
@@ -5909,3 +5910,9 @@ async def on_chain_active_addresses_endpoint():
 async def liquidation_cascade_risk_endpoint():
     """Liquidation cascade risk score and trigger zones."""
     return JSONResponse(await compute_liquidation_cascade_risk())
+
+
+@router.get("/volatility-regime-forecast")
+async def volatility_regime_forecast_endpoint():
+    """Forward-looking volatility regime prediction: realized vol, IV, regime history, forecast."""
+    return JSONResponse(await compute_volatility_regime_forecast())
