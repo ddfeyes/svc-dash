@@ -69,17 +69,16 @@ function setErr(contentId) {
   }
 }
 
-/** Format a price with auto decimal places (6dp for sub-penny assets). */
+/** Format a price with auto decimal places (6dp for sub-1 assets). */
 function fmtPrice(price) {
   if (price == null) return '—';
   const v = parseFloat(price);
   if (isNaN(v)) return '—';
   const abs = Math.abs(v);
   let decimals;
-  if (abs >= 1000)      decimals = 2;
-  else if (abs >= 1)    decimals = 4;
-  else if (abs >= 0.01) decimals = 5;
-  else                  decimals = 6;
+  if (abs >= 1000) decimals = 2;
+  else if (abs >= 1) decimals = 4;
+  else              decimals = 6;
   return v.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
@@ -560,7 +559,13 @@ function updateLastPrice(price, change) {
 async function renderOiChart() {
   const sym = encodeURIComponent(activeSymbol);
   const data = await apiFetch(`/oi/history?limit=200&symbol=${sym}`);
-  if (!data?.data?.length || !oiChart) return;
+  if (!data?.data?.length || !oiChart) {
+    const metricsEl = document.getElementById('oi-metrics');
+    if (metricsEl && !metricsEl.textContent.trim()) {
+      metricsEl.innerHTML = '<div class="text-muted" style="font-size:11px;">No data</div>';
+    }
+    return;
+  }
 
   const rows = data.data.filter(d => d.exchange === 'binance');
   const src = rows.length ? rows : data.data;
@@ -1167,6 +1172,12 @@ async function renderOiWeightedPrice() {
 
   if (!data) {
     setErr('oi-weighted-price-content');
+    return;
+  }
+
+  if (data.oi_weighted_price == null) {
+    el.innerHTML = `<div class="text-muted" style="font-size:11px;">${data.description || 'No data'}</div>`;
+    if (badge) badge.style.display = 'none';
     return;
   }
 

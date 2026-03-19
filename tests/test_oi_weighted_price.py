@@ -4,17 +4,26 @@ Tests for OI-weighted price endpoint and rendering logic.
 Validates calculation, bias classification, deviation formatting,
 and edge cases that mirror app.js renderOiWeightedPrice().
 """
+
 import math
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-
 # ── Python mirrors of app.js helpers ─────────────────────────────────────────
 
-def fmt_price(v, decimals=4):
+
+def fmt_price(v):
+    """Python mirror of app.js fmtPrice — 6dp for sub-1 prices, 4dp for 1-999, 2dp for >=1000."""
     if v is None:
         return "—"
+    abs_v = abs(v)
+    if abs_v >= 1000:
+        decimals = 2
+    elif abs_v >= 1:
+        decimals = 4
+    else:
+        decimals = 6
     return f"{v:.{decimals}f}"
 
 
@@ -44,6 +53,7 @@ def badge_class_for_bias(bias):
 
 
 # ── OI-weighted price calculation (mirrors backend logic) ─────────────────────
+
 
 def compute_oi_weighted_price_py(oi_rows, trade_rows):
     """Pure-Python mirror of compute_oi_weighted_price for test assertions."""
@@ -106,7 +116,11 @@ TRADE_ROWS_FLAT = [
 ]
 
 OI_ROWS_RISING = [
-    {"ts": BASE_TS + i * 60, "oi_value": 1_000_000.0 + i * 100_000, "symbol": "BANANAS31USDT"}
+    {
+        "ts": BASE_TS + i * 60,
+        "oi_value": 1_000_000.0 + i * 100_000,
+        "symbol": "BANANAS31USDT",
+    }
     for i in range(10)
 ]
 
@@ -121,8 +135,7 @@ OI_ROWS_LONG_HEAVY = [
     for i in range(5)
 ]
 TRADE_ROWS_LONG_HEAVY = [
-    {"ts": BASE_TS + i * 60, "price": 1.0, "symbol": "BANANAS31USDT"}
-    for i in range(4)
+    {"ts": BASE_TS + i * 60, "price": 1.0, "symbol": "BANANAS31USDT"} for i in range(4)
 ] + [{"ts": BASE_TS + 4 * 60, "price": 1.025, "symbol": "BANANAS31USDT"}]
 
 # Current price below OI-weighted avg → short_heavy
@@ -131,21 +144,25 @@ OI_ROWS_SHORT_HEAVY = [
     for i in range(5)
 ]
 TRADE_ROWS_SHORT_HEAVY = [
-    {"ts": BASE_TS + i * 60, "price": 1.0, "symbol": "BANANAS31USDT"}
-    for i in range(4)
+    {"ts": BASE_TS + i * 60, "price": 1.0, "symbol": "BANANAS31USDT"} for i in range(4)
 ] + [{"ts": BASE_TS + 4 * 60, "price": 0.975, "symbol": "BANANAS31USDT"}]
 
 
 # ── 1. Calculation correctness ────────────────────────────────────────────────
 
+
 class TestOiWeightedPriceCalculation:
     def test_flat_oi_flat_price_equals_constant(self):
         """When all OI and prices are constant, weighted avg equals that price."""
-        oi_wp, current, dev, bias = compute_oi_weighted_price_py(OI_ROWS_FLAT, TRADE_ROWS_FLAT)
+        oi_wp, current, dev, bias = compute_oi_weighted_price_py(
+            OI_ROWS_FLAT, TRADE_ROWS_FLAT
+        )
         assert oi_wp == pytest.approx(0.5, rel=1e-6)
 
     def test_flat_oi_flat_price_zero_deviation(self):
-        oi_wp, current, dev, bias = compute_oi_weighted_price_py(OI_ROWS_FLAT, TRADE_ROWS_FLAT)
+        oi_wp, current, dev, bias = compute_oi_weighted_price_py(
+            OI_ROWS_FLAT, TRADE_ROWS_FLAT
+        )
         assert dev == pytest.approx(0.0, abs=1e-6)
 
     def test_flat_oi_flat_price_neutral_bias(self):
@@ -188,13 +205,18 @@ class TestOiWeightedPriceCalculation:
 
 # ── 2. Bias classification ────────────────────────────────────────────────────
 
+
 class TestBiasClassification:
     def test_long_heavy_when_price_above_1pct(self):
-        _, _, _, bias = compute_oi_weighted_price_py(OI_ROWS_LONG_HEAVY, TRADE_ROWS_LONG_HEAVY)
+        _, _, _, bias = compute_oi_weighted_price_py(
+            OI_ROWS_LONG_HEAVY, TRADE_ROWS_LONG_HEAVY
+        )
         assert bias == "long_heavy"
 
     def test_short_heavy_when_price_below_1pct(self):
-        _, _, _, bias = compute_oi_weighted_price_py(OI_ROWS_SHORT_HEAVY, TRADE_ROWS_SHORT_HEAVY)
+        _, _, _, bias = compute_oi_weighted_price_py(
+            OI_ROWS_SHORT_HEAVY, TRADE_ROWS_SHORT_HEAVY
+        )
         assert bias == "short_heavy"
 
     def test_neutral_within_1pct(self):
@@ -239,6 +261,7 @@ class TestBiasClassification:
 
 # ── 3. Edge cases ─────────────────────────────────────────────────────────────
 
+
 class TestEdgeCases:
     def test_empty_oi_returns_none(self):
         oi_wp, current, dev, bias = compute_oi_weighted_price_py([], TRADE_ROWS_FLAT)
@@ -282,6 +305,7 @@ class TestEdgeCases:
 
 # ── 4. Formatting helpers ─────────────────────────────────────────────────────
 
+
 class TestFormattingHelpers:
     def test_fmt_deviation_positive(self):
         assert fmt_deviation(2.345) == "+2.345%"
@@ -319,6 +343,7 @@ class TestFormattingHelpers:
 
 # ── 5. API response shape ─────────────────────────────────────────────────────
 
+
 class TestApiResponseShape:
     FULL_RESPONSE = {
         "status": "ok",
@@ -342,11 +367,25 @@ class TestApiResponseShape:
     }
 
     def test_full_response_has_required_keys(self):
-        keys = {"status", "symbol", "oi_weighted_price", "current_price", "deviation_pct", "bias"}
+        keys = {
+            "status",
+            "symbol",
+            "oi_weighted_price",
+            "current_price",
+            "deviation_pct",
+            "bias",
+        }
         assert keys.issubset(self.FULL_RESPONSE.keys())
 
     def test_no_data_response_has_required_keys(self):
-        keys = {"status", "symbol", "oi_weighted_price", "current_price", "deviation_pct", "bias"}
+        keys = {
+            "status",
+            "symbol",
+            "oi_weighted_price",
+            "current_price",
+            "deviation_pct",
+            "bias",
+        }
         assert keys.issubset(self.NO_DATA_RESPONSE.keys())
 
     def test_bias_values_are_valid(self):
@@ -365,3 +404,118 @@ class TestApiResponseShape:
     def test_description_field_present(self):
         assert "description" in self.FULL_RESPONSE
         assert isinstance(self.FULL_RESPONSE["description"], str)
+
+
+# ── 6. Price formatting — 6 decimal places for sub-1 prices ──────────────────
+
+
+class TestFmtPriceSixDecimals:
+    """fmtPrice must use 6dp for sub-1 prices (issue #164)."""
+
+    def test_sub_penny_price_uses_6_decimals(self):
+        result = fmt_price(0.001234)
+        assert result == "0.001234"
+
+    def test_sub_one_price_uses_6_decimals(self):
+        """0.01–0.99 range must use 6dp, not 5."""
+        result = fmt_price(0.123456)
+        assert result == "0.123456"
+
+    def test_sub_one_price_rounds_to_6(self):
+        result = fmt_price(0.1234567)
+        assert result == "0.123457"
+
+    def test_price_above_1_uses_4_decimals(self):
+        result = fmt_price(1.23456789)
+        assert result == "1.2346"
+
+    def test_price_above_1000_uses_2_decimals(self):
+        result = fmt_price(1234.567)
+        assert result == "1234.57"
+
+    def test_none_returns_dash(self):
+        assert fmt_price(None) == "—"
+
+    def test_zero_uses_6_decimals(self):
+        result = fmt_price(0.0)
+        assert result == "0.000000"
+
+    def test_very_small_price_uses_6_decimals(self):
+        result = fmt_price(0.000001)
+        assert result == "0.000001"
+
+
+# ── 7. OI weighted price — "No data" render state ────────────────────────────
+
+
+def render_oi_weighted_price_state(data):
+    """Mirror of renderOiWeightedPrice() show-vs-nodata branching logic."""
+    if data is None:
+        return "error"
+    if data.get("oi_weighted_price") is None:
+        return "no_data"
+    return "ok"
+
+
+class TestRenderOiWeightedPriceNoData:
+    """renderOiWeightedPrice should show 'No data' when oi_weighted_price is null."""
+
+    def test_none_api_response_is_error(self):
+        assert render_oi_weighted_price_state(None) == "error"
+
+    def test_no_oi_data_response_triggers_no_data(self):
+        data = {
+            "status": "ok",
+            "symbol": "BANANAS31USDT",
+            "oi_weighted_price": None,
+            "current_price": None,
+            "deviation_pct": None,
+            "bias": "neutral",
+            "description": "No OI data",
+        }
+        assert render_oi_weighted_price_state(data) == "no_data"
+
+    def test_no_trade_data_response_triggers_no_data(self):
+        data = {
+            "status": "ok",
+            "symbol": "BANANAS31USDT",
+            "oi_weighted_price": None,
+            "current_price": None,
+            "deviation_pct": None,
+            "bias": "neutral",
+            "description": "No trade data",
+        }
+        assert render_oi_weighted_price_state(data) == "no_data"
+
+    def test_no_matched_data_response_triggers_no_data(self):
+        data = {
+            "status": "ok",
+            "symbol": "BANANAS31USDT",
+            "oi_weighted_price": None,
+            "current_price": None,
+            "deviation_pct": None,
+            "bias": "neutral",
+            "description": "No matched OI/price data",
+        }
+        assert render_oi_weighted_price_state(data) == "no_data"
+
+    def test_valid_data_renders_ok(self):
+        data = {
+            "status": "ok",
+            "symbol": "BANANAS31USDT",
+            "oi_weighted_price": 0.001234,
+            "current_price": 0.001250,
+            "deviation_pct": 1.296,
+            "bias": "long_heavy",
+            "description": "Price +1.296% vs OI-weighted avg",
+        }
+        assert render_oi_weighted_price_state(data) == "ok"
+
+    def test_valid_data_price_formatted_to_6dp(self):
+        """Price values for sub-1 tokens must format to 6 decimal places."""
+        price = 0.001234
+        assert fmt_price(price) == "0.001234"
+
+    def test_oi_weighted_price_6dp_precision(self):
+        price = 0.000015
+        assert fmt_price(price) == "0.000015"
