@@ -13273,14 +13273,14 @@ async def compute_liquidation_cascade_risk() -> dict:
     # ── Leverage concentration (fractions summing to 1.0) ────────────────────
     _lc_raw = [_rng.random() for _ in range(4)]
     _lc_total = sum(_lc_raw)
-    _f2x  = round(_lc_raw[0] / _lc_total, 4)
-    _f5x  = round(_lc_raw[1] / _lc_total, 4)
+    _f2x = round(_lc_raw[0] / _lc_total, 4)
+    _f5x = round(_lc_raw[1] / _lc_total, 4)
     _f10x = round(_lc_raw[2] / _lc_total, 4)
     _f20x = round(1.0 - _f2x - _f5x - _f10x, 4)
     leverage_concentration: dict = {
-        "2x":   _f2x,
-        "5x":   _f5x,
-        "10x":  _f10x,
+        "2x": _f2x,
+        "5x": _f5x,
+        "10x": _f10x,
         "20x+": _f20x,
     }
 
@@ -13313,9 +13313,7 @@ async def compute_liquidation_cascade_risk() -> dict:
     _days_offset = 0
     for _ in range(10):
         _days_offset += _rng.randint(15, 45)
-        _cascade_date = (
-            _base_date - _dt_lcr.timedelta(days=_days_offset)
-        ).isoformat()
+        _cascade_date = (_base_date - _dt_lcr.timedelta(days=_days_offset)).isoformat()
         _drop_pct = round(_rng.uniform(5.0, 35.0), 2)
         _liquidated_usd = int(_rng.uniform(50_000_000.0, 1_000_000_000.0))
         historical_cascades.append(
@@ -13510,6 +13508,5 @@ async def compute_stablecoin_dominance_signal() -> dict:
         "signal_strength": signal_strength,
         "breakdown": breakdown,
         "historical_dominance": historical_dominance,
-
         "timestamp": timestamp,
     }
