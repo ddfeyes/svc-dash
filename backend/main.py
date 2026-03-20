@@ -206,17 +206,22 @@ async def realized_vol_surface():
 
 
 
+@app.get("/api/aggressor-streak/{symbol}")
+async def aggressor_streak(symbol: str):
+    """Aggressor imbalance streak counter for a symbol."""
+    import time
+    from metrics import compute_aggressor_imbalance_streak
+    from storage import get_recent_trades
+    since = time.time() - 30 * 60
+    trades = await get_recent_trades(limit=10000, since=since, symbol=symbol)
+    return compute_aggressor_imbalance_streak(trades)
+
+
 @app.get("/api/cross-market-correlation")
 async def cross_market_correlation():
     from metrics import compute_cross_market_correlation
     return await compute_cross_market_correlation()
 
-
-@app.get("/api/realized-vol-surface")
-async def realized_vol_surface():
-    """2D realized volatility surface: 8 symbols × 4 time windows."""
-    from metrics import compute_realized_vol_surface
-    return await compute_realized_vol_surface()
 
 if __name__ == "__main__":
     import uvicorn
