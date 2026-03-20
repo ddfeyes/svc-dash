@@ -2576,7 +2576,7 @@ async function refresh() {
     await delay(200);
 
     // Batch 9: tape analysis
-    await Promise.all([safe(renderTapeSpeed), safe(renderAggressorStreak), safe(renderObWalls)]);
+    await Promise.all([safe(renderTapeSpeed), safe(renderTapeSpeedTps), safe(renderAggressorStreak), safe(renderObWalls)]);
     await delay(200);
 
     // Batch 10: movers, heatmap, net taker, smart money divergence
@@ -3516,6 +3516,64 @@ async function renderLiqCascadeDetector() {
         `<tbody>${chainRows || '<tr><td colspan="3" style="font-size:9px;color:var(--muted)">No data</td></tr>'}</tbody>` +
       `</table>` +
     `</div>`;
+}
+
+
+async function renderTapeSpeedTps() {
+  const sym = encodeURIComponent(activeSymbol);
+  const data = await apiFetch(`/tape-speed-tps?symbol=${sym}`);
+  const el = document.getElementById('tape-speed-tps-content');
+  if (!el) return;
+  if (!data) { el.innerHTML = '<div class="text-muted" style="font-size:11px;">No data</div>'; return; }
+
+  const badge = document.getElementById('tape-speed-tps-badge');
+  const labelMap = {
+    slow:    { icon: '🐢', cls: 'badge-gray' },
+    normal:  { icon: '→',  cls: 'badge-yellow' },
+    fast:    { icon: '⚡', cls: 'badge-blue' },
+    blazing: { icon: '🔥', cls: 'badge-red' },
+  };
+  const lm = labelMap[data.speed_label] || labelMap.normal;
+  if (badge) {
+    badge.textContent = `${lm.icon} ${data.speed_label}`;
+    badge.className   = `card-badge ${lm.cls}`;
+    badge.style.display = 'inline-block';
+  }
+
+  const ratio  = data.ratio != null ? data.ratio : 0.5;
+  const buyPct = (ratio * 100).toFixed(0);
+  const domColor = ratio >= 0.55 ? 'var(--green)' : ratio <= 0.45 ? 'var(--red)' : 'var(--fg)';
+
+  const fmt = v => (v != null ? v.toFixed(2) : '—');
+  const b1  = fmt(data.buy_tps_1s);
+  const s1  = fmt(data.sell_tps_1s);
+  const b5  = fmt(data.buy_tps_5s);
+  const s5  = fmt(data.sell_tps_5s);
+  const b30 = fmt(data.buy_tps_30s);
+  const s30 = fmt(data.sell_tps_30s);
+
+  // Stacked sparkline: buy (green) on top, sell (red) below, per 1s bucket
+  const buckets = (data.buckets || []).slice(-60);
+  const maxTotal = Math.max(...buckets.map(b => b.total_tps), 1);
+  const bars = buckets.map(b => {
+    const buyH = Math.min((b.buy_tps  / maxTotal) * 100, 100).toFixed(1);
+    const selH = Math.min((b.sell_tps / maxTotal) * 100, 100).toFixed(1);
+    return `<div class="tps-bar-wrap" title="${b.total_tps} tps at ${new Date(b.ts * 1000).toLocaleTimeString()}">
+      <div class="tps-bar-buy"  style="height:${buyH}%"></div>
+      <div class="tps-bar-sell" style="height:${selH}%"></div>
+    </div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="ts-metrics">
+      <span class="ts-stat">Buy 5s <span style="color:var(--green)">${b5} tps</span></span>
+      <span class="ts-stat">Sell 5s <span style="color:var(--red)">${s5} tps</span></span>
+      <span class="ts-stat">1s <span style="color:${domColor}">${b1}↑ ${s1}↓</span></span>
+      <span class="ts-stat">30s <span>${b30}↑ ${s30}↓</span></span>
+      <span class="ts-stat">Bias <span style="color:${domColor}">${buyPct}% buy</span></span>
+    </div>
+    <div class="tps-chart">${bars}</div>
+  `;
 }
 
 

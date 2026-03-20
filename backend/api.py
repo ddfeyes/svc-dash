@@ -112,6 +112,7 @@ from metrics import (
     compute_session_stats,
     compute_smart_money_divergence,
     compute_tape_speed,
+    compute_tape_speed_tps,
     compute_tick_imbalance_bars,
     compute_tod_volatility,
     compute_volume_bars,
@@ -1996,6 +1997,33 @@ async def tape_speed_endpoint(
         bucket_seconds=bucket,
         hot_multiplier=hot_multiplier,
     )
+    return {"status": "ok", "symbol": target, **result}
+
+
+@router.get("/tape-speed-tps")
+async def tape_speed_tps_endpoint(
+    symbol: Optional[str] = None,
+):
+    """
+    Order-flow velocity: trades-per-second with buy/sell breakdown.
+
+    Returns TPS over rolling 1s, 5s, 30s windows and a speed label:
+      slow | normal | fast | blazing — based on 5s total TPS thresholds.
+    Also returns 60 x 1-second sparkline buckets.
+    """
+    target = symbol or get_symbols()[0]
+    since = time.time() - 60.0  # only last 60s needed
+
+    async with _open_db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT ts, side FROM trades WHERE ts > ? AND symbol = ? ORDER BY ts ASC",
+            (since, target),
+        ) as cur:
+            rows = await cur.fetchall()
+
+    trades = [{"ts": r["ts"], "side": r["side"]} for r in rows]
+    result = compute_tape_speed_tps(trades)
     return {"status": "ok", "symbol": target, **result}
 
 

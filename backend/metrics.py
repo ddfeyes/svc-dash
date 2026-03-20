@@ -4476,6 +4476,121 @@ def compute_aggressor_imbalance_streak(
     }
 
 
+# ── Tape Speed TPS Indicator ───────────────────────────────────────────────────
+
+
+def compute_tape_speed_tps(
+    trades: List[Dict],
+    reference_ts: Optional[float] = None,
+) -> Dict:
+    """
+    Trade-per-second velocity with buy/sell breakdown.
+
+    Computes buy and sell TPS over rolling 1s, 5s, 30s windows and
+    classifies speed as 'slow' | 'normal' | 'fast' | 'blazing'.
+
+    Speed thresholds (total TPS over 5s window):
+      slow:    < 1.0 tps
+      normal:  1.0 – 4.99 tps
+      fast:    5.0 – 14.99 tps
+      blazing: >= 15.0 tps
+
+    Args:
+        trades:       list of {ts, side} dicts (side: "buy" or "sell")
+        reference_ts: treat as "now" (default: time.time())
+
+    Returns:
+        ts            float  reference timestamp
+        buy_tps_1s    float  buy trades/sec in last 1s
+        sell_tps_1s   float
+        buy_tps_5s    float  buy trades/sec in last 5s
+        sell_tps_5s   float
+        buy_tps_30s   float  buy trades/sec in last 30s
+        sell_tps_30s  float
+        ratio         float  buy/(buy+sell) over 5s; 0.5 when no 5s trades
+        speed_label   str    "slow"|"normal"|"fast"|"blazing"
+        buckets       list[{ts,buy_tps,sell_tps,total_tps}] 1s buckets, last 60s
+    """
+    now = reference_ts if reference_ts is not None else time.time()
+
+    def _count_window(window_s: float) -> tuple:
+        cutoff = now - window_s
+        buys = sells = 0
+        for t in trades:
+            if t["ts"] <= cutoff:
+                continue
+            side = (t.get("side") or "").lower()
+            if side == "buy":
+                buys += 1
+            else:
+                sells += 1
+        return buys, sells
+
+    b1, s1 = _count_window(1.0)
+    b5, s5 = _count_window(5.0)
+    b30, s30 = _count_window(30.0)
+
+    total_5s = b5 + s5
+    ratio = b5 / total_5s if total_5s > 0 else 0.5
+
+    total_tps_5s = total_5s / 5.0
+    if total_tps_5s < 1.0:
+        speed_label = "slow"
+    elif total_tps_5s < 5.0:
+        speed_label = "normal"
+    elif total_tps_5s < 15.0:
+        speed_label = "fast"
+    else:
+        speed_label = "blazing"
+
+    # Build 1-second buckets for the last 60 seconds
+    since_60s = now - 60.0
+    bucket_map: Dict[int, Dict[str, int]] = {}
+    for t in trades:
+        ts = t["ts"]
+        if ts <= since_60s:
+            continue
+        bk = int(ts)
+        side = (t.get("side") or "").lower()
+        if bk not in bucket_map:
+            bucket_map[bk] = {"buy": 0, "sell": 0}
+        if side == "buy":
+            bucket_map[bk]["buy"] += 1
+        else:
+            bucket_map[bk]["sell"] += 1
+
+    # Fill gaps so the series is continuous
+    start_b = int(since_60s)
+    end_b = int(now)
+    bk = start_b
+    while bk <= end_b:
+        bucket_map.setdefault(bk, {"buy": 0, "sell": 0})
+        bk += 1
+
+    buckets = [
+        {
+            "ts": float(bk),
+            "buy_tps": float(c["buy"]),
+            "sell_tps": float(c["sell"]),
+            "total_tps": float(c["buy"] + c["sell"]),
+        }
+        for bk, c in sorted(bucket_map.items())
+    ]
+
+    return {
+        "ts": now,
+        "buy_tps_1s": round(b1 / 1.0, 4),
+        "sell_tps_1s": round(s1 / 1.0, 4),
+        "buy_tps_5s": round(b5 / 5.0, 4),
+        "sell_tps_5s": round(s5 / 5.0, 4),
+        "buy_tps_30s": round(b30 / 30.0, 4),
+        "sell_tps_30s": round(s30 / 30.0, 4),
+        "ratio": round(ratio, 4),
+        "speed_label": speed_label,
+        "buckets": buckets,
+    }
+
+
 async def compute_oi_weighted_price(symbol: str = None, limit: int = 50) -> Dict:
     """
     OI-weighted average price level.
