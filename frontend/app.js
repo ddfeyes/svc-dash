@@ -90,7 +90,8 @@ function fmt(n, decimals = 4) {
   return v.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
-/** Format a large number as $47.5M, $1.2K, etc. */
+/** Format a large number as $47.5M, $1.2K, etc.
+ *  Uses 6 decimal places for values < $0.01 (needed for small-cap perps). */
 function fmtUSD(n) {
   if (n == null) return '—';
   const v = parseFloat(n);
@@ -100,7 +101,8 @@ function fmtUSD(n) {
   if (abs >= 1e9) return sign + '$' + (abs / 1e9).toFixed(2) + 'B';
   if (abs >= 1e6) return sign + '$' + (abs / 1e6).toFixed(2) + 'M';
   if (abs >= 1e3) return sign + '$' + (abs / 1e3).toFixed(1) + 'K';
-  return sign + '$' + abs.toFixed(2);
+  if (abs >= 0.01) return sign + '$' + abs.toFixed(2);
+  return sign + '$' + abs.toFixed(6);
 }
 
 /** Compact number without $ (for axes, OI display). */
@@ -621,11 +623,9 @@ function updateLastPrice(price, change) {
 async function renderOiChart() {
   const sym = encodeURIComponent(activeSymbol);
   const data = await apiFetch(`/oi/history?limit=200&symbol=${sym}`);
+  const metricsEl = document.getElementById('oi-metrics');
   if (!data?.data?.length || !oiChart) {
-    const metricsEl = document.getElementById('oi-metrics');
-    if (metricsEl && !metricsEl.textContent.trim()) {
-      metricsEl.innerHTML = '<div class="text-muted" style="font-size:11px;">No data</div>';
-    }
+    if (metricsEl) metricsEl.innerHTML = '<div class="text-muted" style="font-size:11px;">No data</div>';
     return;
   }
 
@@ -633,18 +633,26 @@ async function renderOiChart() {
   const src = rows.length ? rows : data.data;
 
   const labels = src.map(d => fmtTime(d.ts));
-  // Multiply raw OI (contracts/tokens) by current price to get USDT value.
-  // Fetch price from trades if _lastPrice isn't set yet (parallel init).
-  let price = _lastPrice;
-  if (!price) {
-    const td = await apiFetch(`/trades/recent?limit=1&symbol=${sym}`);
-    if (td?.data?.length) {
-      price = parseFloat(td.data[0].price);
-      _lastPrice = price;
+  // Use oi_usdt if pre-computed by backend; otherwise multiply by price.
+  let values;
+  if (src[0]?.oi_usdt != null) {
+    values = src.map(d => parseFloat(d.oi_usdt));
+  } else {
+    // Fetch price from trades if _lastPrice isn't set yet (parallel init).
+    let price = _lastPrice;
+    if (!price) {
+      const td = await apiFetch(`/trades/recent?limit=1&symbol=${sym}`);
+      if (td?.data?.length) {
+        price = parseFloat(td.data[0].price);
+        _lastPrice = price;
+      }
     }
-    price = price || 1;
+    if (!price) {
+      if (metricsEl) metricsEl.innerHTML = '<div class="text-muted" style="font-size:11px;">No data</div>';
+      return;
+    }
+    values = src.map(d => parseFloat(d.oi_value) * price);
   }
-  const values = src.map(d => parseFloat(d.oi_value) * price);
 
   oiChart.data.labels = labels;
   oiChart.data.datasets[0].data = values;
@@ -1489,7 +1497,8 @@ async function renderCorrelations() {
 // ── Render: Volume Profile ─────────────────────────────────────────────────────
 async function renderVolumeProfile() {
   const sym = encodeURIComponent(activeSymbol);
-  const data = await apiFetch(`/volume-profile?symbol=${sym}&window=3600`);
+  // Use adaptive endpoint for session-based reliable data with POC flagging
+  const data = await apiFetch(`/volume-profile/adaptive?symbol=${sym}&bins=0`);
   const metricsEl = document.getElementById('volume-profile-metrics');
 
   if (!data?.bins?.length) {
@@ -1499,7 +1508,7 @@ async function renderVolumeProfile() {
 
   if (metricsEl) {
     metricsEl.innerHTML = `
-      <span style="color:var(--muted)">POC <span style="color:var(--fg);font-weight:700">${fmtPrice(data.poc)}</span></span>
+      <span style="color:var(--muted)">POC <span style="color:var(--yellow);font-weight:700">${fmtPrice(data.poc)}</span></span>
       <span style="color:var(--muted)">VAH <span style="color:var(--green)">${fmtPrice(data.vah)}</span></span>
       <span style="color:var(--muted)">VAL <span style="color:var(--red)">${fmtPrice(data.val)}</span></span>
       <span style="color:var(--muted)">Vol <span style="color:var(--fg)">${fmtK(data.total_volume)}</span></span>
@@ -1509,15 +1518,26 @@ async function renderVolumeProfile() {
 
   if (!volumeProfileChart) return;
 
-  // Top 20 bins by volume, re-sorted by price (low→high for y-axis)
-  const bins = [...data.bins]
-    .sort((a, b) => b.volume - a.volume)
-    .slice(0, 20)
-    .sort((a, b) => a.price - b.price);
+  // Sort bins low→high for y-axis display
+  const bins = [...data.bins].sort((a, b) => a.price - b.price);
 
-  volumeProfileChart.data.labels = bins.map(b => fmtPrice(b.price));
-  volumeProfileChart.data.datasets[0].data = bins.map(b => b.buy_vol || 0);
-  volumeProfileChart.data.datasets[1].data = bins.map(b => b.sell_vol || 0);
+  // POC highlighted in yellow; value area semi-opaque; outside area faded
+  const buyColors = bins.map(b =>
+    b.is_poc         ? 'rgba(240,192,64,0.95)'
+    : b.in_value_area ? 'rgba(0,224,130,0.6)'
+    : 'rgba(0,224,130,0.25)'
+  );
+  const sellColors = bins.map(b =>
+    b.is_poc         ? 'rgba(240,192,64,0.75)'
+    : b.in_value_area ? 'rgba(255,77,79,0.6)'
+    : 'rgba(255,77,79,0.25)'
+  );
+
+  volumeProfileChart.data.labels                      = bins.map(b => fmtPrice(b.price));
+  volumeProfileChart.data.datasets[0].data            = bins.map(b => b.buy_vol || 0);
+  volumeProfileChart.data.datasets[0].backgroundColor = buyColors;
+  volumeProfileChart.data.datasets[1].data            = bins.map(b => b.sell_vol || 0);
+  volumeProfileChart.data.datasets[1].backgroundColor = sellColors;
   volumeProfileChart.update('none');
 }
 
@@ -1613,7 +1633,7 @@ async function renderCorrHeatmap() {
   const el = document.getElementById('corr-heatmap-content');
   if (!el) return;
 
-  if (!data || !data.matrix || !data.symbols || data.matrix.length === 0) {
+  if (!data || !data.matrix || !data.symbols || data.matrix.length === 0 || data.quality === 0) {
     el.innerHTML = '<div class="text-muted" style="font-size:11px;">No data available</div>';
     return;
   }

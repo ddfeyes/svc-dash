@@ -389,6 +389,17 @@ async def oi_history(
     symbol: Optional[str] = None,
 ):
     data = await get_oi_history(limit=limit, since=since, symbol=symbol)
+    # Enrich each row with oi_usdt (oi_value in contracts × last trade price).
+    # This lets the frontend avoid price-fallback errors for small-cap perps.
+    if data:
+        sym: Optional[str] = str(data[0].get("symbol") or symbol or "")
+        recent = await get_recent_trades(limit=1, symbol=sym)
+        last_price = float(recent[0]["price"]) if recent else None
+        for row in data:
+            if last_price:
+                row["oi_usdt"] = round(row["oi_value"] * last_price, 6)
+            else:
+                row["oi_usdt"] = None
     return {"status": "ok", "data": data, "count": len(data)}
 
 
