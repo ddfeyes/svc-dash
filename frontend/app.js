@@ -342,15 +342,32 @@ function initAggressorChart() {
     grid: { color: 'rgba(255,255,255,0.04)' },
   };
   opts.plugins.tooltip.callbacks = {
+    title: ctx => `${ctx[0]?.label ?? ''}`,
     label: ctx => ` ${ctx.dataset.label}: ${ctx.raw.toFixed(1)}%`,
   };
-aggressorChart = new Chart(canvas, {
+  aggressorChart = new Chart(canvas, {
     type: 'bar',
     data: {
       labels: [],
       datasets: [
-{ label: 'Buy',  data: [], backgroundColor: [], borderWidth: 0, stack: 'vp' },
-        { label: 'Sell', data: [], backgroundColor: [], borderWidth: 0, stack: 'vp' },
+        { label: 'Buy',  data: [], backgroundColor: 'rgba(0,224,130,0.7)',  borderWidth: 0, stack: 'ag' },
+        { label: 'Sell', data: [], backgroundColor: 'rgba(255,77,79,0.7)',  borderWidth: 0, stack: 'ag' },
+      ],
+    },
+    options: opts,
+  });
+}
+
+function initVolumeProfileChart() {
+  const canvas = document.getElementById('volume-profile-canvas');
+  if (!canvas || !window.Chart) return;
+  volumeProfileChart = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels: [],
+      datasets: [
+        { label: 'Buy',  data: [], backgroundColor: 'rgba(0,224,130,0.6)',  borderWidth: 0, stack: 'vp' },
+        { label: 'Sell', data: [], backgroundColor: 'rgba(255,77,79,0.6)',  borderWidth: 0, stack: 'vp' },
       ],
     },
     options: {
@@ -382,6 +399,54 @@ aggressorChart = new Chart(canvas, {
         },
         y: {
           ticks: { color: '#6b7280', font: { size: 8 }, maxTicksLimit: 14 },
+          grid: { color: 'rgba(255,255,255,0.04)' },
+        },
+      },
+    },
+  });
+}
+
+function initAdaptiveVpChart() {
+  const canvas = document.getElementById('adaptive-vp-canvas');
+  if (!canvas || !window.Chart) return;
+  adaptiveVpChart = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels: [],
+      datasets: [
+        { label: 'Buy',  data: [], backgroundColor: 'rgba(0,224,130,0.55)',  borderWidth: 0, stack: 'avp' },
+        { label: 'Sell', data: [], backgroundColor: 'rgba(255,77,79,0.55)',  borderWidth: 0, stack: 'avp' },
+      ],
+    },
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      indexAxis: 'y',
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          mode: 'index',
+          intersect: false,
+          backgroundColor: '#1c2030',
+          titleColor: '#6b7280',
+          bodyColor: '#e2e8f0',
+          borderColor: 'rgba(255,255,255,0.08)',
+          borderWidth: 1,
+          callbacks: {
+            title: ctx => `Price: ${ctx[0]?.label ?? ''}`,
+            label: ctx => ` ${ctx.dataset.label}: ${fmtK(ctx.raw)}`,
+          },
+        },
+      },
+      scales: {
+        x: {
+          stacked: true,
+          ticks: { color: '#6b7280', font: { size: 9 }, callback: v => fmtK(v) },
+          grid: { color: 'rgba(255,255,255,0.04)' },
+        },
+        y: {
+          ticks: { color: '#6b7280', font: { size: 8 }, maxTicksLimit: 16 },
           grid: { color: 'rgba(255,255,255,0.04)' },
         },
       },
@@ -473,12 +538,9 @@ function resetCharts() {
   clearChart(cvdChart);
   clearChart(fundingChart);
   clearChart(spreadChart);
-clearChart(aggressorChart);
-  clearChart(volumeProfileChart);
-  clearChart(regimeTimelineChart);
-
   clearChart(aggressorChart);
   clearChart(volumeProfileChart);
+  clearChart(adaptiveVpChart);
   clearChart(regimeTimelineChart);
 
   document.getElementById('trade-tape').innerHTML = '';
@@ -1383,7 +1445,7 @@ async function renderCorrelations() {
   const el = document.getElementById('correlations-content');
   if (!el) return;
 
-  if (!data?.matrix) {
+  if (!data?.matrix || Object.keys(data.matrix).length === 0) {
     el.innerHTML = '<div class="text-muted" style="font-size:11px;">No data available</div>';
     return;
   }
@@ -4080,9 +4142,9 @@ async function init() {
   safeInit(initFundingChart);
   safeInit(initSpreadChart);
   safeInit(initAggressorChart);
-  try { if (typeof initVolumeProfileChart === 'function') safeInit(initVolumeProfileChart); } catch(e) { console.warn('initVolumeProfileChart not defined'); }
+  safeInit(initVolumeProfileChart);
+  safeInit(initAdaptiveVpChart);
   try { if (typeof initRegimeTimelineChart === 'function') safeInit(initRegimeTimelineChart); } catch(e) { console.warn('initRegimeTimelineChart not defined'); }
-  try { if (typeof initAdaptiveVpChart === 'function') safeInit(initAdaptiveVpChart); } catch(e) { console.warn('initAdaptiveVpChart not defined'); }
   connectAlerts();
 
   // After 35s replace any still-Loading cards with Error badge
