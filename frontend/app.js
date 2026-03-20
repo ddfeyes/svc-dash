@@ -457,7 +457,7 @@ function initAdaptiveVpChart() {
 // ── Render: Adaptive Volume Profile ──────────────────────────────────────────
 async function renderAdaptiveVolumeProfile() {
   const sym = encodeURIComponent(activeSymbol);
-  const data = await apiFetch(`/volume-profile/adaptive?symbol=${sym}&bins=40`);
+  const data = await apiFetch(`/volume-profile/adaptive?symbol=${sym}&bins=0`);
   const metricsEl = document.getElementById('adaptive-vp-metrics');
   const badge     = document.getElementById('adaptive-vp-badge');
 
@@ -514,7 +514,7 @@ async function renderAdaptiveVolumeProfile() {
   adaptiveVpChart.data.datasets[1].data                = sellVols;
   adaptiveVpChart.data.datasets[1].backgroundColor     = sellColors;
 
-  adaptiveVpChart.update('none');
+  adaptiveVpChart.update('active');
 }
 
 
@@ -2572,15 +2572,15 @@ async function refresh() {
     await delay(200);
 
     // Batch 8: aggressor metrics
-    await Promise.all([safe(renderAggressorRatio), safe(renderVpin), safe(renderAdaptiveVolumeProfile)]);
+    await Promise.all([safe(renderAggressorRatio), safe(renderVpin)]);
     await delay(200);
 
     // Batch 9: tape analysis
     await Promise.all([safe(renderTapeSpeed), safe(renderAggressorStreak), safe(renderObWalls)]);
     await delay(200);
 
-    // Batch 10: movers, heatmap, net taker, smart money divergence
-    await Promise.all([safe(renderTopMovers), safe(renderLiqHeatmap), safe(renderNetTakerDelta), safe(renderSmartMoneyDivergence)]);
+    // Batch 10: movers, heatmap, net taker, smart money divergence, adaptive volume profile
+    await Promise.all([safe(renderTopMovers), safe(renderLiqHeatmap), safe(renderNetTakerDelta), safe(renderSmartMoneyDivergence), safe(renderAdaptiveVolumeProfile)]);
     await delay(200);
 
     // Batch 11: new signal cards

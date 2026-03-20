@@ -448,13 +448,14 @@ async def volume_profile(
 
 @router.get("/volume-profile/adaptive")
 async def volume_profile_adaptive(
-    bins: int = Query(default=50, le=200),
+    bins: int = Query(default=0, ge=0, le=200),
     symbol: Optional[str] = None,
     value_area_pct: float = Query(default=0.70, ge=0.5, le=0.95),
 ):
     """
     Adaptive Volume Profile for the current session (midnight UTC → now).
 
+    bins=0 (default) triggers automatic resolution based on data density.
     Each bin includes is_poc, in_value_area, and pct_of_max (0–100) flags so the
     frontend can highlight the Point of Control and value area without additional
     computation.

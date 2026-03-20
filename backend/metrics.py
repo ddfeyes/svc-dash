@@ -601,6 +601,25 @@ async def compute_volume_profile(
     }
 
 
+def _adaptive_bin_count(n_raw: int, min_bins: int = 20, max_bins: int = 100) -> int:
+    """
+    Determine optimal bin count based on raw price-level density.
+
+    - Sparse (n_raw <= min_bins): return n_raw directly (no downsampling needed)
+    - Dense  (n_raw >= max_bins * 4): cap at max_bins
+    - Medium: floor(sqrt(n_raw) * 3) clamped to [min_bins, max_bins]
+    """
+    import math
+
+    if n_raw <= 0:
+        return 0
+    if n_raw <= min_bins:
+        return n_raw
+    if n_raw >= max_bins * 4:
+        return max_bins
+    return min(max_bins, max(min_bins, int(math.sqrt(n_raw) * 3)))
+
+
 async def compute_volume_profile_adaptive(
     symbol: str,
     bins: int = 50,
@@ -611,11 +630,14 @@ async def compute_volume_profile_adaptive(
 
     Differences from compute_volume_profile:
     - Window is always current session (since midnight UTC), not a fixed seconds window.
+    - When bins=0, the bin count is auto-selected based on data density via
+      _adaptive_bin_count (dynamic resolution adjustment).
     - Each bin is annotated with:
-        is_poc       — True for the single bin with highest volume
+        is_poc        — True for the single bin with highest volume
         in_value_area — True if the bin falls within the 70% value area
-        pct_of_max   — Volume expressed as 0–100% of the POC volume (chart bar width)
-    - Returns session_start (Unix timestamp) and window_seconds for reference.
+        pct_of_max    — Volume expressed as 0–100% of the POC volume (chart bar width)
+    - Returns session_start (Unix timestamp), window_seconds, and resolution_bins
+      (the actual bin count used) for reference.
     """
     import datetime
     import math
@@ -643,6 +665,7 @@ async def compute_volume_profile_adaptive(
         "tick_size": None,
         "session_start": session_start,
         "window_seconds": int(now - session_start),
+        "resolution_bins": 0,
     }
     if not rows:
         return empty
@@ -661,16 +684,19 @@ async def compute_volume_profile_adaptive(
         for row in rows
     ]
 
-    # Downsample to requested bin count
-    if len(raw_profile) > bins > 0:
+    # Dynamic resolution: when bins=0 use adaptive count based on data density
+    effective_bins = _adaptive_bin_count(len(raw_profile)) if bins <= 0 else bins
+
+    # Downsample to effective_bins if we have more raw levels
+    if len(raw_profile) > effective_bins > 0:
         p_low = raw_profile[0]["price"]
         p_high = raw_profile[-1]["price"]
         p_rng = p_high - p_low
-        bin_size = p_rng / bins if p_rng > 0 else 1.0
+        bin_size = p_rng / effective_bins if p_rng > 0 else 1.0
 
         bin_map: dict = {}
         for entry in raw_profile:
-            b_idx = min(bins - 1, int((entry["price"] - p_low) / bin_size))
+            b_idx = min(effective_bins - 1, int((entry["price"] - p_low) / bin_size))
             center = round(p_low + (b_idx + 0.5) * bin_size, decimals)
             if center not in bin_map:
                 bin_map[center] = {
@@ -744,6 +770,7 @@ async def compute_volume_profile_adaptive(
         "bins": annotated_bins,
         "session_start": session_start,
         "window_seconds": int(now - session_start),
+        "resolution_bins": len(profile),
     }
 
 
