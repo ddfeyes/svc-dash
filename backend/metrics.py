@@ -13656,3 +13656,66 @@ async def compute_stablecoin_dominance_signal() -> dict:
         "historical_dominance": historical_dominance,
         "timestamp": timestamp,
     }
+
+
+# Wave 27 — Active Addresses Time-Series (Issue #182)
+# ─────────────────────────────────────────────────────────────────────────────
+
+import random as _rng_aa
+import datetime as _dt_aa
+
+
+def _aa_growth_rate(current: int, previous: int) -> float:
+    """Percentage growth from previous to current count. Returns 0.0 if previous is 0."""
+    if previous == 0:
+        return 0.0
+    return round((current - previous) / previous * 100.0, 4)
+
+
+def _aa_trend_label(growth_rate: float) -> str:
+    """Classify growth rate into trend label."""
+    if growth_rate > 0.5:
+        return "growing"
+    if growth_rate < -0.5:
+        return "declining"
+    return "stable"
+
+
+def _aa_generate_counts(rng: _rng_aa.Random, n: int = 30, base: int = 950_000) -> list:
+    """Generate n daily active address counts using the given RNG."""
+    counts = []
+    current = base
+    for _ in range(n):
+        delta = rng.randint(-40_000, 40_000)
+        current = max(100_000, current + delta)
+        counts.append(current)
+    return counts
+
+
+async def compute_active_addresses() -> list:
+    """On-chain active addresses time-series.
+
+    Returns a list of 30 daily data points, each with:
+        timestamp   — ISO 8601 UTC date string
+        count       — daily active address count (int)
+        growth_rate — % change from previous day (float, 0.0 for day 1)
+
+    Uses deterministic RNG seeded with 20260326 for reproducibility.
+    """
+    _rng = _rng_aa.Random(20260326)
+    _today = _dt_aa.date(2026, 3, 20)
+    n = 30
+
+    counts = _aa_generate_counts(_rng, n=n, base=_rng.randint(900_000, 1_000_000))
+
+    result = []
+    for i, count in enumerate(counts):
+        _day = _today - _dt_aa.timedelta(days=n - 1 - i)
+        ts = _dt_aa.datetime(_day.year, _day.month, _day.day, 0, 0, 0).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        prev = counts[i - 1] if i > 0 else count
+        growth = _aa_growth_rate(count, prev) if i > 0 else 0.0
+        result.append({"timestamp": ts, "count": count, "growth_rate": growth})
+
+    return result

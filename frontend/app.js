@@ -2709,6 +2709,8 @@ async function refresh() {
     await Promise.all([safe(fetchVolatilityRegimeForecast)]);
     // Batch 45b: stablecoin dominance signal (Wave 26)
     await Promise.all([safe(fetchStablecoinDominanceSignal)]);
+    // Batch 46: active addresses time-series (Wave 27, Issue #182)
+    await Promise.all([safe(renderActiveAddresses)]);
   } finally {
     _refreshRunning = false;
   }
@@ -6311,6 +6313,69 @@ function renderStablecoinDominanceSignal(data) {
   if (badge) {
     badge.textContent = signal.toUpperCase();
     badge.className   = `card-badge ${sigCls}`;
+    badge.style.display = '';
+  }
+}
+
+// ── Active Addresses (Issue #182) ─────────────────────────────────────────────
+async function renderActiveAddresses() {
+  const el    = document.getElementById('active-addresses-content');
+  const badge = document.getElementById('active-addresses-badge');
+  if (!el) return;
+
+  let data;
+  try {
+    const res = await fetch('/api/active-addresses');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    data = await res.json();
+  } catch (e) {
+    el.textContent = 'Error loading active addresses.';
+    return;
+  }
+
+  if (!Array.isArray(data) || data.length === 0) {
+    el.textContent = 'No data';
+    return;
+  }
+
+  const points  = data.slice(-30);
+  const last    = points[points.length - 1];
+  const count   = last.count || 0;
+  const growth  = last.growth_rate ?? 0;
+
+  // Sparkline SVG
+  const counts = points.map(d => d.count);
+  const minC   = Math.min(...counts);
+  const maxC   = Math.max(...counts);
+  const range  = maxC - minC || 1;
+  const W = 120, H = 28;
+  const pts = counts.map((c, i) => {
+    const x = (i / (counts.length - 1)) * W;
+    const y = H - ((c - minC) / range) * H;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  const sparkColor = growth >= 0 ? 'var(--bull,#26a69a)' : 'var(--bear,#ef5350)';
+  const sparkSvg = `<svg width="${W}" height="${H}" style="vertical-align:middle;margin-left:6px">
+    <polyline points="${pts}" fill="none" stroke="${sparkColor}" stroke-width="1.5"/>
+  </svg>`;
+
+  const fmtK = n => n >= 1_000_000 ? `${(n/1_000_000).toFixed(2)}M` : n >= 1_000 ? `${(n/1_000).toFixed(0)}K` : `${n}`;
+  const growthStr = (growth >= 0 ? '+' : '') + growth.toFixed(2) + '%';
+  const growthCol = growth > 0 ? 'var(--bull,#26a69a)' : growth < 0 ? 'var(--bear,#ef5350)' : 'var(--muted)';
+
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+      <span style="font-size:15px;font-weight:700">${fmtK(count)}</span>
+      ${sparkSvg}
+    </div>
+    <div style="font-size:10px;color:var(--muted)">
+      growth: <b style="color:${growthCol}">${growthStr}</b>
+      &nbsp;·&nbsp; 30 daily points
+    </div>`;
+
+  if (badge) {
+    badge.textContent  = growthStr;
+    badge.className    = `card-badge ${growth >= 0 ? 'badge-green' : 'badge-red'}`;
     badge.style.display = '';
   }
 }
