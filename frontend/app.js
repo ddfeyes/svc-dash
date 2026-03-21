@@ -2690,7 +2690,6 @@ async function refresh() {
     await Promise.all([safe(renderTradeSizeDist)]);
     // Batch 39: leverage ratio heatmap (Wave 24)
     await Promise.all([safe(renderLeverageRatioHeatmap)]);
-    await Promise.all([safe(renderLeverageHeatmap)]);
     // Batch 40: smart money flow + vol regime hmm
     await Promise.all([safe(renderSmartMoneyFlow), safe(renderVolatilityRegimeHMM)]);
     // Batch 41: social sentiment momentum (Wave 25)
@@ -4228,14 +4227,15 @@ async function init() {
   connectAlerts();
 
   // After 35s replace any still-Loading cards with Error badge
+  // (apiFetch timeout=15s + 40 sequential batches need headroom)
   setTimeout(() => {
     document.querySelectorAll('[id$="-content"]').forEach(el => {
       const txt = el.textContent.trim();
-      if (txt.startsWith('Loading') || txt === 'No data available') {
+      if (txt.startsWith('Loading')) {
         el.innerHTML = '<span class="card-badge badge-red" style="display:inline-block">Error</span>';
       }
     });
-  }, 10000);
+  }, 35000);
 
   await loadSymbols();
   await refresh();
@@ -5813,13 +5813,11 @@ async function renderValidatorActivity() {
   el.innerHTML = `<div style="font-size:11px;">APY: ${(data.staking_apy||0).toFixed(2)}%</div>`;
 }
 
-// ── Leverage Heatmap alias ────────────────────────────────────────────────────
-const renderLeverageHeatmap = renderLeverageRatioHeatmap;
 
 // ── Social Sentiment Momentum ─────────────────────────────────────────────────
 async function refreshSocialSentimentMomentum() {
-  const el    = document.getElementById('social-sentiment-content');
-  const badge = document.getElementById('social-sentiment-badge');
+  const el    = document.getElementById('social-sentiment-momentum-content');
+  const badge = document.getElementById('social-sentiment-momentum-badge');
   if (!el) return;
   const data = await apiFetch('/social-sentiment-momentum');
   if (!data) { el.textContent = 'No data'; return; }
